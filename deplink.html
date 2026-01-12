@@ -328,361 +328,6 @@
         </div>
 
         <div class="content">
-            <!-- Claude 示例 -->
-            <div class="section">
-                <h2>Claude Code 供应商</h2>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-claude">Claude</span>
-                        基础配置（无模型）
-                    </h3>
-                    <p class="description">
-                        最简单的 Claude 配置，仅包含必需参数（API Key、端点等），不指定任何模型，使用 Claude Code 默认值。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=claude, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=claude&name=Claude%20Basic&homepage=https%3A%2F%2Fclaude.ai&endpoint=https%3A%2F%2Fapi.anthropic.com%2Fv1&apiKey=sk-ant-test-basic-key&notes=%E5%9F%BA%E7%A1%80%E9%85%8D%E7%BD%AE%EF%BC%8C%E6%97%A0%E6%A8%A1%E5%9E%8B%E6%8C%87%E5%AE%9A"
-                            class="deep-link">
-                            📥 导入基础配置
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=claude&name=Claude%20Basic&homepage=https%3A%2F%2Fclaude.ai&endpoint=https%3A%2F%2Fapi.anthropic.com%2Fv1&apiKey=sk-ant-test-basic-key&notes=%E5%9F%BA%E7%A1%80%E9%85%8D%E7%BD%AE%EF%BC%8C%E6%97%A0%E6%A8%A1%E5%9E%8B%E6%8C%87%E5%AE%9A', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-claude">Claude</span>
-                        带默认模型
-                    </h3>
-                    <p class="description">
-                        设置通用默认模型（ANTHROPIC_MODEL），适用于只需要一个固定模型的场景。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=claude, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=claude-haiku-4.1</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=claude&name=Claude%20with%20Model&homepage=https%3A%2F%2Fclaude.ai&endpoint=https%3A%2F%2Fapi.anthropic.com%2Fv1&apiKey=sk-ant-test-model-key&model=claude-haiku-4.1&notes=%E5%B8%A6%E9%BB%98%E8%AE%A4%E6%A8%A1%E5%9E%8B"
-                            class="deep-link">
-                            📥 导入带默认模型
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=claude&name=Claude%20with%20Model&homepage=https%3A%2F%2Fclaude.ai&endpoint=https%3A%2F%2Fapi.anthropic.com%2Fv1&apiKey=sk-ant-test-model-key&model=claude-haiku-4.1&notes=%E5%B8%A6%E9%BB%98%E8%AE%A4%E6%A8%A1%E5%9E%8B', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-claude">Claude</span>
-                        完整配置（四种模型）
-                    </h3>
-                    <p class="description">
-                        设置所有四种模型字段：默认模型、Haiku 模型、Sonnet 模型、Opus 模型。适用于需要精细控制不同模型系列的场景。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=claude, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=claude-sonnet-4.5</strong>,
-                        <strong>haikuModel=claude-haiku-4.1</strong>, <strong>sonnetModel=claude-sonnet-4.5</strong>,
-                        <strong>opusModel=claude-opus-4</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=claude&name=Claude%20Complete&homepage=https%3A%2F%2Fclaude.ai&endpoint=https%3A%2F%2Fapi.anthropic.com%2Fv1&apiKey=sk-ant-test-complete-key&model=claude-sonnet-4.5&haikuModel=claude-haiku-4.1&sonnetModel=claude-sonnet-4.5&opusModel=claude-opus-4&notes=%E5%AE%8C%E6%95%B4%E6%A8%A1%E5%9E%8B%E9%85%8D%E7%BD%AE"
-                            class="deep-link">
-                            📥 导入完整配置
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=claude&name=Claude%20Complete&homepage=https%3A%2F%2Fclaude.ai&endpoint=https%3A%2F%2Fapi.anthropic.com%2Fv1&apiKey=sk-ant-test-complete-key&model=claude-sonnet-4.5&haikuModel=claude-haiku-4.1&sonnetModel=claude-sonnet-4.5&opusModel=claude-opus-4&notes=%E5%AE%8C%E6%95%B4%E6%A8%A1%E5%9E%8B%E9%85%8D%E7%BD%AE', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-claude">Claude</span>
-                        部分模型配置
-                    </h3>
-                    <p class="description">
-                        仅设置特定的模型字段（例如只设置 Haiku 和 Sonnet），其他模型使用默认值。演示参数灵活性。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=claude, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>haikuModel=claude-haiku-4.1</strong>,
-                        <strong>sonnetModel=claude-sonnet-4.5</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=claude&name=Claude%20Partial&homepage=https%3A%2F%2Fclaude.ai&endpoint=https%3A%2F%2Fapi.anthropic.com%2Fv1&apiKey=sk-ant-test-partial-key&haikuModel=claude-haiku-4.1&sonnetModel=claude-sonnet-4.5&notes=%E9%83%A8%E5%88%86%E6%A8%A1%E5%9E%8B%E9%85%8D%E7%BD%AE"
-                            class="deep-link">
-                            📥 导入部分模型配置
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=claude&name=Claude%20Partial&homepage=https%3A%2F%2Fclaude.ai&endpoint=https%3A%2F%2Fapi.anthropic.com%2Fv1&apiKey=sk-ant-test-partial-key&haikuModel=claude-haiku-4.1&sonnetModel=claude-sonnet-4.5&notes=%E9%83%A8%E5%88%86%E6%A8%A1%E5%9E%8B%E9%85%8D%E7%BD%AE', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-claude">Claude</span>
-                        第三方供应商示例
-                    </h3>
-                    <p class="description">
-                        使用第三方供应商的 API 端点和自定义模型名称，演示兼容性。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=claude, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=custom-claude-v1</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=claude&name=Third-Party%20Claude&homepage=https%3A%2F%2Fthirdparty.com&endpoint=https%3A%2F%2Fapi.thirdparty.com%2Fv1&apiKey=sk-third-party-key&model=custom-claude-v1&notes=%E7%AC%AC%E4%B8%89%E6%96%B9%E4%BE%9B%E5%BA%94%E5%95%86%E7%A4%BA%E4%BE%8B"
-                            class="deep-link">
-                            📥 导入第三方供应商
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=claude&name=Third-Party%20Claude&homepage=https%3A%2F%2Fthirdparty.com&endpoint=https%3A%2F%2Fapi.thirdparty.com%2Fv1&apiKey=sk-third-party-key&model=custom-claude-v1&notes=%E7%AC%AC%E4%B8%89%E6%96%B9%E4%BE%9B%E5%BA%94%E5%95%86%E7%A4%BA%E4%BE%8B', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Codex 示例 -->
-            <div class="section">
-                <h2>Codex 供应商</h2>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-codex">Codex</span>
-                        基础配置
-                    </h3>
-                    <p class="description">
-                        OpenAI 官方 API 基础配置，仅包含必需参数。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=codex, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=codex&name=OpenAI%20Basic&homepage=https%3A%2F%2Fopenai.com&endpoint=https%3A%2F%2Fapi.openai.com%2Fv1&apiKey=sk-test-basic-openai-key&notes=%E5%9F%BA%E7%A1%80%E9%85%8D%E7%BD%AE"
-                            class="deep-link">
-                            📥 导入基础配置
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=codex&name=OpenAI%20Basic&homepage=https%3A%2F%2Fopenai.com&endpoint=https%3A%2F%2Fapi.openai.com%2Fv1&apiKey=sk-test-basic-openai-key&notes=%E5%9F%BA%E7%A1%80%E9%85%8D%E7%BD%AE', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-codex">Codex</span>
-                        带默认模型
-                    </h3>
-                    <p class="description">
-                        OpenAI API 配置，指定默认模型为 gpt-5.1。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=codex, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=gpt-5.1</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=codex&name=OpenAI%20Official&homepage=https%3A%2F%2Fopenai.com&endpoint=https%3A%2F%2Fapi.openai.com%2Fv1&apiKey=sk-test-demo-openai-key-67890&model=gpt-5.1&notes=OpenAI%20%E5%AE%98%E6%96%B9%E6%9C%8D%E5%8A%A1"
-                            class="deep-link">
-                            📥 导入 OpenAI Official
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=codex&name=OpenAI%20Official&homepage=https%3A%2F%2Fopenai.com&endpoint=https%3A%2F%2Fapi.openai.com%2Fv1&apiKey=sk-test-demo-openai-key-67890&model=gpt-5.1&notes=OpenAI%20%E5%AE%98%E6%96%B9%E6%9C%8D%E5%8A%A1', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-codex">Codex</span>
-                        Azure OpenAI
-                    </h3>
-                    <p class="description">
-                        Azure 部署的 OpenAI 服务示例。适合企业用户使用 Azure 云服务。默认模型 gpt-5.1。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=codex, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=gpt-5.1</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=codex&name=Azure%20OpenAI&homepage=https%3A%2F%2Fazure.microsoft.com%2Fopenai&endpoint=https%3A%2F%2Fyour-resource.openai.azure.com%2F&apiKey=azure-test-api-key-xyz&model=gpt-5.1&notes=Azure%20%E4%BC%81%E4%B8%9A%E7%89%88%E6%9C%AC"
-                            class="deep-link">
-                            📥 导入 Azure OpenAI
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=codex&name=Azure%20OpenAI&homepage=https%3A%2F%2Fazure.microsoft.com%2Fopenai&endpoint=https%3A%2F%2Fyour-resource.openai.azure.com%2F&apiKey=azure-test-api-key-xyz&model=gpt-5.1&notes=Azure%20%E4%BC%81%E4%B8%9A%E7%89%88%E6%9C%AC', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-codex">Codex</span>
-                        第三方兼容 API
-                    </h3>
-                    <p class="description">
-                        使用兼容 OpenAI API 格式的第三方服务（如 Together AI、Groq 等）。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=codex, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=mixtral-8x7b</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=codex&name=Third-Party%20API&homepage=https%3A%2F%2Fthirdparty.com&endpoint=https%3A%2F%2Fapi.thirdparty.com%2Fv1&apiKey=sk-third-party-key&model=mixtral-8x7b&notes=%E7%AC%AC%E4%B8%89%E6%96%B9%E5%85%BC%E5%AE%B9%E6%9C%8D%E5%8A%A1"
-                            class="deep-link">
-                            📥 导入第三方 API
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=codex&name=Third-Party%20API&homepage=https%3A%2F%2Fthirdparty.com&endpoint=https%3A%2F%2Fapi.thirdparty.com%2Fv1&apiKey=sk-third-party-key&model=mixtral-8x7b&notes=%E7%AC%AC%E4%B8%89%E6%96%B9%E5%85%BC%E5%AE%B9%E6%9C%8D%E5%8A%A1', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Gemini 示例 -->
-            <div class="section">
-                <h2>Gemini 供应商</h2>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-gemini">Gemini</span>
-                        基础配置
-                    </h3>
-                    <p class="description">
-                        Google Gemini 官方 API 基础配置，仅包含必需参数。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=gemini, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=gemini&name=Google%20Gemini%20Basic&homepage=https%3A%2F%2Fai.google.dev&endpoint=https%3A%2F%2Fgenerativelanguage.googleapis.com%2Fv1beta&apiKey=AIzaSy-test-basic-key&notes=%E5%9F%BA%E7%A1%80%E9%85%8D%E7%BD%AE"
-                            class="deep-link">
-                            📥 导入基础配置
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=gemini&name=Google%20Gemini%20Basic&homepage=https%3A%2F%2Fai.google.dev&endpoint=https%3A%2F%2Fgenerativelanguage.googleapis.com%2Fv1beta&apiKey=AIzaSy-test-basic-key&notes=%E5%9F%BA%E7%A1%80%E9%85%8D%E7%BD%AE', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-gemini">Gemini</span>
-                        Google Gemini Official
-                    </h3>
-                    <p class="description">
-                        导入 Google Gemini 官方 API 配置。默认模型 gemini-3-pro-preview。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=gemini, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=gemini-3-pro-preview</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=gemini&name=Google%20Gemini&homepage=https%3A%2F%2Fai.google.dev&endpoint=https%3A%2F%2Fgenerativelanguage.googleapis.com%2Fv1beta&apiKey=AIzaSy-test-demo-key-abc123&model=gemini-3-pro-preview&notes=Google%20AI%20%E5%AE%98%E6%96%B9%E6%9C%8D%E5%8A%A1"
-                            class="deep-link">
-                            📥 导入 Google Gemini
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=gemini&name=Google%20Gemini&homepage=https%3A%2F%2Fai.google.dev&endpoint=https%3A%2F%2Fgenerativelanguage.googleapis.com%2Fv1beta&apiKey=AIzaSy-test-demo-key-abc123&model=gemini-3-pro-preview&notes=Google%20AI%20%E5%AE%98%E6%96%B9%E6%9C%8D%E5%8A%A1', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-gemini">Gemini</span>
-                        Gemini 测试环境
-                    </h3>
-                    <p class="description">
-                        公司内部 Gemini 测试环境配置示例。用于验证 Gemini 相关深链接导入流程。默认模型 gemini-3-pro-preview。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=gemini, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=gemini-3-pro-preview</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=gemini&name=%E5%85%AC%E5%8F%B8%20Gemini%20%E6%B5%8B%E8%AF%95%E7%8E%AF%E5%A2%83&homepage=https%3A%2F%2Fgemini-test.company.com&endpoint=https%3A%2F%2Fapi-gemini-test.company.com%2Fv1beta&apiKey=sk-gemini-test-company-key&model=gemini-3-pro-preview&notes=%E5%85%AC%E5%8F%B8%E5%86%85%E9%83%A8%20Gemini%20%E6%B5%8B%E8%AF%95%E7%8E%AF%E5%A2%83%EF%BC%8C%E4%BB%85%E4%BE%9B%E5%BC%80%E5%8F%91%E4%BD%BF%E7%94%A8"
-                            class="deep-link">
-                            📥 导入 Gemini 测试环境
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=gemini&name=%E5%85%AC%E5%8F%B8%20Gemini%20%E6%B5%8B%E8%AF%95%E7%8E%AF%E5%A2%83&homepage=https%3A%2F%2Fgemini-test.company.com&endpoint=https%3A%2F%2Fapi-gemini-test.company.com%2Fv1beta&apiKey=sk-gemini-test-company-key&model=gemini-3-pro-preview&notes=%E5%85%AC%E5%8F%B8%E5%86%85%E9%83%A8%20Gemini%20%E6%B5%8B%E8%AF%95%E7%8E%AF%E5%A2%83%EF%BC%8C%E4%BB%85%E4%BE%9B%E5%BC%80%E5%8F%91%E4%BD%BF%E7%94%A8', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-gemini">Gemini</span>
-                        第三方兼容服务
-                    </h3>
-                    <p class="description">
-                        使用第三方提供的 Gemini API 兼容服务，支持自定义模型名称。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app=gemini, name, homepage, endpoint,
-                        apiKey<br>
-                        <span class="param-tag optional">可选</span> <strong>model=gemini-custom-v2</strong>, notes
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=gemini&name=Third-Party%20Gemini&homepage=https%3A%2F%2Fthirdparty-gemini.com&endpoint=https%3A%2F%2Fapi.thirdparty-gemini.com%2Fv1&apiKey=tpg-test-key-xyz&model=gemini-custom-v2&notes=%E7%AC%AC%E4%B8%89%E6%96%B9%20Gemini%20%E5%85%BC%E5%AE%B9%E6%9C%8D%E5%8A%A1"
-                            class="deep-link">
-                            📥 导入第三方服务
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=gemini&name=Third-Party%20Gemini&homepage=https%3A%2F%2Fthirdparty-gemini.com&endpoint=https%3A%2F%2Fapi.thirdparty-gemini.com%2Fv1&apiKey=tpg-test-key-xyz&model=gemini-custom-v2&notes=%E7%AC%AC%E4%B8%89%E6%96%B9%20Gemini%20%E5%85%BC%E5%AE%B9%E6%9C%8D%E5%8A%A1', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                </div>
-            </div>
 
             <!-- 配置文件导入示例 (v3.8+) -->
             <div class="section">
@@ -848,302 +493,11 @@
                     </div>
                 </div>
 
-                <!-- 自动填充示例 -->
-                <div class="link-card">
-                    <h3>
-                        <span class="app-badge badge-claude">Claude</span>
-                        自动填充示例
-                    </h3>
-                    <p class="description">
-                        仅提供配置文件和名称,其他信息(API Key、端点、官网)自动从配置文件中提取。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> name, config<br>
-                        <span class="param-tag">自动填充</span> apiKey, endpoint, homepage (从配置文件提取)
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=claude&name=Auto%20Filled&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0FVVEhfVE9LRU4iOiJzay1hbnQtYXV0by1maWxsZWQta2V5IiwiQU5USFJPUElDX0JBU0VfVVJMIjoiaHR0cHM6Ly9hcGkuYW50aHJvcGljLmNvbS92MSJ9fQ=="
-                            class="deep-link">
-                            📥 测试自动填充
-                        </a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=claude&name=Auto%20Filled&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0FVVEhfVE9LRU4iOiJzay1hbnQtYXV0by1maWxsZWQta2V5IiwiQU5USFJPUElDX0JBU0VfVVJMIjoiaHR0cHM6Ly9hcGkuYW50aHJvcGljLmNvbS92MSJ9fQ==', this)">
-                            📋 复制链接
-                        </button>
-                    </div>
-                    <div class="code-block"
-                        style="margin-top: 12px; padding: 12px; background: #2c3e50; color: #ecf0f1; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto;">
-                        <div style="color: #95a5a6; margin-bottom: 8px;">// 解码后的配置内容:</div>
-                        {<br>
-                        &nbsp;&nbsp;"env": {<br>
-                        &nbsp;&nbsp;&nbsp;&nbsp;"ANTHROPIC_AUTH_TOKEN": "sk-ant-auto-filled-key",<br>
-                        &nbsp;&nbsp;&nbsp;&nbsp;"ANTHROPIC_BASE_URL": "https://api.anthropic.com/v1"<br>
-                        &nbsp;&nbsp;}<br>
-                        }<br>
-                        <div style="color: #52c41a; margin-top: 8px;">✓ API Key: 从配置文件提取</div>
-                        <div style="color: #52c41a;">✓ Endpoint: 从配置文件提取</div>
-                        <div style="color: #52c41a;">✓ Homepage: 自动推断为 https://anthropic.com</div>
-                    </div>
-                    <div
-                        style="margin-top: 12px; padding: 10px; background: #d1ecf1; border-left: 4px solid #17a2b8; border-radius: 4px; font-size: 13px;">
-                        <strong>自动填充规则:</strong><br>
-                        • API Key: 从配置文件中提取<br>
-                        • Endpoint: 从配置文件中提取<br>
-                        • Homepage: 根据 Endpoint 自动推断
-                    </div>
-                </div>
-
-                <!-- 功能说明 -->
-                <div
-                    style="margin-top: 24px; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; color: white;">
-                    <h4 style="margin-bottom: 16px; font-size: 18px;">✨ 配置文件导入新特性 (v3.8+)</h4>
-                    <ul style="list-style: none; padding-left: 0;">
-                        <li style="margin-bottom: 12px; padding-left: 24px; position: relative;">
-                            <span style="position: absolute; left: 0;">📄</span>
-                            <strong>支持格式:</strong> JSON 和 TOML 配置文件
-                        </li>
-                        <li style="margin-bottom: 12px; padding-left: 24px; position: relative;">
-                            <span style="position: absolute; left: 0;">🎯</span>
-                            <strong>优先级规则:</strong> URL 参数 > 配置文件内容 > 远程 URL
-                        </li>
-                        <li style="margin-bottom: 12px; padding-left: 24px; position: relative;">
-                            <span style="position: absolute; left: 0;">🔀</span>
-                            <strong>智能合并:</strong> URL 参数覆盖配置文件,保留非冲突字段
-                        </li>
-                        <li style="margin-bottom: 12px; padding-left: 24px; position: relative;">
-                            <span style="position: absolute; left: 0;">✨</span>
-                            <strong>自动填充:</strong> 未提供的字段自动从配置文件提取
-                        </li>
-                        <li style="padding-left: 24px; position: relative;">
-                            <span style="position: absolute; left: 0;">🌐</span>
-                            <strong>官网推断:</strong> 根据 API 端点自动推断供应商官网
-                        </li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- 供应商导入示例 -->
-            <div class="section">
-                <h2>🏢 供应商导入 <span class="version-badge">v3.8+</span></h2>
-
-                <div class="link-card">
-                    <h3>OpenAI 供应商导入 - 导入并立即切换</h3>
-                    <p class="description">
-                        导入 OpenAI 供应商配置，并立即设为当前供应商。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app, name, endpoint, homepage, apiKey<br>
-                        <span class="param-tag optional">可选</span> model, notes, enabled
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=claude&name=OpenAI&endpoint=https://api.openai.com/v1/chat/completions&homepage=https://openai.com&apiKey=sk-your-key-here&model=gpt-4&enabled=true"
-                            class="deep-link">📥 导入 OpenAI (立即切换)</a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=claude&name=OpenAI&endpoint=https://api.openai.com/v1/chat/completions&homepage=https://openai.com&apiKey=sk-your-key-here&model=gpt-4&enabled=true', this)">📋
-                            复制</button>
-                    </div>
-
-                    <!-- 内容解释 -->
-                    <div class="code-block"
-                        style="margin-top: 12px; padding: 12px; background: #2c3e50; color: #ecf0f1; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto;">
-                        <div style="color: #95a5a6; margin-bottom: 8px;">🏢 将导入以下供应商配置:</div>
-                        <div style="color: #52c41a; margin-bottom: 4px;">• <strong>供应商名称</strong>: OpenAI
-                        </div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>目标应用</strong>: Claude</div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>API Endpoint</strong>:
-                            https://api.openai.com/v1/chat/completions</div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>主页</strong>: https://openai.com
-                        </div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>默认模型</strong>: gpt-4</div>
-                        <div style="color: #ffa07a; margin-bottom: 4px;">• <strong>enabled=true</strong>:
-                            导入后立即设为当前供应商</div>
-                        <div style="color: #95a5a6; margin-top: 12px; padding-top: 8px; border-top: 1px solid #34495e;">
-                            💡 <strong>说明</strong>: 导入后会自动切换到此供应商，并同步到 Claude live 配置。<br>
-                            🔄 <strong>效果</strong>: Claude 将立即使用新导入的供应商进行对话。<br>
-                            ⚠️ <strong>注意</strong>: 请将 <code>sk-your-key-here</code> 替换为您的真实 API Key。
-                        </div>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>备用供应商导入 - 仅添加不切换</h3>
-                    <p class="description">
-                        导入备用供应商配置，但不立即切换，保留当前供应商。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=provider, app, name, endpoint, homepage, apiKey<br>
-                        <span class="param-tag optional">可选</span> model, notes, enabled
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=provider&app=claude&name=Backup Provider&endpoint=https://api.backup.com/v1/chat/completions&homepage=https://backup.com&apiKey=sk-backup-key&notes=备用账号&enabled=false"
-                            class="deep-link">📥 导入备用供应商 (不切换)</a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=provider&app=claude&name=Backup Provider&endpoint=https://api.backup.com/v1/chat/completions&homepage=https://backup.com&apiKey=sk-backup-key&notes=备用账号&enabled=false', this)">📋
-                            复制</button>
-                    </div>
-
-                    <!-- 内容解释 -->
-                    <div class="code-block"
-                        style="margin-top: 12px; padding: 12px; background: #2c3e50; color: #ecf0f1; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto;">
-                        <div style="color: #95a5a6; margin-bottom: 8px;">🏢 将导入以下供应商配置:</div>
-                        <div style="color: #52c41a; margin-bottom: 4px;">• <strong>供应商名称</strong>: Backup Provider
-                        </div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>目标应用</strong>: Claude</div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>API Endpoint</strong>:
-                            https://api.backup.com/v1/chat/completions</div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>备注</strong>: 备用账号</div>
-                        <div style="color: #87ceeb; margin-bottom: 4px;">• <strong>enabled=false</strong>:
-                            仅添加到列表，不切换</div>
-                        <div style="color: #95a5a6; margin-top: 12px; padding-top: 8px; border-top: 1px solid #34495e;">
-                            💡 <strong>说明</strong>: 供应商会添加到列表中，但不会影响当前正在使用的供应商。<br>
-                            🔄 <strong>效果</strong>: Claude 继续使用原有供应商，新供应商可在需要时手动切换。<br>
-                            📋 <strong>用途</strong>: 适合添加备用供应商、测试新配置等场景。
-                        </div>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>enabled 参数对比</h3>
-                    <p class="description">
-                        enabled 参数控制导入后是否立即切换到新供应商。
-                    </p>
-
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
-                        <div style="background: #e8f5e9; padding: 16px; border-radius: 8px; border: 2px solid #4caf50;">
-                            <h4 style="color: #2e7d32; margin-top: 0;">enabled=true ✅</h4>
-                            <ul style="margin: 8px 0; padding-left: 20px; color: #2c3e50;">
-                                <li>立即设为当前供应商</li>
-                                <li>同步到 live 配置</li>
-                                <li>同步 MCP 服务器</li>
-                                <li>Claude 立即使用新供应商</li>
-                            </ul>
-                            <div
-                                style="margin-top: 12px; padding: 8px; background: #fff; border-radius: 4px; font-size: 11px;">
-                                <strong>适用场景：</strong><br>
-                                • 首次安装主要供应商<br>
-                                • 从旧设备迁移配置<br>
-                                • 快速切换到新供应商
-                            </div>
-                        </div>
-
-                        <div style="background: #fff3e0; padding: 16px; border-radius: 8px; border: 2px solid #ff9800;">
-                            <h4 style="color: #e65100; margin-top: 0;">enabled=false 或省略 ⏸️</h4>
-                            <ul style="margin: 8px 0; padding-left: 20px; color: #2c3e50;">
-                                <li>仅添加到供应商列表</li>
-                                <li>不改变当前供应商</li>
-                                <li>不影响 live 配置</li>
-                                <li>可随时手动切换</li>
-                            </ul>
-                            <div
-                                style="margin-top: 12px; padding: 8px; background: #fff; border-radius: 4px; font-size: 11px;">
-                                <strong>适用场景：</strong><br>
-                                • 添加备用供应商<br>
-                                • 批量导入多个配置<br>
-                                • 测试新供应商设置
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- MCP、Prompt、Skill 示例 -->
             <div class="section">
                 <h2>🔌 MCP Servers 导入 <span class="version-badge">v3.8+</span></h2>
-
-                <div class="link-card">
-                    <h3>批量导入 - Sequential Thinking MCP Server</h3>
-                    <p class="description">
-                        导入 Sequential Thinking MCP 服务器，支持结构化思维推理。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=mcp, apps, config (Base64)<br>
-                        <span class="param-tag optional">可选</span> enabled
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=mcp&apps=claude,codex&config=eyJtY3BTZXJ2ZXJzIjp7InNlcXVlbnRpYWwtdGhpbmtpbmciOnsiY29tbWFuZCI6Im5weCIsImFyZ3MiOlsiLXkiLCJAbW9kZWxjb250ZXh0cHJvdG9jb2wvc2VydmVyLXNlcXVlbnRpYWwtdGhpbmtpbmciXSwidHlwZSI6InN0ZGlvIn19fQ==&enabled=true"
-                            class="deep-link">📥 导入到 Claude & Codex</a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=mcp&apps=claude,codex&config=eyJtY3BTZXJ2ZXJzIjp7InNlcXVlbnRpYWwtdGhpbmtpbmciOnsiY29tbWFuZCI6Im5weCIsImFyZ3MiOlsiLXkiLCJAbW9kZWxjb250ZXh0cHJvdG9jb2wvc2VydmVyLXNlcXVlbnRpYWwtdGhpbmtpbmciXSwidHlwZSI6InN0ZGlvIn19fQ==&enabled=true', this)">📋
-                            复制</button>
-                    </div>
-
-                    <!-- 内容解释 -->
-                    <div class="code-block"
-                        style="margin-top: 12px; padding: 12px; background: #2c3e50; color: #ecf0f1; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto;">
-                        <div style="color: #95a5a6; margin-bottom: 8px;">📦 将导入以下 MCP 服务器配置:</div>
-                        <div style="color: #52c41a; margin-bottom: 4px;">• <strong>服务器名称</strong>: sequential-thinking
-                        </div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>命令</strong>: npx -y
-                            @modelcontextprotocol/server-sequential-thinking</div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>类型</strong>: stdio (标准输入输出)</div>
-                        <div style="color: #a8d08d; margin-bottom: 4px;">• <strong>目标应用</strong>: Claude, Codex</div>
-                        <div style="color: #95a5a6; margin-top: 8px; padding-top: 8px; border-top: 1px solid #34495e;">
-                            💡 <strong>功能说明</strong>: 该 MCP 服务器提供结构化的思维链推理能力，帮助 AI 进行逐步分析和推理。<br>
-                            🔄 <strong>智能合并</strong>: 如果该 MCP 服务器已存在，导入时将只启用对应应用的开关，不会修改服务器的其他配置。
-                        </div>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>导入到单个应用</h3>
-                    <p class="description">仅导入到指定的单个应用。</p>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=mcp&apps=claude&config=eyJtY3BTZXJ2ZXJzIjp7InNlcXVlbnRpYWwtdGhpbmtpbmciOnsiY29tbWFuZCI6Im5weCIsImFyZ3MiOlsiLXkiLCJAbW9kZWxjb250ZXh0cHJvdG9jb2wvc2VydmVyLXNlcXVlbnRpYWwtdGhpbmtpbmciXSwidHlwZSI6InN0ZGlvIn19fQ==&enabled=true"
-                            class="deep-link">📥 Claude Only</a>
-                        <a href="ccswitch://v1/import?resource=mcp&apps=codex&config=eyJtY3BTZXJ2ZXJzIjp7InNlcXVlbnRpYWwtdGhpbmtpbmciOnsiY29tbWFuZCI6Im5weCIsImFyZ3MiOlsiLXkiLCJAbW9kZWxjb250ZXh0cHJvdG9jb2wvc2VydmVyLXNlcXVlbnRpYWwtdGhpbmtpbmciXSwidHlwZSI6InN0ZGlvIn19fQ==&enabled=true"
-                            class="deep-link">📥 Codex Only</a>
-                        <a href="ccswitch://v1/import?resource=mcp&apps=gemini&config=eyJtY3BTZXJ2ZXJzIjp7InNlcXVlbnRpYWwtdGhpbmtpbmciOnsiY29tbWFuZCI6Im5weCIsImFyZ3MiOlsiLXkiLCJAbW9kZWxjb250ZXh0cHJvdG9jb2wvc2VydmVyLXNlcXVlbnRpYWwtdGhpbmtpbmciXSwidHlwZSI6InN0ZGlvIn19fQ==&enabled=true"
-                            class="deep-link">📥 Gemini Only</a>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3>📦 JSON 配置示例 - 单个 MCP Server</h3>
-                    <p class="description">
-                        使用 JSON 配置导入单个 MCP 服务器 (Context7)。
-                    </p>
-                    <div class="param-list">
-                        <span class="param-tag">必需</span> resource=mcp, apps, config (Base64)<br>
-                        <span class="param-tag optional">可选</span> enabled
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=mcp&apps=claude&config=eyJtY3BTZXJ2ZXJzIjp7ImNvbnRleHQ3Ijp7ImNvbW1hbmQiOiJidW54IiwiYXJncyI6WyIteSIsIkB1cHN0YXNoL2NvbnRleHQ3LW1jcCIsIi0tYXBpLWtleSIsInRlc3Qta2V5Il0sImVudiI6e319fX0=&enabled=true"
-                            class="deep-link">📥 导入 Context7</a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=mcp&apps=claude&config=eyJtY3BTZXJ2ZXJzIjp7ImNvbnRleHQ3Ijp7ImNvbW1hbmQiOiJidW54IiwiYXJncyI6WyIteSIsIkB1cHN0YXNoL2NvbnRleHQ3LW1jcCIsIi0tYXBpLWtleSIsInRlc3Qta2V5Il0sImVudiI6e319fX0=&enabled=true', this)">📋
-                            复制</button>
-                    </div>
-
-                    <!-- JSON 配置展示 -->
-                    <div class="code-block"
-                        style="margin-top: 12px; padding: 12px; background: #2c3e50; color: #ecf0f1; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto;">
-                        <div style="color: #95a5a6; margin-bottom: 8px;">📦 MCP 配置 JSON:</div>
-                        <pre style="margin: 0; color: #a8d08d; line-height: 1.6;">{
-  "mcpServers": {
-    "context7": {
-      "command": "bunx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp",
-        "--api-key",
-        "test-key"
-      ],
-      "env": {}
-    }
-  }
-}</pre>
-                        <div style="color: #95a5a6; margin-top: 8px; padding-top: 8px; border-top: 1px solid #34495e;">
-                            💡 <strong>说明</strong>: Context7 是一个 MCP 服务器，需要 API Key。<br>
-                            🔧 <strong>命令</strong>: 使用 bunx 运行 @upstash/context7-mcp<br>
-                            🎯 <strong>目标应用</strong>: Claude
-                        </div>
-                    </div>
-                </div>
 
                 <div class="link-card">
                     <h3>📦📦 JSON 配置示例 - 批量导入多个 MCP Servers</h3>
@@ -1230,60 +584,6 @@
                         </div>
                     </div>
                 </div>
-
-                <div class="link-card">
-                    <h3><span class="app-badge badge-codex">Codex</span> 代码优化助手</h3>
-                    <p class="description">为 Codex 导入代码优化提示词。</p>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=prompt&app=codex&name=代码优化助手&content=IyDku6PnoIHkvJjljJbliqnmiYsKCuS9oOaYr+S4gOS9jeS7o+eggeS8mOWMluS4k+S4mueahOWKqeaJi+OAgg==&description=提升代码性能&enabled=true"
-                            class="deep-link">📥 导入</a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=prompt&app=codex&name=代码优化助手&content=IyDku6PnoIHkvJjljJbliqnmiYsKCuS9oOaYr+S4gOS9jeS7o+eggeS8mOWMluS4k+S4mueahOWKqeaJi+OAgg==&description=提升代码性能&enabled=true', this)">📋
-                            复制</button>
-                    </div>
-
-                    <!-- 内容解释 -->
-                    <div class="code-block"
-                        style="margin-top: 12px; padding: 12px; background: #2c3e50; color: #ecf0f1; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto;">
-                        <div style="color: #95a5a6; margin-bottom: 8px;">📝 Prompt 内容:</div>
-                        <div style="color: #a8d08d; white-space: pre-wrap; line-height: 1.6;"># 代码优化助手
-
-                            你是一位代码优化专业的助手。</div>
-                        <div style="color: #95a5a6; margin-top: 12px; padding-top: 8px; border-top: 1px solid #34495e;">
-                            • <strong>应用</strong>: Codex<br>
-                            • <strong>描述</strong>: 提升代码性能<br>
-                            • <strong>状态</strong>: 导入后立即启用
-                        </div>
-                    </div>
-                </div>
-
-                <div class="link-card">
-                    <h3><span class="app-badge badge-gemini">Gemini</span> 架构设计师</h3>
-                    <p class="description">为 Gemini 导入架构设计提示词。</p>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <a href="ccswitch://v1/import?resource=prompt&app=gemini&name=架构设计师&content=IyDmnrbmnoTorr7orqHluIgKCuS9oOaYr+S4k+S4muaetuaehOiuvuiuoeS4k+S4mueahOS4k+WutuOAgg==&description=系统架构专家&enabled=true"
-                            class="deep-link">📥 导入</a>
-                        <button class="deep-link"
-                            style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('ccswitch://v1/import?resource=prompt&app=gemini&name=架构设计师&content=IyDmnrbmnoTorr7orqHluIgKCuS9oOaYr+S4k+S4muaetuaehOiuvuiuoeS4k+S4mueahOS4k+WutuOAgg==&description=系统架构专家&enabled=true', this)">📋
-                            复制</button>
-                    </div>
-
-                    <!-- 内容解释 -->
-                    <div class="code-block"
-                        style="margin-top: 12px; padding: 12px; background: #2c3e50; color: #ecf0f1; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto;">
-                        <div style="color: #95a5a6; margin-bottom: 8px;">📝 Prompt 内容:</div>
-                        <div style="color: #a8d08d; white-space: pre-wrap; line-height: 1.6;"># 架构设计师
-
-                            你是专业架构设计专业的专家。</div>
-                        <div style="color: #95a5a6; margin-top: 12px; padding-top: 8px; border-top: 1px solid #34495e;">
-                            • <strong>应用</strong>: Gemini<br>
-                            • <strong>描述</strong>: 系统架构专家<br>
-                            • <strong>状态</strong>: 导入后立即启用
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- Skill 导入示例 -->
@@ -1336,77 +636,6 @@
                 <p style="color: #7f8c8d; margin-bottom: 24px;">
                     填写参数信息，自动生成深链接并导入到 CC Switch
                 </p>
-
-                <!-- 供应商生成器 -->
-                <div class="generator-section">
-                    <h3 style="color: #2c3e50; margin-bottom: 16px;">🏢 供应商导入生成器</h3>
-
-                    <div class="form-group">
-                        <label>目标应用 *</label>
-                        <select id="providerApp">
-                            <option value="claude">Claude</option>
-                            <option value="codex">Codex</option>
-                            <option value="gemini">Gemini</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label>供应商名称 *</label>
-                        <input type="text" id="providerName" placeholder="例如: OpenAI" />
-                    </div>
-
-                    <div class="form-group">
-                        <label>API Key *</label>
-                        <input type="text" id="providerApiKey" placeholder="sk-..." />
-                        <small style="color: #7f8c8d;">您的 API 密钥</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label>API Endpoint *</label>
-                        <input type="text" id="providerEndpoint"
-                            placeholder="https://api.openai.com/v1/chat/completions" />
-                        <small style="color: #7f8c8d;">完整的 API 端点 URL</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label>主页链接 *</label>
-                        <input type="text" id="providerHomepage" placeholder="https://openai.com" />
-                    </div>
-
-                    <div class="form-group">
-                        <label>默认模型</label>
-                        <input type="text" id="providerModel" placeholder="gpt-4" />
-                        <small style="color: #7f8c8d;">可选，留空使用系统默认</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label>备注</label>
-                        <input type="text" id="providerNotes" placeholder="例如: 个人账号" />
-                    </div>
-
-                    <div class="form-group">
-                        <label>导入后是否设为当前供应商</label>
-                        <select id="providerEnabled">
-                            <option value="true">是 (立即切换到此供应商)</option>
-                            <option value="false">否 (仅添加，不切换)</option>
-                        </select>
-                    </div>
-
-                    <button class="btn" onclick="generateProviderLink()">🎯 生成供应商深链接</button>
-
-                    <div id="providerResult" class="result-section" style="display: none;">
-                        <label>生成的深链接：</label>
-                        <div class="result-url" id="providerUrl" onclick="selectText(this)"></div>
-                        <div style="display: flex; gap: 10px; margin-top: 12px;">
-                            <button class="btn" onclick="copyGeneratedLink('providerUrl')">📋 复制链接</button>
-                            <a id="providerImportBtn" class="btn"
-                                style="background: linear-gradient(135deg, #27ae60 0%, #229954 100%); text-decoration: none;">
-                                📥 立即导入
-                            </a>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- MCP Servers 生成器 -->
                 <div class="generator-section">
                     <h3 style="color: #2c3e50; margin-bottom: 16px;">🔌 MCP Servers 导入生成器</h3>
@@ -1702,6 +931,17 @@
                     <div class="form-group">
                         <label>API 端点</label>
                         <input type="url" id="endpoint" placeholder="https://api.example.com/v1（配置文件模式可从配置提取）">
+                        <small style="color: #7f8c8d; font-size: 11px; display: block; margin-top: 4px;">
+                            主 API 端点地址
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>备用 API 端点（可选，逗号分隔）</label>
+                        <input type="text" id="extraEndpoints" placeholder="https://api2.example.com/v1, https://api3.example.com/v1">
+                        <small style="color: #7f8c8d; font-size: 11px; display: block; margin-top: 4px;">
+                            多个备用端点用逗号分隔，导入后自动添加为自定义端点
+                        </small>
                     </div>
 
                     <div class="form-group">
@@ -1818,6 +1058,79 @@
                 <div class="form-group">
                     <label>备注（可选）</label>
                     <textarea id="notes" rows="2" placeholder="例如: 公司专用账号"></textarea>
+                </div>
+
+                <!-- 用量查询配置 (v3.9+) -->
+                <div style="background: #f0fff4; padding: 16px; border-radius: 8px; margin: 16px 0; border: 2px solid #27ae60;">
+                    <h4 style="color: #27ae60; margin-bottom: 12px; font-size: 14px;">
+                        📊 用量查询配置（v3.9+，可选）
+                    </h4>
+                    <p style="color: #7f8c8d; font-size: 12px; margin-bottom: 12px;">
+                        配置用量查询脚本，可自动查询 API 余额
+                    </p>
+
+                    <div class="form-group">
+                        <label>启用用量查询</label>
+                        <select id="usageEnabled">
+                            <option value="">不配置</option>
+                            <option value="true">启用</option>
+                            <option value="false">禁用</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>用量查询 Base URL</label>
+                        <input type="url" id="usageBaseUrl" placeholder="https://example.com（用于用量查询的基础 URL）">
+                        <small style="color: #7f8c8d; font-size: 11px; display: block; margin-top: 4px;">
+                            用量查询接口的基础地址，必须与脚本中的请求 URL 同源
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>用量查询专用 API Key（可选）</label>
+                        <input type="text" id="usageApiKey" placeholder="留空则使用供应商的 API Key">
+                    </div>
+
+                    <div class="form-group">
+                        <label>用量查询脚本</label>
+                        <textarea id="usageScript" rows="12" style="font-family: monospace; font-size: 12px;"
+                            placeholder='({
+  request: {
+    url: "{{baseUrl}}/api/v1/user/subscription-info",
+    method: "GET",
+    headers: { "Authorization": "{{apiKey}}" }
+  },
+  extractor: function(response) {
+    const data = typeof response === "string" ? JSON.parse(response) : response;
+    return {
+      isValid: true,
+      remaining: data.balance ?? 0,
+      unit: "USD"
+    };
+  }
+})'></textarea>
+                        <small style="color: #7f8c8d; font-size: 11px; display: block; margin-top: 4px;">
+                            支持模板变量：{{baseUrl}}、{{apiKey}}、{{accessToken}}、{{userId}}
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>自动查询间隔（分钟）</label>
+                        <input type="number" id="usageAutoInterval" placeholder="30" min="0">
+                        <small style="color: #7f8c8d; font-size: 11px; display: block; margin-top: 4px;">
+                            0 表示禁用自动查询
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Access Token（可选）</label>
+                        <input type="text" id="usageAccessToken" placeholder="某些 API 需要的访问令牌">
+                    </div>
+
+                    <div class="form-group">
+                        <label>User ID（可选）</label>
+                        <input type="text" id="usageUserId" placeholder="某些 API 需要的用户 ID">
+                    </div>
                 </div>
 
                 <button class="btn" onclick="generateLink()">🚀 生成深链接</button>
@@ -2014,7 +1327,18 @@ requires_openai_auth = true`;
 
                 // 添加参数
                 if (homepage) params.append('homepage', homepage);
-                params.append('endpoint', endpoint);
+
+                // 合并主端点和备用端点
+                const extraEndpoints = document.getElementById('extraEndpoints').value.trim();
+                let fullEndpoint = endpoint;
+                if (extraEndpoints) {
+                    const extras = extraEndpoints.split(',').map(e => e.trim()).filter(e => e);
+                    if (extras.length > 0) {
+                        fullEndpoint = endpoint + ',' + extras.join(',');
+                    }
+                }
+                params.append('endpoint', fullEndpoint);
+
                 params.append('apiKey', apiKey);
                 if (model) params.append('model', model);
                 if (icon) params.append('icon', icon);
@@ -2114,6 +1438,30 @@ requires_openai_auth = true`;
                     if (opusModel) params.append('opusModel', opusModel);
                 }
             }
+
+            // 添加用量查询参数 (v3.9+)
+            const usageEnabled = document.getElementById('usageEnabled').value;
+            const usageBaseUrl = document.getElementById('usageBaseUrl').value.trim();
+            const usageApiKey = document.getElementById('usageApiKey').value.trim();
+            const usageScript = document.getElementById('usageScript').value.trim();
+            const usageAutoInterval = document.getElementById('usageAutoInterval').value.trim();
+            const usageAccessToken = document.getElementById('usageAccessToken').value.trim();
+            const usageUserId = document.getElementById('usageUserId').value.trim();
+
+            if (usageEnabled) params.append('usageEnabled', usageEnabled);
+            if (usageBaseUrl) params.append('usageBaseUrl', usageBaseUrl);
+            if (usageApiKey) params.append('usageApiKey', usageApiKey);
+            if (usageScript) {
+                // URL-safe Base64 编码
+                const scriptB64 = utf8_to_b64(usageScript)
+                    .replace(/\+/g, '-')
+                    .replace(/\//g, '_')
+                    .replace(/=+$/, '');
+                params.append('usageScript', scriptB64);
+            }
+            if (usageAutoInterval) params.append('usageAutoInterval', usageAutoInterval);
+            if (usageAccessToken) params.append('usageAccessToken', usageAccessToken);
+            if (usageUserId) params.append('usageUserId', usageUserId);
 
             const deepLink = `ccswitch://v1/import?${params.toString()}`;
 
@@ -2221,8 +1569,8 @@ requires_openai_auth = true`;
                         <div style="display: grid; grid-template-columns: 150px 1fr; gap: 8px; font-size: 13px;">
                 `;
 
-                // 常规参数
-                const regularParams = ['homepage', 'endpoint', 'apiKey', 'model', 'notes'];
+                // 常规参数（排除 endpoint，单独处理）
+                const regularParams = ['homepage', 'apiKey', 'model', 'notes'];
                 regularParams.forEach(key => {
                     if (paramsObj[key]) {
                         let displayValue = paramsObj[key];
@@ -2236,6 +1584,38 @@ requires_openai_auth = true`;
                         `;
                     }
                 });
+
+                // 单独处理 endpoint（支持多端点）
+                if (paramsObj.endpoint) {
+                    const endpoints = paramsObj.endpoint.split(',').map(e => e.trim()).filter(e => e);
+                    if (endpoints.length === 1) {
+                        // 单个端点
+                        urlParamsHtml += `
+                            <div style="color: #856404; font-weight: 500;">endpoint:</div>
+                            <div style="color: #856404; word-break: break-all; font-family: monospace; font-size: 12px;">${endpoints[0]}</div>
+                        `;
+                    } else {
+                        // 多个端点
+                        urlParamsHtml += `
+                            <div style="color: #856404; font-weight: 500;">endpoints:</div>
+                            <div style="color: #856404; word-break: break-all; font-family: monospace; font-size: 12px;">
+                        `;
+                        endpoints.forEach((ep, idx) => {
+                            const label = idx === 0 ? '🔹 主端点' : `└ 备用 ${idx}`;
+                            urlParamsHtml += `
+                                <div style="margin-bottom: 4px; ${idx === 0 ? 'font-weight: 600;' : 'color: #a08040;'}">
+                                    ${label}: ${ep}
+                                </div>
+                            `;
+                        });
+                        urlParamsHtml += `
+                                <div style="margin-top: 8px; padding: 6px 10px; background: #fff8e1; border-radius: 4px; font-size: 11px; color: #856404;">
+                                    💡 共 ${endpoints.length} 个端点，第一个为主端点，其余为备用端点
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
 
                 // Claude 专用模型参数
                 const claudeModelParams = ['haikuModel', 'sonnetModel', 'opusModel'];
@@ -2349,10 +1729,93 @@ requires_openai_auth = true`;
                     }
                 }
 
+                // 用量查询配置解析 (v3.9+)
+                let usageHtml = '';
+                if (paramsObj.usageEnabled || paramsObj.usageScript || paramsObj.usageBaseUrl) {
+                    usageHtml = `
+                        <div style="background: #f0fff4; padding: 16px; border-radius: 8px; border-left: 4px solid #27ae60; margin-top: 16px;">
+                            <h4 style="margin-bottom: 12px; color: #27ae60;">📊 用量查询配置 (v3.9+)</h4>
+                            <div style="display: grid; grid-template-columns: 150px 1fr; gap: 8px; font-size: 13px;">
+                    `;
+
+                    if (paramsObj.usageEnabled) {
+                        usageHtml += `
+                            <div style="color: #27ae60; font-weight: 500;">启用状态:</div>
+                            <div style="color: #27ae60;">${paramsObj.usageEnabled === 'true' ? '✅ 已启用' : '❌ 已禁用'}</div>
+                        `;
+                    }
+
+                    if (paramsObj.usageBaseUrl) {
+                        usageHtml += `
+                            <div style="color: #27ae60; font-weight: 500;">Base URL:</div>
+                            <div style="color: #27ae60; word-break: break-all; font-family: monospace; font-size: 12px;">${paramsObj.usageBaseUrl}</div>
+                        `;
+                    }
+
+                    if (paramsObj.usageApiKey) {
+                        usageHtml += `
+                            <div style="color: #27ae60; font-weight: 500;">API Key:</div>
+                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${paramsObj.usageApiKey.substring(0, 10)}****</div>
+                        `;
+                    }
+
+                    if (paramsObj.usageAutoInterval) {
+                        usageHtml += `
+                            <div style="color: #27ae60; font-weight: 500;">自动查询间隔:</div>
+                            <div style="color: #27ae60;">${paramsObj.usageAutoInterval} 分钟</div>
+                        `;
+                    }
+
+                    if (paramsObj.usageAccessToken) {
+                        usageHtml += `
+                            <div style="color: #27ae60; font-weight: 500;">Access Token:</div>
+                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${paramsObj.usageAccessToken.substring(0, 10)}****</div>
+                        `;
+                    }
+
+                    if (paramsObj.usageUserId) {
+                        usageHtml += `
+                            <div style="color: #27ae60; font-weight: 500;">User ID:</div>
+                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${paramsObj.usageUserId}</div>
+                        `;
+                    }
+
+                    usageHtml += '</div>';
+
+                    // 解析用量脚本
+                    if (paramsObj.usageScript) {
+                        try {
+                            // URL-safe Base64 解码
+                            let scriptB64 = paramsObj.usageScript
+                                .replace(/-/g, '+')
+                                .replace(/_/g, '/');
+                            // 补齐 padding
+                            while (scriptB64.length % 4) {
+                                scriptB64 += '=';
+                            }
+                            const scriptContent = b64_to_utf8(scriptB64);
+                            usageHtml += `
+                                <div style="margin-top: 12px;">
+                                    <div style="font-size: 12px; color: #27ae60; margin-bottom: 8px; font-weight: 600;">用量查询脚本:</div>
+                                    <pre style="margin: 0; padding: 12px; background: #fff; border-radius: 6px; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; border: 1px solid #27ae60;">${scriptContent}</pre>
+                                </div>
+                            `;
+                        } catch (e) {
+                            usageHtml += `
+                                <div style="margin-top: 12px; color: #dc3545; font-size: 12px;">
+                                    ⚠️ 脚本解码失败: ${e.message}
+                                </div>
+                            `;
+                        }
+                    }
+
+                    usageHtml += '</div>';
+                }
+
                 // 显示结果
                 document.getElementById('parseBasicInfo').innerHTML = basicInfoHtml;
                 document.getElementById('parseUrlParams').innerHTML = urlParamsHtml;
-                document.getElementById('parseConfigContent').innerHTML = configHtml;
+                document.getElementById('parseConfigContent').innerHTML = configHtml + usageHtml;
                 document.getElementById('parseResult').style.display = 'block';
 
                 // 滚动到结果
