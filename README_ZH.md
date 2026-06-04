@@ -2,7 +2,7 @@
 
 # CC Switch
 
-### Claude Code、Codex、Gemini CLI、OpenCode、OpenClaw 和 Hermes Agent 的全方位管理工具
+### Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw 和 Hermes Agent 的全方位管理工具
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
@@ -13,7 +13,7 @@
 
 ### 🌐 唯一官方网站：**[ccswitch.io](https://ccswitch.io)**
 
-[English](README.md) | 中文 | [日本語](README_JA.md) | [更新日志](CHANGELOG.md)
+[English](README.md) | 中文 | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
 
 </div>
 
@@ -44,14 +44,14 @@ MiniMax M2.7 是 MiniMax 首个深度参与自我迭代的模型，可自主构�
 </tr>
 
 <tr>
-<td width="180"><a href="https://www.shengsuanyun.com/?from=CH_4HHXMRYF"><img src="assets/partners/logos/shengsuanyun.png" alt="Shengsuanyun" width="150"></a></td>
-<td>感谢胜算云赞助了本项目！胜算云是专为AI Native Teams服务的超级工厂，工业级AI任务并行执行平台，模型商城集采直供聚合接入了Claude、Chatgpt、Gemini等海内外LLM及图片视频多媒体模型算力，绝无逆向掺水、全站模型SLA可用性高达99.7%、<a href="https://watch.shengsuanyun.com/status/shengsuanyun">监测接口</a>日常全绿。更有企业级专属定制网关，实现团队精细化成本与权限管控，智能路由+安全防护+BYOK企业自带密钥托管。平台按量及tokens plan（即将上线）计费，可开票，使用<a href="https://www.shengsuanyun.com/?from=CH_4HHXMRYF">此链接</a>注册新用户可获10元模力及首充10%赠送。</td>
-</tr>
-
-<tr>
 <td width="180"><a href="https://www.aicodemirror.com/register?invitecode=9915W3"><img src="assets/partners/logos/aicodemirror.jpg" alt="AICodeMirror" width="150"></a></td>
 <td>感谢 AICodeMirror 赞助了本项目！AICodeMirror 提供 Claude Code / Codex / Gemini CLI 官方高稳定中转服务，支持企业级高并发、极速开票、7×24 专属技术支持。
 Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更有折上折！AICodeMirror 为 CCSwitch 的用户提供了特别福利，通过<a href="https://www.aicodemirror.com/register?invitecode=9915W3">此链接</a>注册的用户，可享受首充8折，企业客户最高可享 7.5 折！</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://www.shengsuanyun.com/?from=CH_4HHXMRYF"><img src="assets/partners/logos/shengsuanyun.png" alt="Shengsuanyun" width="150"></a></td>
+<td>感谢胜算云赞助了本项目！胜算云是专为AI Native Teams服务的超级工厂，工业级AI任务并行执行平台，模型商城集采直供聚合接入了Claude、Chatgpt、Gemini等海内外LLM及图片视频多媒体模型算力，绝无逆向掺水、全站模型SLA可用性高达99.7%、<a href="https://watch.shengsuanyun.com/status/shengsuanyun">监测接口</a>日常全绿。更有企业级专属定制网关，实现团队精细化成本与权限管控，智能路由+安全防护+BYOK企业自带密钥托管。平台按量及tokens plan（即将上线）计费，可开票，使用<a href="https://www.shengsuanyun.com/?from=CH_4HHXMRYF">此链接</a>注册新用户可获10元模力及首充10%赠送。</td>
 </tr>
 
 <tr>
@@ -63,7 +63,7 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 
 <tr>
 <td width="180"><a href="https://www.volcengine.com/activity/agentplan?utm_campaign=hw&utm_content=ccswitch&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=ccswitch"><img src="assets/partners/logos/huoshan.png" alt="HuoShan" width="150"></a></td>
-<td>感谢火山方舟Agent Plan 模型赞助了本项目！方舟Agent Plan 模型订阅套餐集成了包含Doubao-Seed、Doubao-Seedance、Doubao-Seedream等在内的字节跳动自研SOTA级模型，覆盖文本、代码、图像、视频等多模态任务。同时支持一站式接入DeepSeek V4、GLM 5.1等主流大模型。超全模态模型与 Harness 升级一步到位，深度支持 Agent 框架与 AI 编程工具。方舟 Agent Plan 为 CC Switch 的用户提供了专属福利：通过<a href="https://www.volcengine.com/activity/agentplan?utm_campaign=hw&utm_content=ccswitch&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=ccswitch">此链接</a>订阅方舟AgentPlan，新客户首月40元起！</td>
+<td>感谢火山方舟Agent Plan 模型赞助了本项目！方舟Agent Plan 模型订阅套餐集成了包含Doubao-Seed、Doubao-Seedance、Doubao-Seedream等在内的字节跳动自研SOTA级模型，覆盖文本、代码、图像、视频等多模态任务。同时支持一站式接入DeepSeek V4、GLM 5.1等主流大模型。超全模态模型与 Harness 升级一步到位，深度支持 Agent 框架与 AI 编程工具。方舟 Agent Plan 为 CC Switch 的用户提供了专属福利：通过<a href="https://www.volcengine.com/activity/agentplan?utm_campaign=hw&utm_content=ccswitch&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=ccswitch">此链接</a>订阅方舟AgentPlan，新客户首月40元起！<a href="https://www.byteplus.com/en/product/modelark?utm_campaign=hw&utm_content=ccswitch&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=ccswitch">>>For developers outside Mainland China, please click here</a></td>
 </tr>
 
 <tr>
@@ -85,11 +85,6 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 <tr>
 <td width="180"><a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY_YX_git_cc-switch"><img src="assets/partners/logos/ucloud.png" alt="优云智算" width="150"></a></td>
 <td>感谢优云智算赞助了本项目！优云智算是UCloud旗下AI云平台，提供稳定、全面的国内外模型API，仅一个key即可调用。主打包月、按次的高性价比 国模Coding Plan套餐，同时提供官转稳定海外模型。支持接入 Claude Code、Codex 及 API 调用。支持企业高并发、7*24技术支持、自助开票。通过<a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY_YX_git_cc-switch">此链接</a>注册的用户，可得免费5元平台体验金！</td>
-</tr>
-
-<tr>
-<td width="180"><a href="https://aicoding.sh/i/CCSWITCH"><img src="assets/partners/logos/aicoding.jpg" alt="AICoding" width="150"></a></td>
-<td>感谢 AICoding.sh 赞助了本项目！AICoding.sh —— 全球大模型 API 超值中转服务！Claude Code 1.9 折，GPT 0.1 折，已为数百家企业提供高性价比 AI 服务。支持 Claude Code、GPT、Gemini 及国内主流模型，企业级高并发、极速开票、7×24 专属技术支持，通过<a href="https://aicoding.sh/i/CCSWITCH">此链接</a> 注册的 CC Switch 用户，首充可享受九折优惠！</td>
 </tr>
 
 <tr>
@@ -117,23 +112,13 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 </tr>
 
 <tr>
-<td width="180"><a href="https://ctok.ai"><img src="assets/partners/logos/ctok.png" alt="CTok" width="150"></a></td>
-<td>感谢 CTok.ai 赞助了本项目！CTok.ai 致力于打造一站式 AI 编程工具服务平台。我们提供 Claude Code 专业套餐及技术社群服务，同时支持 Google Gemini 和 OpenAI Codex。通过精心设计的套餐方案和专业的技术社群，为开发者提供稳定的服务保障和持续的技术支持，让 AI 辅助编程真正成为开发者的生产力工具。点击<a href="https://ctok.ai">这里</a>注册！</td>
+<td width=”180”><a href=”https://ctok.ai”><img src=”assets/partners/logos/ctok.png” alt=”CTok” width=”150”></a></td>
+<td>感谢 CTok.ai 赞助了本项目！CTok.ai 致力于打造一站式 AI 编程工具服务平台。我们提供 Claude Code 专业套餐及技术社群服务，同时支持 Google Gemini 和 OpenAI Codex。通过精心设计的套餐方案和专业的技术社群，为开发者提供稳定的服务保障和持续的技术支持，让 AI 辅助编程真正成为开发者的生产力工具。点击<a href=”https://ctok.ai”>这里</a>注册！</td>
 </tr>
 
 <tr>
-<td width="180"><a href="https://vibecodingapi.ai"><img src="assets/partners/logos/lioncc.png" alt="LionCC" width="150"></a></td>
-<td>感谢 LionCC 狮子API 赞助了本项目！LionCC 专为追求极致开发体验的”Vibe Coders”而生。我们提供稳定、低延迟、优惠价格的 Claude Code、Codex 及 OpenClaw 算力服务，可节约 50% 成本。注册后添加客服微信 HSQBJ088888888，发暗号 cc-switch 备注即可送 10 美金额度（1000 万 token 算力）。其他项目合作关注博客 @LionCC.ai，点击<a href=”https://vibecodingapi.ai”>这里</a>注册！</td>
-</tr>
-
-<tr>
-<td width="180"><a href="https://console.claudeapi.com/register?aff=pCLD"><img src="assets/partners/logos/claudeapi.png" alt="ClaudeAPI" width="150"></a></td>
-<td>本项目由 <a href="https://console.claudeapi.com/register?aff=pCLD">Claude API</a> 赞助。Claude API 直连，三分钟接入 Claude Code 与 Agent 应用 新用户可领取测试额度。基于 Anthropic 官方 Key + AWS Bedrock 官方渠道，非逆向、非降智，支持 Opus / Sonnet / Haiku 全系列模型，保留 Tool Use、1M 上下文等官方能力。适合 Claude Code 深度用户、Agent 工程师与企业技术团队，支持开票和团队对接。点击<a href="https://console.claudeapi.com/register?aff=pCLD">这里</a>注册！</td>
-</tr>
-
-<tr>
-<td width="180"><a href="https://ddshub.short.gy/ccswitch"><img src="assets/partners/logos/dds.png" alt="DDS" width="150"></a></td>
-<td>感谢 DDS 赞助本项目！呆呆兽是一家专注 Claude 的可靠高效 API 中转站，为个人和企业用户提供极具性价比的国内 Claude 直连加速服务。支持 Claude Haiku / Opus / Sonnet 等满血模型。充值满 1000 元即可开具发票，企业客户更可享受定制化分组和技术支持服务。CC Switch 用户专属福利：通过<a href="https://ddshub.short.gy/ccswitch">此链接</a>注册后，首单充值可额外赠送 10% 额度（充值后请联系群主领取）！</td>
+<td width=”180”><a href=”https://console.claudeapi.com/register?aff=pCLD”><img src=”assets/partners/logos/claudeapi.png” alt=”ClaudeAPI” width=”150”></a></td>
+<td>本项目由 <a href=”https://console.claudeapi.com/register?aff=pCLD”>Claude API</a> 赞助。Claude API 直连，三分钟接入 Claude Code 与 Agent 应用 新用户可领取测试额度。基于 Anthropic 官方 Key + AWS Bedrock 官方渠道，非逆向、非降智，支持 Opus / Sonnet / Haiku 全系列模型，保留 Tool Use、1M 上下文等官方能力。适合 Claude Code 深度用户、Agent 工程师与企业技术团队，支持开票和团队对接。点击<a href=”https://console.claudeapi.com/register?aff=pCLD”>这里</a>注册！</td>
 </tr>
 
 <tr>
@@ -146,19 +131,34 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 <td>感谢 RunAPI 赞助本项目！RunAPI 是高效稳定的 AI 模型 API 中转平台，一个 API Key 即可访问 OpenAI、Claude、Gemini、DeepSeek、Grok 等 150+ 主流模型，低至 1 折，极其稳定，可以无缝兼容 Claude Code、OpenClaw 等工具。RunAPI为CC switch的用户提供了特别福利，注册后联系客服可以领取14元额度，点击<a href="https://runapi.co">此链接</a>注册！</td>
 </tr>
 
+<tr>
+<td width="180"><a href="https://apikey.fun/register?aff=CCSwitch"><img src="assets/partners/logos/apikey_banner.png" alt="APIKEY.FUN" width="150"></a></td>
+<td>感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目<a href="https://apikey.fun/register?aff=CCSwitch">专属链接</a>注册，还可享受最高 <strong>充值永久 95 折</strong> 专属优惠。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://apinebula.com/02rw5X"><img src="assets/partners/logos/apinebula_banner.png" alt="APINebula" width="150"></a></td>
+<td>感谢 APINEBULA 赞助本项目！APINEBULA 是银河录像局旗下的企业级 AI 聚合平台，背靠大平台资源，面向开发者、团队与企业用户提供稳定、高性价比的大模型 API 接入服务。平台聚合 Claude、GPT、Gemini 等主流满血模型，一个接口，接入全球顶尖 AI 大模型，各大模型价格低至 1 折起，支持企业级高并发、正式合同、对公打款与开票服务，适合 AI 编程、Agent 开发、业务系统集成等多种场景！使用<a href="https://apinebula.com/02rw5X">此链接</a>注册并在充值时填写 <strong>"ccswitch"</strong> 优惠码可享<strong>九折优惠</strong>！</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://www.atlascloud.ai/coding-plan?utm_source=github&utm_campaign=cc-switch"><img src="assets/partners/logos/atlascloud_banner.png" alt="Atlas Cloud" width="150"></a></td>
+<td>Atlas Cloud 是一个全模态 AI 推理平台，通过单一 API 为开发者提供视频生成、图像生成及 LLM 接入。免去繁琐的多供应商对接，一次连接即可调用 300+ 款全模态精选模型。立即查看 Atlas Cloud 全新<a href="https://www.atlascloud.ai/coding-plan?utm_source=github&utm_campaign=cc-switch">“编程计划”</a>优惠，获取更具性价比的 API 接入！</td>
+</tr>
+
 </table>
 
 </details>
 
 ## 为什么选择 CC Switch？
 
-现代 AI 编程依赖于 Claude Code、Codex、Gemini CLI、OpenCode 和 OpenClaw 等 CLI 工具——但每个工具都有自己的配置格式。切换 API 供应商意味着手动编辑 JSON、TOML 或 `.env` 文件，而在多个工具之间缺乏一个统一管理 MCP, SKILLS 的方式。
+现代 AI 编程依赖于 Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw 和 Hermes 等工具——但每个工具都有自己的配置格式。切换 API 供应商意味着手动编辑 JSON、TOML 或 `.env` 文件，而在多个工具之间缺乏一个统一管理 MCP, SKILLS 的方式。
 
-**CC Switch** 为你提供一个桌面应用来管理所有五个 CLI 工具。无需手动编辑配置文件，你将获得一个可视化界面，一键将供应商导入应用，一键在不同的供应商之间进行切换，内置 50+ 供应商预设、统一的 MCP, SKILLS 管理以及系统托盘即时切换功能——所有操作都基于可靠的 SQLite 数据库和原子写入机制，保护你的配置不被损坏。
+**CC Switch** 为你提供一个桌面应用来管理所有支持的 AI 工具。无需手动编辑配置文件，你将获得一个可视化界面，一键将供应商导入应用，一键在不同的供应商之间进行切换，内置 50+ 供应商预设、统一的 MCP, SKILLS 管理以及系统托盘即时切换功能——所有操作都基于可靠的 SQLite 数据库和原子写入机制，保护你的配置不被损坏。
 
-- **一个应用，五个 CLI 工具** — 在单一界面中管理 Claude Code、Codex、Gemini CLI、OpenCode 和 OpenClaw
+- **一个应用，七个工具** — 在单一界面中管理 Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw 和 Hermes
 - **告别手动编辑** — 50+ 供应商预设，包括 AWS Bedrock、NVIDIA NIM 和社区中转服务；一键即可切换
-- **统一 MCP, SKILLS 管理** — 一个面板管理四个应用的 MCP, SKILLS, 支持双向同步
+- **统一 MCP, SKILLS 管理** — 一个面板管理 Claude、Codex、Gemini、OpenCode 和 Hermes 的 MCP, SKILLS, 支持双向同步
 - **系统托盘快速切换** — 从托盘菜单即时切换供应商，无需打开完整应用
 - **云同步** — 通过 Dropbox、OneDrive、iCloud 或 WebDAV 服务器在不同设备之间同步供应商数据
 - **跨平台** — 基于 Tauri 2 构建的原生桌面应用，支持 Windows、macOS 和 Linux
@@ -172,12 +172,12 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 
 ## 功能特性
 
-[完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v3.12.3-zh.md)
+[完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v3.16.0-zh.md)
 
 ### 供应商管理
 
-- **5 个 CLI 工具，50+ 预设** — Claude Code、Codex、Gemini CLI、OpenCode、OpenClaw；复制 key 即可一键导入
-- **通用供应商** — 一份配置同步到多个应用（OpenCode、OpenClaw）
+- **7 个支持工具，50+ 预设** — Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw、Hermes；复制 key 即可一键导入
+- **通用供应商** — 一份配置同步到 Claude Code、Codex 和 Gemini CLI
 - 一键切换、系统托盘快速访问、拖拽排序、导入导出
 
 ### 代理与故障转移
@@ -187,7 +187,7 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 
 ### MCP、Prompts 与 Skills
 
-- **统一 MCP 面板** — 管理 4 个应用的 MCP 服务器，双向同步，支持 Deep Link 导入
+- **统一 MCP 面板** — 管理 Claude、Codex、Gemini、OpenCode 和 Hermes 的 MCP 服务器，双向同步，支持 Deep Link 导入
 - **Prompts** — Markdown 编辑器，跨应用同步（CLAUDE.md / AGENTS.md / GEMINI.md），回填保护
 - **Skills** — 从 GitHub 仓库或 ZIP 文件一键安装，自定义仓库管理，支持软连接和文件复制
 
@@ -197,21 +197,21 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 
 ### 会话管理器与工作区
 
-- 浏览、搜索和恢复全部应用对话历史
+- 浏览、搜索和恢复支持的会话来源
 - **工作区编辑器**（OpenClaw）— 编辑 Agent 文件（AGENTS.md、SOUL.md 等），支持 Markdown 预览
 
 ### 系统与平台
 
 - **云同步** — 自定义配置目录（Dropbox、OneDrive、iCloud、坚果云、NAS）及 WebDAV 服务器同步
 - **Deep Link** (`ccswitch://`) — 通过 URL 一键导入供应商、MCP 服务器、提示词和技能
-- 深色 / 浅色 / 跟随系统主题、开机自启、自动更新、原子写入、自动备份、国际化（中/英/日）
+- 深色 / 浅色 / 跟随系统主题、开机自启、自动更新、原子写入、自动备份、国际化（简中/繁中/英/日）
 
 ## 常见问题
 
 <details>
-<summary><strong>CC Switch 支持哪些 AI CLI 工具？</strong></summary>
+<summary><strong>CC Switch 支持哪些 AI 工具？</strong></summary>
 
-CC Switch 支持五个工具：**Claude Code**、**Codex**、**Gemini CLI**、**OpenCode** 和 **OpenClaw**。每个工具都有专属的供应商预设和配置管理。
+CC Switch 支持七个工具：**Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**OpenCode**、**OpenClaw** 和 **Hermes**。每个工具都有专属的供应商预设和配置管理。
 
 </details>
 
@@ -282,8 +282,8 @@ CC Switch macOS 版本已通过 Apple 代码签名和公证，可直接下载安
 
 - **MCP**：点击"MCP"按钮 → 通过模板或自定义配置添加服务器 → 切换各应用同步开关
 - **Prompts**：点击"Prompts" → 使用 Markdown 编辑器创建预设 → 激活后同步到 live 文件
-- **Skills**：点击"Skills" → 浏览 GitHub 仓库 → 一键安装到全部应用
-- **会话**：点击"Sessions" → 浏览和搜索和恢复全部应用对话历史
+- **Skills**：点击"Skills" → 浏览 GitHub 仓库 → 一键安装到支持的应用
+- **会话**：点击"Sessions" → 浏览、搜索和恢复支持的会话来源
 
 > **注意**：首次启动可以手动导入现有 CLI 工具配置作为默认供应商。
 
@@ -304,7 +304,6 @@ CC Switch macOS 版本已通过 Apple 代码签名和公证，可直接下载安
 **方式一：通过 Homebrew 安装（推荐）**
 
 ```bash
-brew tap farion1231/ccswitch
 brew install --cask cc-switch
 ```
 
@@ -497,7 +496,7 @@ pnpm test:unit --coverage
 │   ├── lib/
 │   │   ├── api/                # Tauri API 封装（类型安全）
 │   │   └── query/              # TanStack Query 配置
-│   ├── locales/                # 翻译 (zh/en/ja)
+│   ├── locales/                # 翻译 (zh/zh-TW/en/ja)
 │   ├── config/                 # 预设 (providers/mcp)
 │   └── types/                  # TypeScript 类型定义
 ├── src-tauri/                  # 后端 (Rust)
