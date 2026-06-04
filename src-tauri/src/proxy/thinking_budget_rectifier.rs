@@ -149,6 +149,8 @@ mod tests {
             request_thinking_signature: true,
             request_thinking_budget: true,
             request_tool_use_id: true,
+            request_media_fallback: true,
+            request_media_heuristic: true,
         }
     }
 
@@ -158,6 +160,8 @@ mod tests {
             request_thinking_signature: true,
             request_thinking_budget: false,
             request_tool_use_id: true,
+            request_media_fallback: true,
+            request_media_heuristic: true,
         }
     }
 
@@ -167,6 +171,8 @@ mod tests {
             request_thinking_signature: true,
             request_thinking_budget: true,
             request_tool_use_id: true,
+            request_media_fallback: true,
+            request_media_heuristic: true,
         }
     }
 
