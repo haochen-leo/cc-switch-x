@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "CC Switch",
+    "title": "CC Switch For IdealLAB",
     "description": "Claude Code・Codex・Gemini CLI のためのオールインワンアシスタント"
   },
   "common": {
@@ -43,9 +43,9 @@
     "notSet": "未設定"
   },
   "firstRunNotice": {
-    "title": "CC Switch へようこそ",
-    "bodyDefault": "CC Switch は Claude Code / Codex / Gemini CLI の複数プロバイダーをワンクリックで切り替えられるツールです。すでにこれらのツールを設定済みの場合、CC Switch は現在の設定を「default」という名前のプロバイダーとして自動的に保存するので、既存の設定が失われることはありません。",
-    "bodyOfficial": "リストには「Official（公式）」プリセットも用意されており、公式バージョンに戻したくなったらクリックするだけで切り替えられます。切り替える前に現在の設定は自動で default にバックアップされるので、自由に行き来できます。これが CC Switch の仕組みです 😊",
+    "title": "CC Switch For IdealLAB へようこそ",
+    "bodyDefault": "CC Switch For IdealLAB は Claude Code / Codex / Gemini CLI の複数プロバイダーをワンクリックで切り替えられるツールです。すでにこれらのツールを設定済みの場合、CC Switch For IdealLAB は現在の設定を「default」という名前のプロバイダーとして自動的に保存するので、既存の設定が失われることはありません。",
+    "bodyOfficial": "リストには「Official（公式）」プリセットも用意されており、公式バージョンに戻したくなったらクリックするだけで切り替えられます。切り替える前に現在の設定は自動で default にバックアップされるので、自由に行き来できます。これが CC Switch For IdealLAB の仕組みです 😊",
     "confirm": "了解しました"
   },
   "apiKeyInput": {
@@ -790,6 +790,8 @@
     "releaseNotes": "リリースノート",
     "viewReleaseNotes": "このバージョンのリリースノートを見る",
     "viewCurrentReleaseNotes": "現在のバージョンのリリースノートを見る",
+    "officialUpdatesDisabled": "CC Switch X ビルドでは、ローカルインストールを上書きしないよう公式のアプリ内更新を無効化しています。",
+    "officialUpdatesDisabledBadge": "公式更新は無効",
     "officialWebsite": "公式サイト",
     "github": "GitHub",
     "manualInstallCommands": "手動インストールコマンド",
@@ -1155,12 +1157,12 @@
     "fetchModelsTimeout": "リクエストがタイムアウトしました。ネットワーク接続を確認してください",
     "claudeModelRouting": "モデルルーティングプロバイダー",
     "claudeRoutingToggleHint": "有効にするとモデルタイプごとにリクエストを特定のプロバイダーへルーティングできます。",
-    "claudeRoutingDefault": "メインモデル",
+    "claudeRoutingDefault": "既定フォールバック",
     "claudeRoutingHaiku": "Haiku",
     "claudeRoutingSonnet": "Sonnet",
     "claudeRoutingOpus": "Opus",
     "claudeRoutingInheritCurrent": "現在のプロバイダーに従う",
-    "claudeRoutingHint": "オプション：モデルタイプ別にリクエストを指定プロバイダーへ優先ルーティング。未設定時は現在のプロバイダーとフェイルオーバーチェーンに従います。",
+    "claudeRoutingHint": "オプション：モデルタイプ別にリクエストを指定プロバイダーへ優先ルーティングします。Haiku・Sonnet・Opus・Fable のいずれにも当てはまらないリクエストは既定フォールバックを使い、空欄のスロットは現在のプロバイダーとフェイルオーバーチェーンに従います。",
     "claudeRoutingDisabledHint": "モデルルーティングプロバイダーは無効です。リクエストは現在のプロバイダーとフェイルオーバーチェーンに従います。",
     "claudeRoutingProxyNotRunningInline": "ローカルルーティングサービスが起動していないため、モデルルーティング設定は保存後も有効になりません。",
     "claudeRoutingTakeoverNotEnabledInline": "Claude テイクオーバーが有効になっていないため、モデルルーティング設定は保存後も有効になりません。",

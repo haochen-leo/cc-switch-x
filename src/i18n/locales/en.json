@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "CC Switch",
+    "title": "CC Switch For IdealLAB",
     "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
   },
   "common": {
@@ -43,9 +43,9 @@
     "notSet": "Not Set"
   },
   "firstRunNotice": {
-    "title": "Welcome to CC Switch",
-    "bodyDefault": "CC Switch lets you switch between multiple Claude Code / Codex / Gemini CLI providers with a single click. If you already had these tools configured, CC Switch has saved your existing setup as a provider named “default” so none of your previous configuration is lost.",
-    "bodyOfficial": "An “Official” preset is also included in the list — click it any time you want to switch back to the official default. CC Switch automatically backs up your current config to “default” before switching, so you can move back and forth freely. That's how CC Switch works 😊",
+    "title": "Welcome to CC Switch For IdealLAB",
+    "bodyDefault": "CC Switch For IdealLAB lets you switch between multiple Claude Code / Codex / Gemini CLI providers with a single click. If you already had these tools configured, CC Switch For IdealLAB has saved your existing setup as a provider named “default” so none of your previous configuration is lost.",
+    "bodyOfficial": "An “Official” preset is also included in the list — click it any time you want to switch back to the official default. CC Switch For IdealLAB automatically backs up your current config to “default” before switching, so you can move back and forth freely. That's how CC Switch For IdealLAB works 😊",
     "confirm": "Got it"
   },
   "apiKeyInput": {
@@ -790,6 +790,8 @@
     "releaseNotes": "Release Notes",
     "viewReleaseNotes": "View release notes for this version",
     "viewCurrentReleaseNotes": "View current version release notes",
+    "officialUpdatesDisabled": "Official in-app updates are disabled in the CC Switch X build to avoid overwriting the local installation.",
+    "officialUpdatesDisabledBadge": "Official updates disabled",
     "officialWebsite": "Official Website",
     "github": "GitHub",
     "manualInstallCommands": "Manual Install Commands",
@@ -1155,12 +1157,12 @@
     "fetchModelsTimeout": "Request timed out, please check network connection",
     "claudeModelRouting": "Model Routing Provider",
     "claudeRoutingToggleHint": "Route requests to specific providers by model type when enabled.",
-    "claudeRoutingDefault": "Main Model",
+    "claudeRoutingDefault": "Default fallback",
     "claudeRoutingHaiku": "Haiku",
     "claudeRoutingSonnet": "Sonnet",
     "claudeRoutingOpus": "Opus",
     "claudeRoutingInheritCurrent": "Follow current provider",
-    "claudeRoutingHint": "Optional: route requests to designated providers by model type; unset slots follow the current provider and failover chain.",
+    "claudeRoutingHint": "Optional: route requests to designated providers by model type; requests that don't match Haiku, Sonnet, Opus, or Fable use the default fallback slot, and empty slots follow the current provider and failover chain.",
     "claudeRoutingDisabledHint": "Model routing provider is disabled; requests follow the current provider and failover chain.",
     "claudeRoutingProxyNotRunningInline": "Local routing service is not running; model routing settings will not take effect after save.",
     "claudeRoutingTakeoverNotEnabledInline": "Claude takeover is not enabled; model routing settings will not take effect after save.",

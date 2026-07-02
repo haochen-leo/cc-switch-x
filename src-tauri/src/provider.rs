@@ -384,8 +384,9 @@ impl ClaudeModelRouting {
     ///
     /// 匹配策略：
     /// 1. 精确匹配：请求 model == 配置的映射值（忽略大小写）
-    /// 2. 关键词兜底：请求 model 含 haiku/sonnet/opus（未设环境变量时 Claude Code 发原始名）
-    /// 3. 都不匹配 → None（留在当前供应商）
+    /// 2. 关键词匹配：请求 model 含 haiku/sonnet/opus/fable
+    /// 3. 其余情况：若配置了 defaultProviderId，则作为兜底二级供应商
+    /// 4. 否则不路由，留在当前供应商
     pub fn resolve_provider_id(
         &self,
         model: &str,
@@ -394,11 +395,6 @@ impl ClaudeModelRouting {
         let model_lower = model.to_lowercase();
 
         // 1. 精确匹配配置的模型值
-        if let Some(ref v) = mapping.default_model {
-            if model_lower == v.to_lowercase() {
-                return self.default_provider_id.as_deref().filter(|s| !s.is_empty());
-            }
-        }
         if let Some(ref v) = mapping.haiku_model {
             if model_lower == v.to_lowercase() {
                 return self.haiku_provider_id.as_deref().filter(|s| !s.is_empty());
@@ -414,18 +410,25 @@ impl ClaudeModelRouting {
                 return self.opus_provider_id.as_deref().filter(|s| !s.is_empty());
             }
         }
+        if let Some(ref v) = mapping.default_model {
+            if model_lower == v.to_lowercase() {
+                return self.default_provider_id.as_deref().filter(|s| !s.is_empty());
+            }
+        }
 
-        // 2. 关键词兜底（Claude Code 未设环境变量时发原始 claude-* 名字）
+        // 2. 关键词匹配（Claude Code 未设环境变量时发原始 claude-* 名字）
         if model_lower.contains("haiku") {
             return self.haiku_provider_id.as_deref().filter(|s| !s.is_empty());
-        } else if model_lower.contains("sonnet") {
+        }
+        if model_lower.contains("sonnet") {
             return self.sonnet_provider_id.as_deref().filter(|s| !s.is_empty());
-        } else if model_lower.contains("opus") {
+        }
+        if model_lower.contains("opus") || model_lower.contains("fable") {
             return self.opus_provider_id.as_deref().filter(|s| !s.is_empty());
         }
 
-        // 3. 都不匹配 → 不路由
-        None
+        // 3. defaultProviderId 作为真正的兜底二级供应商
+        self.default_provider_id.as_deref().filter(|s| !s.is_empty())
     }
 }
 
@@ -1023,9 +1026,11 @@ pub struct OpenCodeModelLimit {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, LocalProxyRequestOverrides,
-        OpenCodeProviderConfig, Provider, ProviderManager, ProviderMeta, UniversalProvider,
+        ClaudeModelConfig, ClaudeModelRouting, CodexModelConfig, GeminiModelConfig,
+        LocalProxyRequestOverrides, OpenCodeProviderConfig, Provider, ProviderManager,
+        ProviderMeta, UniversalProvider,
     };
+    use crate::proxy::model_mapper::ModelMapping;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -1106,6 +1111,49 @@ mod tests {
         assert!(provider.icon.is_none());
         assert!(provider.icon_color.is_none());
         assert!(!provider.in_failover_queue);
+    }
+
+    #[test]
+    fn claude_model_routing_uses_default_provider_as_catch_all() {
+        let routing = ClaudeModelRouting {
+            default_provider_id: Some("provider-b".to_string()),
+            ..ClaudeModelRouting::default()
+        };
+        let mapping = ModelMapping {
+            haiku_model: Some("haiku-mapped".to_string()),
+            sonnet_model: Some("sonnet-mapped".to_string()),
+            opus_model: Some("opus-mapped".to_string()),
+            fable_model: None,
+            default_model: Some("default-mapped".to_string()),
+        };
+
+        assert_eq!(
+            routing.resolve_provider_id("totally-custom-model", &mapping),
+            Some("provider-b")
+        );
+        assert_eq!(
+            routing.resolve_provider_id("default-mapped", &mapping),
+            Some("provider-b")
+        );
+    }
+
+    #[test]
+    fn claude_model_routing_maps_fable_to_opus_provider() {
+        let routing = ClaudeModelRouting {
+            opus_provider_id: Some("provider-opus".to_string()),
+            ..ClaudeModelRouting::default()
+        };
+
+        assert_eq!(
+            routing.resolve_provider_id("claude-fable-5", &ModelMapping {
+                haiku_model: None,
+                sonnet_model: None,
+                opus_model: None,
+                fable_model: None,
+                default_model: None,
+            }),
+            Some("provider-opus")
+        );
     }
 
     #[test]

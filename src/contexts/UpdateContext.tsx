@@ -8,8 +8,10 @@ import React, {
 } from "react";
 import type { UpdateInfo } from "../lib/updater";
 import { checkForUpdate } from "../lib/updater";
+import { supportsOfficialInAppUpdate } from "../lib/appVariant";
 
 interface UpdateContextValue {
+  supportsOfficialUpdates: boolean;
   // 更新状态
   hasUpdate: boolean;
   updateInfo: UpdateInfo | null;
@@ -31,6 +33,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const DISMISSED_VERSION_KEY = "ccswitch:update:dismissedVersion";
   const LEGACY_DISMISSED_KEY = "dismissedUpdateVersion"; // 兼容旧键
 
+  const [supportsOfficialUpdates, setSupportsOfficialUpdates] = useState(true);
   const [hasUpdate, setHasUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [isChecking, setIsChecking] = useState(false);
@@ -58,7 +61,37 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
 
   const isCheckingRef = useRef(false);
 
+  useEffect(() => {
+    let active = true;
+
+    supportsOfficialInAppUpdate()
+      .then((enabled) => {
+        if (!active) return;
+        setSupportsOfficialUpdates(enabled);
+        if (!enabled) {
+          setHasUpdate(false);
+          setUpdateInfo(null);
+          setIsDismissed(false);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setSupportsOfficialUpdates(true);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const checkUpdate = useCallback(async () => {
+    if (!supportsOfficialUpdates) {
+      setHasUpdate(false);
+      setUpdateInfo(null);
+      setIsDismissed(false);
+      return false;
+    }
     if (isCheckingRef.current) return false;
     isCheckingRef.current = true;
     setIsChecking(true);
@@ -98,7 +131,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       setIsChecking(false);
       isCheckingRef.current = false;
     }
-  }, []);
+  }, [supportsOfficialUpdates]);
 
   const dismissUpdate = useCallback(() => {
     setIsDismissed(true);
@@ -117,15 +150,18 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
 
   // 应用启动时自动检查更新
   useEffect(() => {
+    if (!supportsOfficialUpdates) return;
+
     // 延迟1秒后检查，避免影响启动体验
     const timer = setTimeout(() => {
       checkUpdate().catch(console.error);
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [checkUpdate]);
+  }, [checkUpdate, supportsOfficialUpdates]);
 
   const value: UpdateContextValue = {
+    supportsOfficialUpdates,
     hasUpdate,
     updateInfo,
     isChecking,
