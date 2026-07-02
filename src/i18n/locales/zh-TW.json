@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "CC Switch",
+    "title": "CC Switch For IdealLAB",
     "description": "Claude Code / Codex / Gemini CLI 全方位輔助工具"
   },
   "common": {
@@ -43,9 +43,9 @@
     "notSet": "未設定"
   },
   "firstRunNotice": {
-    "title": "歡迎使用 CC Switch",
-    "bodyDefault": "CC Switch 可以協助您在 Claude Code / Codex / Gemini CLI 的多個供應商之間一鍵切換。如果您之前已經設定過這些工具，CC Switch 會自動將現有設定儲存為名為 default 的供應商，確保您的設定不會遺失。",
-    "bodyOfficial": "清單中還預設了「官方 (Official)」供應商，隨時點擊即可切換回官方預設設定。切換前 CC Switch 會自動將目前設定備份回 default，可以放心來回切換。這就是 CC Switch 的運作方式。",
+    "title": "歡迎使用 CC Switch For IdealLAB",
+    "bodyDefault": "CC Switch For IdealLAB 可以協助您在 Claude Code / Codex / Gemini CLI 的多個供應商之間一鍵切換。如果您之前已經設定過這些工具，CC Switch For IdealLAB 會自動將現有設定儲存為名為 default 的供應商，確保您的設定不會遺失。",
+    "bodyOfficial": "清單中還預設了「官方 (Official)」供應商，隨時點擊即可切換回官方預設設定。切換前 CC Switch For IdealLAB 會自動將目前設定備份回 default，可以放心來回切換。這就是 CC Switch For IdealLAB 的運作方式。",
     "confirm": "我了解了"
   },
   "apiKeyInput": {
@@ -788,6 +788,8 @@
     "releaseNotes": "更新日誌",
     "viewReleaseNotes": "檢視該版本更新日誌",
     "viewCurrentReleaseNotes": "檢視目前版本更新日誌",
+    "officialUpdatesDisabled": "目前 CC Switch X 版本已停用官方應用程式內升級，避免覆蓋本地安裝。",
+    "officialUpdatesDisabledBadge": "官方升級已停用",
     "officialWebsite": "官方網站",
     "github": "GitHub",
     "oneClickInstall": "一鍵安裝",
@@ -1101,7 +1103,7 @@
     "requestModelLabel": "實際請求模型",
     "modelOneMHeader": "聲明支援 1M",
     "modelOneMLabel": "1M",
-    "fallbackModelLabel": "備用模型",
+    "fallbackModelLabel": "預設兜底模型",
     "fallbackModelHint": "用於未明確落到 Sonnet、Opus、Fable、Haiku 角色的請求。使用第三方/中轉端點時建議填寫：否則這些請求（含 Haiku 背景子任務）會以原始 Claude 模型名透傳給上游，可能因上游無此模型而報錯。官方端點可留空。",
     "quickSetModels": "一鍵設定",
     "quickSetSuccess": "已將模型名稱套用至所有角色",
@@ -1122,7 +1124,9 @@
     "fetchModelsAuthFailed": "API Key 無效或無權限",
     "fetchModelsNotSupported": "該供應商不支援取得模型清單",
     "fetchModelsEndpointNotFound": "未找到可用的模型清單端點，請檢查 Base URL 或確認供應商是否開放該 API",
-    "fetchModelsTimeout": "請求逾時，請檢查網路連線"
+    "fetchModelsTimeout": "請求逾時，請檢查網路連線",
+    "claudeRoutingDefault": "預設兜底",
+    "claudeRoutingHint": "可選：按模型類型將請求優先路由到指定供應商；未命中 Haiku、Sonnet、Opus、Fable 時走預設兜底；留空則跟隨當前供應商與故障轉移鏈。"
   },
   "copilot": {
     "authSection": "GitHub Copilot 驗證",

@@ -189,6 +189,7 @@ export function CodexFormFields({
   const hasRequestOverrides = Boolean(
     localProxyHeadersOverride.trim() || localProxyBodyOverride.trim(),
   );
+  const hasProxyOverrideValue = Boolean(customUserAgent || hasRequestOverrides);
   const hasAnyAdvancedValue =
     !!customUserAgent ||
     hasRequestOverrides ||
@@ -197,6 +198,8 @@ export function CodexFormFields({
     supportsThinking ||
     supportsEffort;
   const [advancedExpanded, setAdvancedExpanded] = useState(hasAnyAdvancedValue);
+  const [proxyOverridesExpanded, setProxyOverridesExpanded] =
+    useState(hasProxyOverrideValue);
 
   // 预设/编辑加载填充高级值后自动展开（仅从折叠→展开，不会自动折叠）
   useEffect(() => {
@@ -204,6 +207,12 @@ export function CodexFormFields({
       setAdvancedExpanded(true);
     }
   }, [hasAnyAdvancedValue]);
+
+  useEffect(() => {
+    if (hasProxyOverrideValue) {
+      setProxyOverridesExpanded(true);
+    }
+  }, [hasProxyOverrideValue]);
 
   const [catalogRows, setCatalogRows] = useState<CodexCatalogRow[]>(() =>
     catalogModels.map((m) => createCatalogRow(m)),
@@ -680,29 +689,58 @@ export function CodexFormFields({
               </div>
             )}
 
-            <div
-              className={cn(
-                "space-y-3",
-                (shouldShowSpeedTest ||
-                  (isChatFormat && canEditReasoning) ||
-                  canEditCatalog) &&
-                  "border-t border-border-default pt-3",
-              )}
+            <Collapsible
+              open={proxyOverridesExpanded}
+              onOpenChange={setProxyOverridesExpanded}
             >
-              <CustomUserAgentField
-                id="codex-custom-user-agent"
-                value={customUserAgent}
-                onChange={onCustomUserAgentChange}
-              />
-              <div className="border-t border-border-default pt-3">
-                <LocalProxyRequestOverridesField
-                  headersJson={localProxyHeadersOverride}
-                  bodyJson={localProxyBodyOverride}
-                  onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
-                  onBodyJsonChange={onLocalProxyBodyOverrideChange}
-                />
+              <div
+                className={cn(
+                  (shouldShowSpeedTest ||
+                    (isChatFormat && canEditReasoning) ||
+                    canEditCatalog) &&
+                    "border-t border-border-default pt-3",
+                )}
+              >
+                <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant={null}
+                    size="sm"
+                    className="h-8 gap-1.5 px-0 text-sm font-medium text-foreground hover:opacity-70"
+                  >
+                    {proxyOverridesExpanded ? (
+                      <ChevronDown className="h-4 w-4" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4" />
+                    )}
+                    {t("providerForm.localProxyOverridesSection", {
+                      defaultValue: "本地代理高级覆盖",
+                    })}
+                  </Button>
+                </CollapsibleTrigger>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t("providerForm.localProxyOverridesSectionHint", {
+                    defaultValue:
+                      "包含自定义 User-Agent、Header 覆盖和 Body 覆盖。默认收起，仅在本地路由/代理接管后生效。",
+                  })}
+                </p>
               </div>
-            </div>
+              <CollapsibleContent className="space-y-3 pt-3">
+                <CustomUserAgentField
+                  id="codex-custom-user-agent"
+                  value={customUserAgent}
+                  onChange={onCustomUserAgentChange}
+                />
+                <div className="border-t border-border-default pt-3">
+                  <LocalProxyRequestOverridesField
+                    headersJson={localProxyHeadersOverride}
+                    bodyJson={localProxyBodyOverride}
+                    onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
+                    onBodyJsonChange={onLocalProxyBodyOverrideChange}
+                  />
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </CollapsibleContent>
         </Collapsible>
       )}

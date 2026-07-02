@@ -19,6 +19,7 @@ interface ModelInputWithFetchProps {
   placeholder?: string;
   fetchedModels: FetchedModel[];
   isLoading: boolean;
+  disabled?: boolean;
   /** 传入时显示获取按钮；不传时只在有数据后显示下拉 */
   onFetch?: () => void;
 }
@@ -30,9 +31,24 @@ export function ModelInputWithFetch({
   placeholder,
   fetchedModels,
   isLoading,
+  disabled = false,
   onFetch,
 }: ModelInputWithFetchProps) {
   const { t } = useTranslation();
+
+  if (disabled) {
+    return (
+      <Input
+        id={id}
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        disabled
+      />
+    );
+  }
 
   // 有模型数据: Input + DropdownMenu
   if (fetchedModels.length > 0) {

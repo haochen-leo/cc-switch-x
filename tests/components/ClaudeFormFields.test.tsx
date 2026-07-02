@@ -99,6 +99,11 @@ const renderCopilotForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     onLocalProxyHeadersOverrideChange: vi.fn(),
     localProxyBodyOverride: "",
     onLocalProxyBodyOverrideChange: vi.fn(),
+    claudeModelRouting: {},
+    claudeModelRoutingEnabled: false,
+    onClaudeModelRoutingEnabledChange: vi.fn(),
+    onClaudeModelRoutingChange: vi.fn(),
+    routingProviderOptions: [],
     ...overrides,
   };
 
@@ -172,5 +177,39 @@ describe("ClaudeFormFields", () => {
         "chatgpt-1",
       );
     });
+  });
+
+  it("二级路由命中后展示目标供应商槽位并禁用当前输入", () => {
+    renderCopilotForm({
+      category: "third_party",
+      defaultSonnetModel: "a-sonnet-model",
+      defaultSonnetModelName: "A Sonnet",
+      claudeModelRoutingEnabled: true,
+      claudeModelRouting: {
+        sonnetProviderId: "provider-b",
+      },
+      routingProviderOptions: [
+        {
+          id: "provider-b",
+          name: "Provider B",
+          slots: {
+            defaultModel: "",
+            defaultDisplayName: "",
+            haikuModel: "",
+            haikuDisplayName: "",
+            sonnetModel: "b-sonnet-model",
+            sonnetDisplayName: "B Sonnet",
+            opusModel: "",
+            opusDisplayName: "",
+          },
+        },
+      ],
+    });
+
+    expect(screen.getByDisplayValue("B Sonnet")).toBeDisabled();
+    expect(screen.getByDisplayValue("b-sonnet-model")).toBeDisabled();
+    expect(
+      screen.getByText(/当前已路由到 Provider B，.*Sonnet 槽位/),
+    ).toBeInTheDocument();
   });
 });

@@ -17,6 +17,19 @@ interface UsageFooterProps {
   inline?: boolean; // 是否内联显示（在按钮左侧）
 }
 
+const MONEY_UNITS = new Set([
+  "RMB",
+  "CNY",
+  "CNH",
+  "USD",
+  "EUR",
+  "GBP",
+  "HKD",
+  "JPY",
+]);
+
+const MONEY_SYMBOLS = new Set(["¥", "￥", "$", "€", "£"]);
+
 /** UsageData → QuotaTier 转换（Token Plan 使用） */
 function toQuotaTier(data: UsageData): QuotaTier {
   const extra = data.extra;
@@ -40,6 +53,29 @@ function toQuotaTier(data: UsageData): QuotaTier {
     utilization: data.used || 0,
     resetsAt: extra || null,
   };
+}
+
+function isMonetaryUsagePlan(data: UsageData): boolean {
+  const planName = data.planName?.toLowerCase() ?? "";
+  const unit = data.unit?.trim() ?? "";
+
+  return (
+    planName.includes("金额") ||
+    planName.includes("余额") ||
+    planName.includes("balance") ||
+    planName.includes("credit") ||
+    MONEY_UNITS.has(unit.toUpperCase()) ||
+    MONEY_SYMBOLS.has(unit)
+  );
+}
+
+function prioritizeMonetaryUsage(usageDataList: UsageData[]): UsageData[] {
+  return [...usageDataList].sort((left, right) => {
+    const leftPriority = isMonetaryUsagePlan(left) ? 1 : 0;
+    const rightPriority = isMonetaryUsagePlan(right) ? 1 : 0;
+
+    return rightPriority - leftPriority;
+  });
 }
 
 const UsageFooter: React.FC<UsageFooterProps> = ({
@@ -132,7 +168,7 @@ const UsageFooter: React.FC<UsageFooterProps> = ({
     );
   }
 
-  const usageDataList = usage.data || [];
+  const usageDataList = prioritizeMonetaryUsage(usage.data || []);
 
   // 无数据时不显示
   if (usageDataList.length === 0) return null;

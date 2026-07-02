@@ -124,17 +124,16 @@ impl ProviderRouter {
         &self,
         app_type: &str,
         request_body: &Value,
-    ) -> Result<(Vec<Provider>, bool, Option<String>), AppError> {
+    ) -> Result<(Vec<Provider>, bool), AppError> {
         if app_type != AppType::Claude.as_str() {
             let fallback_chain = self.select_providers(app_type).await?;
-            return Ok((fallback_chain, false, None));
+            return Ok((fallback_chain, false));
         }
 
-        let Some((target_provider_id, mapped_model)) =
-            self.resolve_claude_route_target(app_type, request_body)?
+        let Some(target_provider_id) = self.resolve_claude_route_target(app_type, request_body)?
         else {
             let fallback_chain = self.select_providers(app_type).await?;
-            return Ok((fallback_chain, false, None));
+            return Ok((fallback_chain, false));
         };
 
         let Some(target_provider) = self.db.get_provider_by_id(&target_provider_id, app_type)?
@@ -143,7 +142,7 @@ impl ProviderRouter {
                 "[{app_type}] Claude 模型路由命中不存在的 provider_id={target_provider_id}，回退默认链路"
             );
             let fallback_chain = self.select_providers(app_type).await?;
-            return Ok((fallback_chain, false, mapped_model));
+            return Ok((fallback_chain, false));
         };
 
         let auto_failover_enabled = match self.db.get_proxy_config_for_app(app_type).await {
@@ -157,7 +156,7 @@ impl ProviderRouter {
         // 关闭自动故障转移时，保持单链路语义：
         // 命中模型路由后只尝试目标供应商，不参与自动重试/熔断链路切换。
         if !auto_failover_enabled {
-            return Ok((vec![target_provider], true, mapped_model));
+            return Ok((vec![target_provider], true));
         }
 
         // 自动故障转移开启时：
@@ -182,7 +181,7 @@ impl ProviderRouter {
                 .into_iter()
                 .filter(|p| p.id != target_provider_id),
         );
-        Ok((routed, true, mapped_model))
+        Ok((routed, true))
     }
 
     /// 请求执行前获取熔断器“放行许可”
@@ -360,7 +359,7 @@ impl ProviderRouter {
         &self,
         app_type: &str,
         request_body: &Value,
-    ) -> Result<Option<(String, Option<String>)>, AppError> {
+    ) -> Result<Option<String>, AppError> {
         if app_type != AppType::Claude.as_str() {
             return Ok(None);
         }
@@ -379,18 +378,7 @@ impl ProviderRouter {
             .and_then(|m| m.as_str())
             .unwrap_or("");
 
-        // 从当前供应商的 env 映射模型名
         let model_mapping = ModelMapping::from_provider(&current_provider);
-        let mapped_model = if model_mapping.has_mapping() {
-            let mapped = model_mapping.map_model(request_model);
-            if mapped != request_model {
-                Some(mapped)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
 
         // 从当前供应商的 routing 选择目标供应商
         let target_provider_id = current_provider
@@ -403,7 +391,7 @@ impl ProviderRouter {
             .map(str::to_string);
 
         match target_provider_id {
-            Some(id) => Ok(Some((id, mapped_model))),
+            Some(id) => Ok(Some(id)),
             None => Ok(None),
         }
     }
@@ -685,7 +673,7 @@ mod tests {
         db.set_current_provider("claude", "a").unwrap();
 
         let router = ProviderRouter::new(db.clone());
-        let (providers, route_applied, _mapped_model) = router
+        let (providers, route_applied) = router
             .select_providers_for_request("claude", &json!({"model": "claude-sonnet-4-6"}))
             .await
             .unwrap();
@@ -739,7 +727,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (providers, route_applied, _mapped_model) = router
+        let (providers, route_applied) = router
             .select_providers_for_request("claude", &json!({"model": "claude-sonnet-4-6"}))
             .await
             .unwrap();

@@ -18,6 +18,8 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+const OFFICIAL_APP_IDENTIFIER: &str = "com.ccswitch.desktop";
+
 /// 打开外部链接
 #[tauri::command]
 pub async fn open_external(app: AppHandle, url: String) -> Result<bool, String> {
@@ -53,6 +55,10 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
 /// 检查更新
 #[tauri::command]
 pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
+    if handle.config().identifier != OFFICIAL_APP_IDENTIFIER {
+        return Err("当前 CC Switch X 版本已禁用官方应用内升级，避免覆盖本地安装。".to_string());
+    }
+
     handle
         .opener()
         .open_url(
