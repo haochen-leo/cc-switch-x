@@ -257,7 +257,10 @@ impl Default for RectifierConfig {
 /// 请求优化器配置
 ///
 /// 存储在 settings 表中，key = "optimizer_config"
-/// 仅对 Bedrock provider 生效（CLAUDE_CODE_USE_BEDROCK = "1"）
+/// 预发送优化器配置
+///
+/// - thinking_optimizer 作用于 Claude 兼容请求
+/// - cache_injection 仅对 Bedrock provider 生效（CLAUDE_CODE_USE_BEDROCK = "1"）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerConfig {

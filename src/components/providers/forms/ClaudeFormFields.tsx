@@ -74,6 +74,16 @@ interface EndpointCandidate {
 interface RoutingProviderOption {
   id: string;
   name: string;
+  slots: {
+    defaultModel: string;
+    defaultDisplayName: string;
+    haikuModel: string;
+    haikuDisplayName: string;
+    sonnetModel: string;
+    sonnetDisplayName: string;
+    opusModel: string;
+    opusDisplayName: string;
+  };
 }
 
 interface ClaudeFormFieldsProps {
@@ -257,6 +267,7 @@ export function ClaudeFormFields({
   const hasRequestOverrides = Boolean(
     localProxyHeadersOverride.trim() || localProxyBodyOverride.trim(),
   );
+  const hasProxyOverrideValue = Boolean(customUserAgent || hasRequestOverrides);
   const hasAnyAdvancedValue = !!(
     claudeModel ||
     defaultHaikuModel ||
@@ -270,6 +281,8 @@ export function ClaudeFormFields({
     hasRequestOverrides
   );
   const [advancedExpanded, setAdvancedExpanded] = useState(hasAnyAdvancedValue);
+  const [proxyOverridesExpanded, setProxyOverridesExpanded] =
+    useState(hasProxyOverrideValue);
 
   // 预设填充高级值后自动展开（仅从折叠→展开，不会自动折叠）
   useEffect(() => {
@@ -277,6 +290,12 @@ export function ClaudeFormFields({
       setAdvancedExpanded(true);
     }
   }, [hasAnyAdvancedValue]);
+
+  useEffect(() => {
+    if (hasProxyOverrideValue) {
+      setProxyOverridesExpanded(true);
+    }
+  }, [hasProxyOverrideValue]);
 
   // Copilot 可用模型列表
   const [copilotModels, setCopilotModels] = useState<CopilotModel[]>([]);
@@ -442,9 +461,24 @@ export function ClaudeFormFields({
     field: ClaudeModelEnvField,
     placeholder?: string,
     onValueChange?: (value: string) => void,
+    disabled = false,
   ) => {
     const updateValue =
       onValueChange ?? ((next: string) => onModelChange(field, next));
+
+    if (disabled) {
+      return (
+        <Input
+          id={id}
+          type="text"
+          value={value}
+          onChange={(e) => updateValue(e.target.value)}
+          placeholder={placeholder}
+          autoComplete="off"
+          disabled
+        />
+      );
+    }
 
     if (isCodexOauthPreset) {
       return (
@@ -626,6 +660,30 @@ export function ClaudeFormFields({
   const handleRoleOneMChange = (row: ModelRoleRow, enabled: boolean) => {
     if (!row.supportsOneM) return;
     handleRoleModelChange(row, setClaudeOneMMarker(row.model, enabled));
+  };
+
+  const routingProviderById = Object.fromEntries(
+    routingProviderOptions.map((provider) => [provider.id, provider]),
+  ) as Record<string, RoutingProviderOption>;
+
+  const defaultRoutingProvider = claudeModelRouting.defaultProviderId
+    ? routingProviderById[claudeModelRouting.defaultProviderId]
+    : undefined;
+  const haikuRoutingProvider = claudeModelRouting.haikuProviderId
+    ? routingProviderById[claudeModelRouting.haikuProviderId]
+    : undefined;
+  const sonnetRoutingProvider = claudeModelRouting.sonnetProviderId
+    ? routingProviderById[claudeModelRouting.sonnetProviderId]
+    : undefined;
+  const opusRoutingProvider = claudeModelRouting.opusProviderId
+    ? routingProviderById[claudeModelRouting.opusProviderId]
+    : undefined;
+
+  const getRoleRoutingProvider = (role: ModelRoleRow["role"]) => {
+    if (role === "haiku") return haikuRoutingProvider;
+    if (role === "sonnet") return sonnetRoutingProvider;
+    if (role === "opus") return opusRoutingProvider;
+    return undefined;
   };
 
   return (
@@ -941,53 +999,98 @@ export function ClaudeFormFields({
                 const modelBase = stripClaudeOneMMarker(row.model);
                 const usesOneM =
                   row.supportsOneM && hasClaudeOneMMarker(row.model);
+                const routedProvider = getRoleRoutingProvider(row.role);
+                const routedModel =
+                  row.role === "haiku"
+                    ? routedProvider?.slots.haikuModel ?? ""
+                    : row.role === "sonnet"
+                      ? routedProvider?.slots.sonnetModel ?? ""
+                      : row.role === "opus"
+                        ? routedProvider?.slots.opusModel ?? ""
+                        : "";
+                const routedDisplayName =
+                  row.role === "haiku"
+                    ? routedProvider?.slots.haikuDisplayName ?? ""
+                    : row.role === "sonnet"
+                      ? routedProvider?.slots.sonnetDisplayName ?? ""
+                      : row.role === "opus"
+                        ? routedProvider?.slots.opusDisplayName ?? ""
+                        : "";
+                const effectiveModelBase = routedProvider
+                  ? stripClaudeOneMMarker(routedModel)
+                  : modelBase;
+                const effectiveDisplayName = routedProvider
+                  ? routedDisplayName
+                  : row.displayName;
+                const effectiveUsesOneM =
+                  row.supportsOneM &&
+                  hasClaudeOneMMarker(routedProvider ? routedModel : row.model);
 
                 return (
-                  <div
-                    key={row.role}
-                    className="grid grid-cols-1 gap-2 md:grid-cols-[120px_1fr_minmax(0,1fr)_104px]"
-                  >
-                    <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm font-medium text-muted-foreground">
-                      {row.label}
+                  <div key={row.role} className="space-y-1.5">
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[120px_1fr_minmax(0,1fr)_104px]">
+                      <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm font-medium text-muted-foreground">
+                        {row.label}
+                      </div>
+                      <Input
+                        value={effectiveDisplayName}
+                        onChange={(event) =>
+                          onModelChange(row.displayNameField, event.target.value)
+                        }
+                        placeholder={
+                          effectiveModelBase ||
+                          t("providerForm.modelDisplayNamePlaceholder", {
+                            defaultValue: "例如 DeepSeek V4 Pro",
+                          })
+                        }
+                        autoComplete="off"
+                        disabled={Boolean(routedProvider)}
+                      />
+                      {renderModelInput(
+                        row.inputId,
+                        effectiveModelBase,
+                        row.modelField,
+                        t("providerForm.modelPlaceholder", { defaultValue: "" }),
+                        (value) =>
+                          handleRoleModelChange(
+                            row,
+                            row.supportsOneM
+                              ? setClaudeOneMMarker(value, usesOneM)
+                              : stripClaudeOneMMarker(value),
+                          ),
+                        Boolean(routedProvider),
+                      )}
+                      {row.supportsOneM && (
+                        <label className="flex h-9 items-center gap-2 text-sm text-muted-foreground">
+                          <Checkbox
+                            checked={effectiveUsesOneM}
+                            onCheckedChange={(checked) =>
+                              handleRoleOneMChange(row, checked === true)
+                            }
+                            disabled={Boolean(routedProvider)}
+                          />
+                          {t("providerForm.modelOneMLabel", {
+                            defaultValue: "1M",
+                          })}
+                        </label>
+                      )}
                     </div>
-                    <Input
-                      value={row.displayName}
-                      onChange={(event) =>
-                        onModelChange(row.displayNameField, event.target.value)
-                      }
-                      placeholder={
-                        modelBase ||
-                        t("providerForm.modelDisplayNamePlaceholder", {
-                          defaultValue: "例如 DeepSeek V4 Pro",
-                        })
-                      }
-                      autoComplete="off"
-                    />
-                    {renderModelInput(
-                      row.inputId,
-                      modelBase,
-                      row.modelField,
-                      t("providerForm.modelPlaceholder", { defaultValue: "" }),
-                      (value) =>
-                        handleRoleModelChange(
-                          row,
-                          row.supportsOneM
-                            ? setClaudeOneMMarker(value, usesOneM)
-                            : stripClaudeOneMMarker(value),
-                        ),
-                    )}
-                    {row.supportsOneM && (
-                      <label className="flex h-9 items-center gap-2 text-sm text-muted-foreground">
-                        <Checkbox
-                          checked={usesOneM}
-                          onCheckedChange={(checked) =>
-                            handleRoleOneMChange(row, checked === true)
-                          }
-                        />
-                        {t("providerForm.modelOneMLabel", {
-                          defaultValue: "1M",
-                        })}
-                      </label>
+                    {routedProvider && (
+                      <p className="text-xs text-muted-foreground md:pl-[128px]">
+                        {routedModel
+                          ? t("providerForm.claudeRoutingEffectiveSlotHint", {
+                              defaultValue:
+                                "当前已路由到 {{provider}}，此处展示并使用的是该供应商的 {{role}} 槽位；当前供应商的同名槽位不会生效。",
+                              provider: routedProvider.name,
+                              role: row.label,
+                            })
+                          : t("providerForm.claudeRoutingMissingSlotHint", {
+                              defaultValue:
+                                "当前已路由到 {{provider}}，但该供应商尚未配置 {{role}} 槽位，请到目标供应商中补齐。",
+                              provider: routedProvider.name,
+                              role: row.label,
+                            })}
+                      </p>
                     )}
                   </div>
                 );
@@ -1002,15 +1105,29 @@ export function ClaudeFormFields({
               </FormLabel>
               {renderModelInput(
                 "claudeModel",
-                claudeModel,
+                defaultRoutingProvider?.slots.defaultModel || claudeModel,
                 "ANTHROPIC_MODEL",
                 t("providerForm.modelPlaceholder", { defaultValue: "" }),
+                undefined,
+                Boolean(defaultRoutingProvider),
               )}
               <p className="text-xs text-muted-foreground">
-                {t("providerForm.fallbackModelHint", {
-                  defaultValue:
-                    "用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方/中转端点时建议填写：否则这些请求（含 Haiku 后台子任务）会以原始 Claude 模型名透传给上游，可能因上游无此模型而报错。官方端点可留空。",
-                })}
+                {defaultRoutingProvider
+                  ? defaultRoutingProvider.slots.defaultModel
+                    ? t("providerForm.claudeRoutingDefaultEffectiveHint", {
+                        defaultValue:
+                          "当前已配置默认兜底路由到 {{provider}}。未命中其他档位时，将使用该供应商的默认兜底模型。",
+                        provider: defaultRoutingProvider.name,
+                      })
+                    : t("providerForm.claudeRoutingDefaultMissingHint", {
+                        defaultValue:
+                          "当前已配置默认兜底路由到 {{provider}}，但该供应商尚未配置默认兜底模型，请到目标供应商中补齐。",
+                        provider: defaultRoutingProvider.name,
+                      })
+                  : t("providerForm.fallbackModelHint", {
+                      defaultValue:
+                        "用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方/中转端点时建议填写：否则这些请求（含 Haiku 后台子任务）会以原始 Claude 模型名透传给上游，可能因上游无此模型而报错。官方端点可留空。",
+                    })}
               </p>
             </div>
 
@@ -1063,7 +1180,7 @@ export function ClaudeFormFields({
                     <div className="space-y-2">
                       <FormLabel htmlFor="routingDefaultProvider">
                         {t("providerForm.claudeRoutingDefault", {
-                          defaultValue: "主模型",
+                          defaultValue: "默认兜底",
                         })}
                       </FormLabel>
                       <Select
@@ -1195,7 +1312,7 @@ export function ClaudeFormFields({
                   <p className="text-xs text-muted-foreground">
                     {t("providerForm.claudeRoutingHint", {
                       defaultValue:
-                        "可选：按模型类型将请求优先路由到指定供应商；未设置时跟随当前供应商与故障转移链。",
+                        "可选：按模型类型将请求优先路由到指定供应商；未命中 Haiku、Sonnet、Opus、Fable 时走“默认兜底”；留空则跟随当前供应商与故障转移链。",
                     })}
                   </p>
                 </>
@@ -1208,20 +1325,52 @@ export function ClaudeFormFields({
               )}
             </div>
 
-            <CustomUserAgentField
-              id="claude-custom-user-agent"
-              value={customUserAgent}
-              onChange={onCustomUserAgentChange}
-            />
+            <Collapsible
+              open={proxyOverridesExpanded}
+              onOpenChange={setProxyOverridesExpanded}
+            >
+              <div className="border-t border-border-default pt-3">
+                <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant={null}
+                    size="sm"
+                    className="h-8 gap-1.5 px-0 text-sm font-medium text-foreground hover:opacity-70"
+                  >
+                    {proxyOverridesExpanded ? (
+                      <ChevronDown className="h-4 w-4" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4" />
+                    )}
+                    {t("providerForm.localProxyOverridesSection", {
+                      defaultValue: "本地代理高级覆盖",
+                    })}
+                  </Button>
+                </CollapsibleTrigger>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t("providerForm.localProxyOverridesSectionHint", {
+                    defaultValue:
+                      "包含自定义 User-Agent、Header 覆盖和 Body 覆盖。默认收起，仅在本地路由/代理接管后生效。",
+                  })}
+                </p>
+              </div>
+              <CollapsibleContent className="space-y-3 pt-3">
+                <CustomUserAgentField
+                  id="claude-custom-user-agent"
+                  value={customUserAgent}
+                  onChange={onCustomUserAgentChange}
+                />
 
-            <div className="border-t border-border-default pt-3">
-              <LocalProxyRequestOverridesField
-                headersJson={localProxyHeadersOverride}
-                bodyJson={localProxyBodyOverride}
-                onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
-                onBodyJsonChange={onLocalProxyBodyOverrideChange}
-              />
-            </div>
+                <div className="border-t border-border-default pt-3">
+                  <LocalProxyRequestOverridesField
+                    headersJson={localProxyHeadersOverride}
+                    bodyJson={localProxyBodyOverride}
+                    onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
+                    onBodyJsonChange={onLocalProxyBodyOverrideChange}
+                  />
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </CollapsibleContent>
         </Collapsible>
       )}
