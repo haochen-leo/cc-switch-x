@@ -111,8 +111,6 @@ pub struct RequestForwarder {
     current_provider_id_at_start: String,
     /// 是否抑制 current provider 回写（Claude 模型路由命中时启用）
     suppress_current_provider_sync: bool,
-    /// 路由命中时预映射的模型名（来自当前供应商 env），None 表示未命中
-    mapped_model: Option<String>,
     /// 代理会话 ID（用于 Gemini Native shadow replay）
     session_id: String,
     /// Session ID 是否由客户端提供；生成值不能作为上游缓存身份。
@@ -136,6 +134,28 @@ pub struct RequestForwarder {
 }
 
 impl RequestForwarder {
+    fn apply_pre_send_optimizers(&self, body: &Value, provider: &Provider) -> Value {
+        let mut provider_body = body.clone();
+
+        if !self.optimizer_config.enabled {
+            return provider_body;
+        }
+
+        // thinking_optimizer 作用于所有 Claude 兼容请求，不只 Bedrock。
+        // 否则像 claude-opus-4-8 这类客户端路由 ID 会把
+        // thinking.adaptive.budget_tokens 原样带给上游，触发 400。
+        if self.optimizer_config.thinking_optimizer {
+            super::thinking_optimizer::optimize(&mut provider_body, &self.optimizer_config);
+        }
+
+        // cache 注入仍只给 Bedrock，避免字段泄漏到其他供应商。
+        if is_bedrock_provider(provider) && self.optimizer_config.cache_injection {
+            super::cache_injector::inject(&mut provider_body, &self.optimizer_config);
+        }
+
+        provider_body
+    }
+
     /// 预防式 media 降级：发送前对 text-only 模型把图片块替换为标记。
     ///
     /// 受 `enabled && request_media_fallback` 管辖；其中"启发式模型名单预测"
@@ -193,7 +213,6 @@ impl RequestForwarder {
         app_handle: Option<tauri::AppHandle>,
         current_provider_id_at_start: String,
         suppress_current_provider_sync: bool,
-        mapped_model: Option<String>,
         session_id: String,
         session_client_provided: bool,
         streaming_first_byte_timeout: u64,
@@ -216,7 +235,6 @@ impl RequestForwarder {
             app_handle,
             current_provider_id_at_start,
             suppress_current_provider_sync,
-            mapped_model,
             session_id,
             session_client_provided,
             rectifier_config,
@@ -446,21 +464,9 @@ impl RequestForwarder {
                 continue;
             }
 
-            // PRE-SEND 优化器：每个 provider 独立决定是否优化
-            // clone body 以避免 Bedrock 优化字段泄漏到非 Bedrock provider（failover 场景）
-            let mut provider_body =
-                if self.optimizer_config.enabled && is_bedrock_provider(provider) {
-                    let mut b = body.clone();
-                    if self.optimizer_config.thinking_optimizer {
-                        super::thinking_optimizer::optimize(&mut b, &self.optimizer_config);
-                    }
-                    if self.optimizer_config.cache_injection {
-                        super::cache_injector::inject(&mut b, &self.optimizer_config);
-                    }
-                    b
-                } else {
-                    body.clone()
-                };
+            // PRE-SEND 优化器：每个 provider 独立处理，thinking 适用于全部 Claude 兼容请求，
+            // cache 注入仅作用于 Bedrock。
+            let mut provider_body = self.apply_pre_send_optimizers(&body, provider);
 
             let provider_type = ProviderType::from_app_type_and_config(app_type, provider);
             let is_anthropic_provider = matches!(
@@ -603,6 +609,7 @@ impl RequestForwarder {
                                     &headers,
                                     &extensions,
                                     adapter.as_ref(),
+                                    is_routed_target,
                                 )
                                 .await
                             {
@@ -1161,36 +1168,8 @@ impl RequestForwarder {
             == Some("github_copilot")
             || base_url.contains("githubcopilot.com");
 
-        // 应用模型映射（独立于格式转换）
-        // - Claude Desktop proxy 模式：Desktop 可见的 claude-* route → 真实上游模型名
-        // - 路由命中：已由 provider_router 从当前供应商 env 预映射，直接应用
-        // - 其他供应商：用目标供应商自己的 env 做模型映射
-        // Claude Desktop proxy 模式必须先把 Desktop 可见的 claude-* route
-        // 映射成真实上游模型名，并且未知 route 要直接报错，不能使用默认模型兜底。
-        let mapped_body = if matches!(app_type, AppType::ClaudeDesktop) {
-            crate::claude_desktop_config::map_proxy_request_model(body.clone(), provider)
-                .map_err(|e| ProxyError::InvalidRequest(e.to_string()))?
-        } else if is_routed_target {
-            // 路由目标（第一跳）：使用当前供应商 env 预映射的模型名
-            if let Some(ref model) = self.mapped_model {
-                let mut b = body.clone();
-                b["model"] = serde_json::json!(model);
-                log::debug!(
-                    "[{}] 路由命中，应用预映射模型: {}",
-                    app_type.as_str(),
-                    model
-                );
-                b
-            } else {
-                // 路由命中但无映射，跳过 model_mapper 透传原始模型
-                body.clone()
-            }
-        } else {
-            // 非路由目标（包括 failover 供应商）：用目标供应商自己的 env 做模型映射
-            let (mapped_body, _original_model, _mapped_model) =
-                super::model_mapper::apply_model_mapping(body.clone(), provider);
-            mapped_body
-        };
+        let mapped_body =
+            self.map_request_body_for_provider(app_type, provider, body, is_routed_target)?;
 
         // 与 CCH 对齐：请求前不做 thinking 主动改写（仅保留兼容入口）
         let mut mapped_body = normalize_thinking_type(mapped_body);
@@ -2046,6 +2025,47 @@ impl RequestForwarder {
         }
     }
 
+    fn map_request_body_for_provider(
+        &self,
+        app_type: &AppType,
+        provider: &Provider,
+        body: &Value,
+        is_routed_target: bool,
+    ) -> Result<Value, ProxyError> {
+        if matches!(app_type, AppType::ClaudeDesktop) {
+            return crate::claude_desktop_config::map_proxy_request_model(body.clone(), provider)
+                .map_err(|e| ProxyError::InvalidRequest(e.to_string()));
+        }
+
+        // 二级路由现在只负责选目标供应商；真正发往上游的模型槽位
+        // 由目标供应商自己决定，避免出现“走 B 但实际仍吃 A 槽位”的错位。
+        let (mapped_body, original_model, mapped_model) =
+            super::model_mapper::apply_model_mapping(body.clone(), provider);
+
+        if is_routed_target {
+            if let (Some(original), Some(mapped)) = (original_model.as_deref(), mapped_model.as_deref())
+            {
+                log::debug!(
+                    "[{}] 路由命中 {}，使用目标供应商 {} 的模型槽位: {} -> {}",
+                    app_type.as_str(),
+                    provider.id,
+                    provider.name,
+                    original,
+                    mapped
+                );
+            } else {
+                log::debug!(
+                    "[{}] 路由命中 {}，目标供应商 {} 未配置匹配槽位，透传原始模型",
+                    app_type.as_str(),
+                    provider.id,
+                    provider.name
+                );
+            }
+        }
+
+        Ok(mapped_body)
+    }
+
     /// 故障转移开启时，成功不能只看上游响应头。
     ///
     /// - 非流式：先把完整 body 读到内存，读超时/连接中断会回到 retry loop 尝试下一家。
@@ -2894,6 +2914,7 @@ mod tests {
             failover_manager: Arc::new(FailoverSwitchManager::new(db)),
             app_handle: None,
             current_provider_id_at_start: String::new(),
+            suppress_current_provider_sync: false,
             session_id: String::new(),
             session_client_provided: false,
             rectifier_config: RectifierConfig::default(),
@@ -2903,6 +2924,74 @@ mod tests {
             streaming_first_byte_timeout,
             max_attempts: 1,
         }
+    }
+
+    fn test_provider_with_models(
+        id: &str,
+        name: &str,
+        settings_config: serde_json::Value,
+    ) -> Provider {
+        Provider {
+            id: id.to_string(),
+            name: name.to_string(),
+            settings_config,
+            website_url: None,
+            category: None,
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: None,
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        }
+    }
+
+    #[test]
+    fn non_bedrock_claude_provider_still_gets_thinking_optimizer() {
+        let mut fwd = test_forwarder(Duration::from_secs(1), Duration::from_secs(1));
+        fwd.optimizer_config = OptimizerConfig {
+            enabled: true,
+            ..OptimizerConfig::default()
+        };
+
+        let provider = test_provider_with_type(Some("anthropic"));
+        let body = json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 16384,
+            "thinking": { "type": "enabled", "budget_tokens": 8000 },
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+
+        let optimized = fwd.apply_pre_send_optimizers(&body, &provider);
+
+        assert_eq!(optimized["thinking"]["type"], "adaptive");
+        assert!(optimized["thinking"].get("budget_tokens").is_none());
+        assert_eq!(optimized["output_config"]["effort"], "max");
+    }
+
+    #[test]
+    fn routed_target_uses_target_provider_model_slot() {
+        let fwd = test_forwarder(Duration::from_secs(1), Duration::from_secs(1));
+        let provider_b = test_provider_with_models(
+            "provider-b",
+            "Provider B",
+            json!({
+                "env": {
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "b-sonnet-model"
+                }
+            }),
+        );
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+
+        let mapped = fwd
+            .map_request_body_for_provider(&AppType::Claude, &provider_b, &body, true)
+            .expect("mapped body");
+
+        assert_eq!(mapped["model"], "b-sonnet-model");
     }
 
     #[test]

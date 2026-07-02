@@ -9,7 +9,7 @@ interface UpdateBadgeProps {
 }
 
 export function UpdateBadge({ className = "", onClick }: UpdateBadgeProps) {
-  const { hasUpdate, updateInfo } = useUpdate();
+  const { supportsOfficialUpdates, hasUpdate, updateInfo } = useUpdate();
   const { t } = useTranslation();
   const isActive = hasUpdate && updateInfo;
   const title = isActive
@@ -18,7 +18,7 @@ export function UpdateBadge({ className = "", onClick }: UpdateBadgeProps) {
       })
     : t("settings.checkForUpdates");
 
-  if (!isActive) {
+  if (!supportsOfficialUpdates || !isActive) {
     return null;
   }
 

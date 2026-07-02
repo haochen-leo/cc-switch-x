@@ -16,6 +16,7 @@ import { providersApi, settingsApi, type AppId } from "@/lib/api";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import type {
   ProviderCategory,
+  Provider,
   ProviderMeta,
   ProviderTestConfig,
   ClaudeApiFormat,
@@ -136,6 +137,46 @@ type PresetEntry = {
     | OpenClawProviderPreset
     | HermesProviderPreset;
 };
+
+type ClaudeRoutingProviderSlotValues = {
+  defaultModel: string;
+  defaultDisplayName: string;
+  haikuModel: string;
+  haikuDisplayName: string;
+  sonnetModel: string;
+  sonnetDisplayName: string;
+  opusModel: string;
+  opusDisplayName: string;
+};
+
+function getProviderEnvString(provider: Provider, key: string): string {
+  const value = provider.settingsConfig?.env?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function getClaudeRoutingProviderSlotValues(
+  provider: Provider,
+): ClaudeRoutingProviderSlotValues {
+  return {
+    defaultModel: getProviderEnvString(provider, "ANTHROPIC_MODEL"),
+    defaultDisplayName: getProviderEnvString(provider, "ANTHROPIC_MODEL_NAME"),
+    haikuModel: getProviderEnvString(provider, "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+    haikuDisplayName: getProviderEnvString(
+      provider,
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+    ),
+    sonnetModel: getProviderEnvString(provider, "ANTHROPIC_DEFAULT_SONNET_MODEL"),
+    sonnetDisplayName: getProviderEnvString(
+      provider,
+      "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+    ),
+    opusModel: getProviderEnvString(provider, "ANTHROPIC_DEFAULT_OPUS_MODEL"),
+    opusDisplayName: getProviderEnvString(
+      provider,
+      "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+    ),
+  };
+}
 
 function hasClaudeModelRoutingValues(routing?: ClaudeModelRouting | null): boolean {
   if (!routing) return false;
@@ -548,6 +589,7 @@ function ProviderFormFull({
       .map((provider) => ({
         id: provider.id,
         name: provider.name,
+        slots: getClaudeRoutingProviderSlotValues(provider),
       }));
   }, [appId, providersData?.providers, providerId]);
   const { data: proxyStatusData } = useProxyStatus();
