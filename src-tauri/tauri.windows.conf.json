@@ -4,7 +4,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "CC Switch For IdealLAB",
+        "title": "CC Switch For IdeaLAB",
         "titleBarStyle": "Visible",
         "visible": false,
         "minWidth": 900,

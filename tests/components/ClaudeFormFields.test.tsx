@@ -85,6 +85,7 @@ const renderCopilotForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     defaultOpusModelName: "",
     defaultFableModel: "",
     defaultFableModelName: "",
+    subagentModel: "",
     onModelChange: vi.fn(),
     speedTestEndpoints: [],
     apiFormat: "anthropic",
@@ -211,5 +212,26 @@ describe("ClaudeFormFields", () => {
     expect(
       screen.getByText(/当前已路由到 Provider B，.*Sonnet 槽位/),
     ).toBeInTheDocument();
+  });
+
+  it("一键设置会同时写入 Subagent 模型", () => {
+    const onModelChange = vi.fn();
+    renderCopilotForm({
+      claudeModel: "shared-model[1M]",
+      defaultSonnetModel: "",
+      defaultSonnetModelName: "",
+      onModelChange,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "一键设置",
+      }),
+    );
+
+    expect(onModelChange).toHaveBeenCalledWith(
+      "CLAUDE_CODE_SUBAGENT_MODEL",
+      "shared-model[1M]",
+    );
   });
 });
