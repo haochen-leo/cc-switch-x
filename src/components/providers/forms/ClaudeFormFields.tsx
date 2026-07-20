@@ -143,6 +143,7 @@ interface ClaudeFormFieldsProps {
   defaultOpusModelName: string;
   defaultFableModel: string;
   defaultFableModelName: string;
+  subagentModel: string;
   onModelChange: (field: ClaudeModelEnvField, value: string) => void;
 
   // Speed Test Endpoints
@@ -232,6 +233,7 @@ export function ClaudeFormFields({
   defaultOpusModelName,
   defaultFableModel,
   defaultFableModelName,
+  subagentModel,
   onModelChange,
   speedTestEndpoints,
   apiFormat,
@@ -274,6 +276,7 @@ export function ClaudeFormFields({
     defaultSonnetModel ||
     defaultOpusModel ||
     defaultFableModel ||
+    subagentModel ||
     apiFormat !== "anthropic" ||
     apiKeyField !== "ANTHROPIC_AUTH_TOKEN" ||
     (claudeModelRoutingEnabled && hasAnyRoutingValue) ||
@@ -281,8 +284,9 @@ export function ClaudeFormFields({
     hasRequestOverrides
   );
   const [advancedExpanded, setAdvancedExpanded] = useState(hasAnyAdvancedValue);
-  const [proxyOverridesExpanded, setProxyOverridesExpanded] =
-    useState(hasProxyOverrideValue);
+  const [proxyOverridesExpanded, setProxyOverridesExpanded] = useState(
+    hasProxyOverrideValue,
+  );
 
   // 预设填充高级值后自动展开（仅从折叠→展开，不会自动折叠）
   useEffect(() => {
@@ -306,6 +310,7 @@ export function ClaudeFormFields({
   const [codexOauthModels, setCodexOauthModels] = useState<FetchedModel[]>([]);
   const [codexOauthModelsLoading, setCodexOauthModelsLoading] = useState(false);
   const codexOauthModelsRequestRef = useRef(0);
+  const fallbackUsesOneM = hasClaudeOneMMarker(claudeModel);
 
   // 通用模型获取（非 Copilot 供应商）
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
@@ -590,12 +595,12 @@ export function ClaudeFormFields({
   };
 
   type ModelRoleRow = {
-    role: "sonnet" | "opus" | "fable" | "haiku";
+    role: "sonnet" | "opus" | "fable" | "haiku" | "subagent";
     label: string;
     model: string;
-    displayName: string;
+    displayName?: string;
     modelField: ClaudeModelEnvField;
-    displayNameField: ClaudeModelEnvField;
+    displayNameField?: ClaudeModelEnvField;
     inputId: string;
     supportsOneM: boolean;
   };
@@ -641,6 +646,16 @@ export function ClaudeFormFields({
       inputId: "claudeDefaultHaikuModel",
       supportsOneM: false,
     },
+    {
+      role: "subagent",
+      label: t("providerForm.modelRoleSubagent", {
+        defaultValue: "Subagent",
+      }),
+      model: subagentModel,
+      modelField: "CLAUDE_CODE_SUBAGENT_MODEL",
+      inputId: "claudeCodeSubagentModel",
+      supportsOneM: true,
+    },
   ];
 
   const handleRoleModelChange = (row: ModelRoleRow, value: string) => {
@@ -649,10 +664,10 @@ export function ClaudeFormFields({
       ? value
       : stripClaudeOneMMarker(value);
     const nextModelBase = stripClaudeOneMMarker(normalizedValue).trim();
-    const displayName = row.displayName.trim();
+    const displayName = row.displayName?.trim() ?? "";
     const shouldSyncDisplayName = !displayName || displayName === oldModelBase;
     onModelChange(row.modelField, normalizedValue);
-    if (shouldSyncDisplayName) {
+    if (row.displayNameField && shouldSyncDisplayName) {
       onModelChange(row.displayNameField, nextModelBase);
     }
   };
@@ -669,6 +684,10 @@ export function ClaudeFormFields({
   const defaultRoutingProvider = claudeModelRouting.defaultProviderId
     ? routingProviderById[claudeModelRouting.defaultProviderId]
     : undefined;
+  const effectiveFallbackModel = defaultRoutingProvider
+    ? defaultRoutingProvider.slots.defaultModel
+    : claudeModel;
+  const effectiveFallbackUsesOneM = hasClaudeOneMMarker(effectiveFallbackModel);
   const haikuRoutingProvider = claudeModelRouting.haikuProviderId
     ? routingProviderById[claudeModelRouting.haikuProviderId]
     : undefined;
@@ -916,17 +935,20 @@ export function ClaudeFormFields({
                         defaultSonnetModel ||
                         defaultOpusModel ||
                         defaultFableModel ||
-                        defaultHaikuModel;
+                        defaultHaikuModel ||
+                        subagentModel;
                       if (value) {
                         for (const row of modelRoleRows) {
                           const roleValue = row.supportsOneM
                             ? value
                             : stripClaudeOneMMarker(value);
                           onModelChange(row.modelField, roleValue);
-                          onModelChange(
-                            row.displayNameField,
-                            stripClaudeOneMMarker(roleValue),
-                          );
+                          if (row.displayNameField) {
+                            onModelChange(
+                              row.displayNameField,
+                              stripClaudeOneMMarker(roleValue),
+                            );
+                          }
                         }
                         toast.success(
                           t("providerForm.quickSetSuccess", {
@@ -940,7 +962,8 @@ export function ClaudeFormFields({
                       !defaultHaikuModel &&
                       !defaultSonnetModel &&
                       !defaultOpusModel &&
-                      !defaultFableModel
+                      !defaultFableModel &&
+                      !subagentModel
                     }
                     className="h-7 gap-1"
                   >
@@ -1002,19 +1025,19 @@ export function ClaudeFormFields({
                 const routedProvider = getRoleRoutingProvider(row.role);
                 const routedModel =
                   row.role === "haiku"
-                    ? routedProvider?.slots.haikuModel ?? ""
+                    ? (routedProvider?.slots.haikuModel ?? "")
                     : row.role === "sonnet"
-                      ? routedProvider?.slots.sonnetModel ?? ""
+                      ? (routedProvider?.slots.sonnetModel ?? "")
                       : row.role === "opus"
-                        ? routedProvider?.slots.opusModel ?? ""
+                        ? (routedProvider?.slots.opusModel ?? "")
                         : "";
                 const routedDisplayName =
                   row.role === "haiku"
-                    ? routedProvider?.slots.haikuDisplayName ?? ""
+                    ? (routedProvider?.slots.haikuDisplayName ?? "")
                     : row.role === "sonnet"
-                      ? routedProvider?.slots.sonnetDisplayName ?? ""
+                      ? (routedProvider?.slots.sonnetDisplayName ?? "")
                       : row.role === "opus"
-                        ? routedProvider?.slots.opusDisplayName ?? ""
+                        ? (routedProvider?.slots.opusDisplayName ?? "")
                         : "";
                 const effectiveModelBase = routedProvider
                   ? stripClaudeOneMMarker(routedModel)
@@ -1032,25 +1055,38 @@ export function ClaudeFormFields({
                       <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm font-medium text-muted-foreground">
                         {row.label}
                       </div>
-                      <Input
-                        value={effectiveDisplayName}
-                        onChange={(event) =>
-                          onModelChange(row.displayNameField, event.target.value)
-                        }
-                        placeholder={
-                          effectiveModelBase ||
-                          t("providerForm.modelDisplayNamePlaceholder", {
-                            defaultValue: "例如 DeepSeek V4 Pro",
-                          })
-                        }
-                        autoComplete="off"
-                        disabled={Boolean(routedProvider)}
-                      />
+                      {row.displayNameField ? (
+                        <Input
+                          value={effectiveDisplayName ?? ""}
+                          onChange={(event) =>
+                            onModelChange(
+                              row.displayNameField!,
+                              event.target.value,
+                            )
+                          }
+                          placeholder={
+                            effectiveModelBase ||
+                            t("providerForm.modelDisplayNamePlaceholder", {
+                              defaultValue: "例如 DeepSeek V4 Pro",
+                            })
+                          }
+                          autoComplete="off"
+                          disabled={Boolean(routedProvider)}
+                        />
+                      ) : (
+                        <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm text-muted-foreground">
+                          {t("providerForm.modelNoDisplayName", {
+                            defaultValue: "不显示在 /model 菜单",
+                          })}
+                        </div>
+                      )}
                       {renderModelInput(
                         row.inputId,
                         effectiveModelBase,
                         row.modelField,
-                        t("providerForm.modelPlaceholder", { defaultValue: "" }),
+                        t("providerForm.modelPlaceholder", {
+                          defaultValue: "",
+                        }),
                         (value) =>
                           handleRoleModelChange(
                             row,
@@ -1103,14 +1139,37 @@ export function ClaudeFormFields({
                   defaultValue: "默认兜底模型",
                 })}
               </FormLabel>
-              {renderModelInput(
-                "claudeModel",
-                defaultRoutingProvider?.slots.defaultModel || claudeModel,
-                "ANTHROPIC_MODEL",
-                t("providerForm.modelPlaceholder", { defaultValue: "" }),
-                undefined,
-                Boolean(defaultRoutingProvider),
-              )}
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_minmax(0,104px)]">
+                {renderModelInput(
+                  "claudeModel",
+                  stripClaudeOneMMarker(effectiveFallbackModel),
+                  "ANTHROPIC_MODEL",
+                  t("providerForm.modelPlaceholder", { defaultValue: "" }),
+                  (value) =>
+                    onModelChange(
+                      "ANTHROPIC_MODEL",
+                      setClaudeOneMMarker(value, fallbackUsesOneM),
+                    ),
+                  Boolean(defaultRoutingProvider),
+                )}
+                <label className="flex h-9 items-center gap-2 text-sm text-muted-foreground">
+                  <Checkbox
+                    checked={effectiveFallbackUsesOneM}
+                    onCheckedChange={(checked) => {
+                      const base = stripClaudeOneMMarker(claudeModel).trim();
+                      if (!base) return;
+                      onModelChange(
+                        "ANTHROPIC_MODEL",
+                        setClaudeOneMMarker(base, checked === true),
+                      );
+                    }}
+                    disabled={Boolean(defaultRoutingProvider)}
+                  />
+                  {t("providerForm.modelOneMLabel", {
+                    defaultValue: "1M",
+                  })}
+                </label>
+              </div>
               <p className="text-xs text-muted-foreground">
                 {defaultRoutingProvider
                   ? defaultRoutingProvider.slots.defaultModel
@@ -1184,7 +1243,9 @@ export function ClaudeFormFields({
                         })}
                       </FormLabel>
                       <Select
-                        value={claudeModelRouting.defaultProviderId || inheritValue}
+                        value={
+                          claudeModelRouting.defaultProviderId || inheritValue
+                        }
                         onValueChange={(value) =>
                           onClaudeModelRoutingChange(
                             "defaultProviderId",
@@ -1192,7 +1253,10 @@ export function ClaudeFormFields({
                           )
                         }
                       >
-                        <SelectTrigger id="routingDefaultProvider" className="w-full">
+                        <SelectTrigger
+                          id="routingDefaultProvider"
+                          className="w-full"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1217,7 +1281,9 @@ export function ClaudeFormFields({
                         })}
                       </FormLabel>
                       <Select
-                        value={claudeModelRouting.haikuProviderId || inheritValue}
+                        value={
+                          claudeModelRouting.haikuProviderId || inheritValue
+                        }
                         onValueChange={(value) =>
                           onClaudeModelRoutingChange(
                             "haikuProviderId",
@@ -1225,7 +1291,10 @@ export function ClaudeFormFields({
                           )
                         }
                       >
-                        <SelectTrigger id="routingHaikuProvider" className="w-full">
+                        <SelectTrigger
+                          id="routingHaikuProvider"
+                          className="w-full"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1250,7 +1319,9 @@ export function ClaudeFormFields({
                         })}
                       </FormLabel>
                       <Select
-                        value={claudeModelRouting.sonnetProviderId || inheritValue}
+                        value={
+                          claudeModelRouting.sonnetProviderId || inheritValue
+                        }
                         onValueChange={(value) =>
                           onClaudeModelRoutingChange(
                             "sonnetProviderId",
@@ -1258,7 +1329,10 @@ export function ClaudeFormFields({
                           )
                         }
                       >
-                        <SelectTrigger id="routingSonnetProvider" className="w-full">
+                        <SelectTrigger
+                          id="routingSonnetProvider"
+                          className="w-full"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1283,7 +1357,9 @@ export function ClaudeFormFields({
                         })}
                       </FormLabel>
                       <Select
-                        value={claudeModelRouting.opusProviderId || inheritValue}
+                        value={
+                          claudeModelRouting.opusProviderId || inheritValue
+                        }
                         onValueChange={(value) =>
                           onClaudeModelRoutingChange(
                             "opusProviderId",
@@ -1291,7 +1367,10 @@ export function ClaudeFormFields({
                           )
                         }
                       >
-                        <SelectTrigger id="routingOpusProvider" className="w-full">
+                        <SelectTrigger
+                          id="routingOpusProvider"
+                          className="w-full"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1319,7 +1398,8 @@ export function ClaudeFormFields({
               ) : (
                 <p className="text-xs text-muted-foreground">
                   {t("providerForm.claudeRoutingDisabledHint", {
-                    defaultValue: "已关闭模型路由供应商；请求将跟随当前供应商与故障转移链。",
+                    defaultValue:
+                      "已关闭模型路由供应商；请求将跟随当前供应商与故障转移链。",
                   })}
                 </p>
               )}

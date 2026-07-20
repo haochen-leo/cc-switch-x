@@ -36,8 +36,14 @@ pub fn rectify_anthropic_tool_use_ids(body: &mut Value) -> ToolUseIdRectifyResul
             if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
                 continue;
             }
-            let Some(obj) = block.as_object_mut() else { continue };
-            let old_id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let Some(obj) = block.as_object_mut() else {
+                continue;
+            };
+            let old_id = obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             let new_id = get_or_create_mapping(&old_id, &mut id_map, &mut used, &mut counter);
             if new_id != old_id {
@@ -57,8 +63,14 @@ pub fn rectify_anthropic_tool_use_ids(body: &mut Value) -> ToolUseIdRectifyResul
             if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
                 continue;
             }
-            let Some(obj) = block.as_object_mut() else { continue };
-            let old_id = obj.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let Some(obj) = block.as_object_mut() else {
+                continue;
+            };
+            let old_id = obj
+                .get("tool_use_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             let new_id = get_or_create_mapping(&old_id, &mut id_map, &mut used, &mut counter);
             if new_id != old_id {
@@ -94,14 +106,22 @@ fn get_or_create_mapping(
 fn is_valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_ID_LEN
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn make_unique_id(original: &str, used: &mut HashSet<String>, counter: &mut usize) -> String {
     // 清理非法字符
     let mut base: String = original
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if base.is_empty() {
         base = "toolu".to_string();
@@ -154,7 +174,9 @@ mod tests {
         assert_eq!(result.rewritten_tool_result_ids, 1);
 
         let new_id = body["messages"][0]["content"][0]["id"].as_str().unwrap();
-        let ref_id = body["messages"][1]["content"][0]["tool_use_id"].as_str().unwrap();
+        let ref_id = body["messages"][1]["content"][0]["tool_use_id"]
+            .as_str()
+            .unwrap();
         assert_eq!(new_id, ref_id);
         assert!(is_valid_id(new_id));
     }
