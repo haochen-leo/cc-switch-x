@@ -1363,16 +1363,11 @@ pub fn read_codex_live_settings() -> Result<Value, AppError> {
 /// the shared custom id: `requires_openai_auth` routes auth to the ChatGPT
 /// login in `auth.json` (base_url then defaults to the official Codex
 /// backend), `name = "OpenAI"` keeps Codex's `is_openai()` feature gates
-/// (web search, remote compaction), and `supports_websockets` restores the
-/// built-in default that custom entries otherwise lose.
-fn codex_official_provider_table(
-    base_url: Option<&str>,
-    supports_websockets: bool,
-) -> toml_edit::Table {
+/// (web search, remote compaction).
+fn codex_official_provider_table(base_url: Option<&str>) -> toml_edit::Table {
     let mut table = toml_edit::Table::new();
     table["name"] = toml_edit::value("OpenAI");
     table["requires_openai_auth"] = toml_edit::value(true);
-    table["supports_websockets"] = toml_edit::value(supports_websockets);
     table["wire_api"] = toml_edit::value("responses");
     if let Some(base_url) = base_url {
         table["base_url"] = toml_edit::value(base_url.trim_end_matches('/'));
@@ -1381,7 +1376,7 @@ fn codex_official_provider_table(
 }
 
 fn codex_unified_official_provider_table() -> toml_edit::Table {
-    codex_official_provider_table(None, true)
+    codex_official_provider_table(None)
 }
 
 fn remove_codex_proxy_placeholders_from_providers(providers: &mut toml_edit::Table) {
@@ -1443,7 +1438,8 @@ pub fn apply_codex_official_proxy_route(
     remove_codex_proxy_placeholders_from_providers(&mut providers);
 
     // The local proxy currently exposes HTTP/SSE, not Codex websocket routes.
-    let table = codex_official_provider_table(Some(proxy_base_url), false);
+    let mut table = codex_official_provider_table(Some(proxy_base_url));
+    table["supports_websockets"] = toml_edit::value(false);
 
     providers.insert(
         CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID,
@@ -1499,14 +1495,10 @@ pub fn remove_codex_official_proxy_route(config_text: &str) -> Result<String, Ap
 }
 
 fn table_matches_codex_unified_official_provider(table: &toml_edit::Table) -> bool {
-    table.len() == 4
+    table.len() == 3
         && table.get("name").and_then(|item| item.as_str()) == Some("OpenAI")
         && table
             .get("requires_openai_auth")
-            .and_then(|item| item.as_bool())
-            == Some(true)
-        && table
-            .get("supports_websockets")
             .and_then(|item| item.as_bool())
             == Some(true)
         && table.get("wire_api").and_then(|item| item.as_str()) == Some("responses")
@@ -1955,7 +1947,7 @@ mod tests {
         );
         assert_eq!(
             custom.get("supports_websockets").and_then(|v| v.as_bool()),
-            Some(true)
+            None
         );
         assert_eq!(
             custom.get("wire_api").and_then(|v| v.as_str()),
