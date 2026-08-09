@@ -2729,10 +2729,15 @@ impl ProxyService {
         toml_str: &str,
         proxy_url: &str,
         provider: Option<&Provider>,
+        unify_session_history: bool,
     ) -> Result<String, String> {
         if provider.is_some_and(crate::proxy::providers::is_codex_official_provider) {
-            return crate::codex_config::apply_codex_official_proxy_route(toml_str, proxy_url)
-                .map_err(|e| format!("生成 Codex 官方接管配置失败: {e}"));
+            return crate::codex_config::apply_codex_official_proxy_route(
+                toml_str,
+                proxy_url,
+                unify_session_history,
+            )
+            .map_err(|e| format!("生成 Codex 官方接管配置失败: {e}"));
         }
 
         let updated = crate::codex_config::update_codex_toml_field(toml_str, "base_url", proxy_url)
@@ -2782,6 +2787,7 @@ impl ProxyService {
             &config_text,
             proxy_base_url,
             Some(provider),
+            crate::settings::unify_codex_session_history(),
         )?;
         settings["config"] = json!(projected);
         Self::attach_codex_model_catalog_from_provider(settings, Some(provider));
@@ -4067,10 +4073,11 @@ wire_api = "responses"
     async fn codex_takeover_hot_switches_between_builtin_official_and_third_party() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
-        // Exercise the default setting: takeover itself must now preserve native
-        // auth regardless of the legacy compatibility toggle.
-        crate::settings::update_settings(crate::settings::AppSettings::default())
-            .expect("reset settings");
+        crate::settings::update_settings(crate::settings::AppSettings {
+            unify_codex_session_history: true,
+            ..Default::default()
+        })
+        .expect("enable unified Codex history");
 
         let db = Arc::new(Database::memory().expect("init db"));
         use_ephemeral_proxy_port(&db).await;
@@ -4100,9 +4107,9 @@ wire_api = "responses"
             "RightCode".to_string(),
             json!({
                 "auth": { "OPENAI_API_KEY": "rightcode-key" },
-                "config": r#"model_provider = "rightcode"
+                "config": r#"model_provider = "custom"
 
-[model_providers.rightcode]
+[model_providers.custom]
 name = "RightCode"
 base_url = "https://rightcode.example/v1"
 wire_api = "responses"
@@ -4127,9 +4134,20 @@ wire_api = "responses"
             crate::config::read_json_file(&crate::codex_config::get_codex_auth_path())
                 .expect("read live auth")
         };
+        let model_provider = |config: &str| {
+            toml::from_str::<toml::Value>(config)
+                .expect("parse live config")
+                .get("model_provider")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        };
         assert_eq!(read_auth(), oauth_auth);
         let official_live = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
             .expect("read official takeover config");
+        assert_eq!(
+            model_provider(&official_live).as_deref(),
+            Some(crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+        );
         assert!(crate::codex_config::codex_config_has_official_proxy_route(
             &official_live
         ));
@@ -4148,6 +4166,10 @@ wire_api = "responses"
         let third_party_live =
             std::fs::read_to_string(crate::codex_config::get_codex_config_path())
                 .expect("read third-party takeover config");
+        assert_eq!(
+            model_provider(&third_party_live).as_deref(),
+            Some(crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+        );
         assert!(third_party_live.contains(PROXY_TOKEN_PLACEHOLDER));
         assert!(!crate::codex_config::codex_config_has_official_proxy_route(
             &third_party_live
@@ -4164,6 +4186,10 @@ wire_api = "responses"
         );
         let official_live = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
             .expect("read restored official takeover config");
+        assert_eq!(
+            model_provider(&official_live).as_deref(),
+            Some(crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+        );
         assert!(crate::codex_config::codex_config_has_official_proxy_route(
             &official_live
         ));
@@ -4174,6 +4200,15 @@ wire_api = "responses"
             .await
             .expect("disable takeover");
         assert_eq!(read_auth(), oauth_auth);
+        let restored_live = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
+            .expect("read restored direct config");
+        assert_eq!(
+            model_provider(&restored_live).as_deref(),
+            Some(crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+        );
+
+        crate::settings::update_settings(crate::settings::AppSettings::default())
+            .expect("reset settings");
     }
 
     #[test]
@@ -5022,7 +5057,7 @@ wire_api = "chat"
 
         let proxy_url = "http://127.0.0.1:5000/v1";
         let output =
-            ProxyService::apply_codex_proxy_toml_config_for_provider(input, proxy_url, None)
+            ProxyService::apply_codex_proxy_toml_config_for_provider(input, proxy_url, None, false)
                 .expect("apply proxy config");
         let parsed: toml::Value =
             toml::from_str(&output).expect("updated config should be valid TOML");
@@ -5057,6 +5092,7 @@ wire_api = "chat"
             "experimental_bearer_token = \"PROXY_MANAGED\"\n",
             proxy_url,
             Some(&provider),
+            false,
         )
         .expect("apply official proxy config");
         let parsed: toml::Value = toml::from_str(&output).expect("valid official route");
@@ -5067,6 +5103,36 @@ wire_api = "chat"
         assert_eq!(route["base_url"].as_str(), Some(proxy_url));
         assert_eq!(route["requires_openai_auth"].as_bool(), Some(true));
         assert!(parsed.get("experimental_bearer_token").is_none());
+    }
+
+    #[test]
+    fn apply_codex_proxy_toml_config_unifies_builtin_official_history() {
+        let mut provider = Provider::with_id(
+            "codex-official".to_string(),
+            "OpenAI Official".to_string(),
+            json!({ "auth": {}, "config": "" }),
+            None,
+        );
+        provider.category = Some("official".to_string());
+        let proxy_url = "http://127.0.0.1:5000/v1";
+
+        let output = ProxyService::apply_codex_proxy_toml_config_for_provider(
+            "model_provider = \"openai\"\n",
+            proxy_url,
+            Some(&provider),
+            true,
+        )
+        .expect("apply unified official proxy config");
+        let parsed: toml::Value = toml::from_str(&output).expect("valid unified official route");
+        let route_id = crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID;
+        let route = &parsed["model_providers"][route_id];
+
+        assert_eq!(parsed["model_provider"].as_str(), Some(route_id));
+        assert_eq!(route["base_url"].as_str(), Some(proxy_url));
+        assert_eq!(route["requires_openai_auth"].as_bool(), Some(true));
+        assert!(parsed["model_providers"]
+            .get(crate::codex_config::CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
+            .is_none());
     }
 
     #[test]
@@ -5083,6 +5149,7 @@ wire_api = "chat"
             "model_providers = 3\n",
             "http://127.0.0.1:5000/v1",
             Some(&provider),
+            false,
         );
         assert!(result.is_err());
     }
@@ -5116,6 +5183,7 @@ wire_api = "responses"
             input,
             proxy_url,
             Some(&provider),
+            false,
         )
         .expect("apply chat proxy config");
         let parsed: toml::Value =
@@ -5163,6 +5231,7 @@ wire_api = "responses"
             input,
             "http://127.0.0.1:5000/v1",
             Some(&provider),
+            false,
         )
         .expect("apply responses proxy config");
         let parsed: toml::Value =
@@ -5209,6 +5278,7 @@ wire_api = "responses"
             input,
             "http://127.0.0.1:5000/v1",
             Some(&provider),
+            false,
         )
         .expect("restore responses model");
         let parsed: toml::Value =
