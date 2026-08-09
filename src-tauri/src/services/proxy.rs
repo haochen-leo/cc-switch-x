@@ -2726,7 +2726,8 @@ impl ProxyService {
         &self,
     ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
         use crate::services::codex_aggregation::{
-            aggregate_provider_stats, CodexAggregationStatus, CODEX_AGGREGATE_PROVIDER_ID,
+            aggregate_provider_stats, codex_aggregation_source_providers, CodexAggregationStatus,
+            CODEX_AGGREGATE_PROVIDER_ID,
         };
 
         let current_provider =
@@ -2746,6 +2747,12 @@ impl ProxyService {
             .as_ref()
             .map(aggregate_provider_stats)
             .unwrap_or((0, 0));
+        let source_providers = codex_aggregation_source_providers(self.db.as_ref())?;
+        let selected_provider_ids = source_providers
+            .iter()
+            .filter(|source| source.selected)
+            .map(|source| source.provider_id.clone())
+            .collect();
 
         Ok(CodexAggregationStatus {
             enabled: takeover_enabled
@@ -2753,8 +2760,106 @@ impl ProxyService {
             provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
             model_count,
             source_provider_count,
+            selected_provider_ids,
+            source_providers,
             warnings: Vec::new(),
         })
+    }
+
+    /// 源供应商配置变化后，重建已启用的 Codex 聚合目录并刷新接管中的 Live 配置。
+    pub async fn refresh_codex_aggregation_if_enabled(
+        &self,
+    ) -> Result<Option<crate::services::codex_aggregation::CodexAggregationStatus>, String> {
+        use crate::services::codex_aggregation::{
+            build_codex_aggregate_provider, CodexAggregationStatus, CODEX_AGGREGATE_PROVIDER_ID,
+        };
+
+        if !self.get_codex_aggregation_status().await?.enabled {
+            return Ok(None);
+        }
+
+        let app_type = AppType::Codex;
+        let app_type_str = app_type.as_str();
+        let build = build_codex_aggregate_provider(self.db.as_ref()).await?;
+        let previous_provider = self
+            .db
+            .get_provider_by_id(CODEX_AGGREGATE_PROVIDER_ID, app_type_str)
+            .map_err(|error| format!("读取原 Codex 聚合供应商失败: {error}"))?;
+
+        self.db
+            .save_provider(app_type_str, &build.provider)
+            .map_err(|error| format!("保存 Codex 聚合供应商失败: {error}"))?;
+
+        if let Err(error) = self
+            .hot_switch_provider(app_type_str, CODEX_AGGREGATE_PROVIDER_ID)
+            .await
+        {
+            if let Some(previous_provider) = previous_provider {
+                if let Err(restore_error) = self.db.save_provider(app_type_str, &previous_provider)
+                {
+                    log::error!("恢复原 Codex 聚合供应商失败: {restore_error}");
+                }
+            } else if let Err(delete_error) = self
+                .db
+                .delete_provider(app_type_str, CODEX_AGGREGATE_PROVIDER_ID)
+            {
+                log::error!("清理刷新失败的 Codex 聚合供应商失败: {delete_error}");
+            }
+            return Err(format!("刷新 Codex 聚合供应商失败: {error}"));
+        }
+
+        Ok(Some(CodexAggregationStatus {
+            enabled: true,
+            provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
+            model_count: build.model_count,
+            source_provider_count: build.source_provider_count,
+            selected_provider_ids: build.selected_provider_ids,
+            source_providers: build.source_providers,
+            warnings: build.warnings,
+        }))
+    }
+
+    /// 保存 Codex 多模型来源供应商。默认全选时写空值，以便后续新增供应商自动加入。
+    pub async fn set_codex_aggregation_sources(
+        &self,
+        source_provider_ids: Vec<String>,
+    ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+        use crate::services::codex_aggregation::{
+            normalize_codex_aggregation_source_ids, serialize_codex_aggregation_source_ids,
+            CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING,
+        };
+
+        let selected =
+            normalize_codex_aggregation_source_ids(self.db.as_ref(), &source_provider_ids)?;
+        let serialized =
+            serialize_codex_aggregation_source_ids(self.db.as_ref(), selected.as_slice())?;
+        let previous_setting = self
+            .db
+            .get_setting(CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING)
+            .map_err(|error| format!("读取原 Codex 聚合来源设置失败: {error}"))?;
+        let was_enabled = self.get_codex_aggregation_status().await?.enabled;
+
+        self.db
+            .set_setting(CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING, &serialized)
+            .map_err(|error| format!("保存 Codex 聚合来源设置失败: {error}"))?;
+
+        if was_enabled {
+            match self.refresh_codex_aggregation_if_enabled().await {
+                Ok(Some(status)) => return Ok(status),
+                Ok(None) => {}
+                Err(error) => {
+                    if let Err(restore_error) = self.db.set_setting(
+                        CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING,
+                        previous_setting.as_deref().unwrap_or(""),
+                    ) {
+                        log::error!("恢复原 Codex 聚合来源设置失败: {restore_error}");
+                    }
+                    return Err(error);
+                }
+            }
+        }
+
+        self.get_codex_aggregation_status().await
     }
 
     /// 开启或关闭 Codex 多供应商聚合。
@@ -2841,6 +2946,8 @@ impl ProxyService {
                 provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
                 model_count: build.model_count,
                 source_provider_count: build.source_provider_count,
+                selected_provider_ids: build.selected_provider_ids,
+                source_providers: build.source_providers,
                 warnings: build.warnings,
             });
         }
@@ -2901,7 +3008,7 @@ impl ProxyService {
             .db
             .set_setting(CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING, "false");
 
-        Ok(CodexAggregationStatus::disabled())
+        self.get_codex_aggregation_status().await
     }
 
     // ==================== Live 配置读写辅助方法 ====================
@@ -2919,7 +3026,16 @@ impl ProxyService {
         provider: Option<&Provider>,
         unify_session_history: bool,
     ) -> Result<String, String> {
-        if provider.is_some_and(Self::codex_provider_uses_native_auth_facade) {
+        if provider.is_some_and(Provider::is_codex_aggregate) {
+            return crate::codex_config::apply_codex_aggregate_proxy_route(
+                toml_str,
+                proxy_url,
+                unify_session_history,
+            )
+            .map_err(|e| format!("生成 Codex 聚合接管配置失败: {e}"));
+        }
+
+        if provider.is_some_and(crate::proxy::providers::is_codex_official_provider) {
             return crate::codex_config::apply_codex_official_proxy_route(
                 toml_str,
                 proxy_url,
@@ -5321,6 +5437,52 @@ wire_api = "chat"
         assert!(parsed["model_providers"]
             .get(crate::codex_config::CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
             .is_none());
+    }
+
+    #[test]
+    fn apply_codex_proxy_toml_config_routes_aggregate_with_local_compaction_identity() {
+        let mut provider = Provider::with_id(
+            crate::services::codex_aggregation::CODEX_AGGREGATE_PROVIDER_ID.to_string(),
+            "Codex Multi Provider".to_string(),
+            json!({ "auth": {}, "config": "" }),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        let proxy_url = "http://127.0.0.1:5000/v1";
+
+        let output = ProxyService::apply_codex_proxy_toml_config_for_provider(
+            "experimental_bearer_token = \"PROXY_MANAGED\"\n",
+            proxy_url,
+            Some(&provider),
+            true,
+        )
+        .expect("apply aggregate proxy config");
+        let parsed: toml::Value = toml::from_str(&output).expect("valid aggregate route");
+        let route =
+            &parsed["model_providers"][crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID];
+
+        assert_eq!(
+            parsed["model_provider"].as_str(),
+            Some(crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+        );
+        assert_eq!(route["base_url"].as_str(), Some(proxy_url));
+        assert_eq!(
+            route["name"].as_str(),
+            Some(crate::codex_config::CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME)
+        );
+        assert_eq!(route["requires_openai_auth"].as_bool(), Some(true));
+        assert_eq!(
+            route["supports_standalone_web_search"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(route["supports_websockets"].as_bool(), Some(false));
+        assert!(parsed.get("experimental_bearer_token").is_none());
+        assert!(crate::codex_config::codex_config_has_official_proxy_route(
+            &output
+        ));
     }
 
     #[test]

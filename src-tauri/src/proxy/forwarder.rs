@@ -2390,8 +2390,31 @@ impl RequestForwarder {
 
         // 二级路由现在只负责选目标供应商；真正发往上游的模型槽位
         // 由目标供应商自己决定，避免出现“走 B 但实际仍吃 A 槽位”的错位。
-        let (mapped_body, original_model, mapped_model) =
+        let (mut mapped_body, original_model, mapped_model) =
             super::model_mapper::apply_model_mapping(body.clone(), provider);
+
+        if matches!(app_type, AppType::Codex) {
+            if let Some(upstream_model) = provider
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+            {
+                let aggregate_model = mapped_body
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                log::debug!(
+                    "[codex] 聚合路由命中 {}，还原真实模型: {} -> {}",
+                    provider.name,
+                    aggregate_model,
+                    upstream_model
+                );
+                mapped_body["model"] = Value::String(upstream_model.to_string());
+                return Ok(mapped_body);
+            }
+        }
 
         if is_routed_target {
             if let (Some(original), Some(mapped)) =
@@ -3783,6 +3806,31 @@ mod tests {
             .expect("mapped body");
 
         assert_eq!(mapped["model"], "b-sonnet-model");
+    }
+
+    #[test]
+    fn codex_aggregate_route_restores_upstream_model() {
+        let fwd = test_forwarder(Duration::from_secs(1), Duration::from_secs(1));
+        let provider = test_provider_with_models(
+            "provider-a",
+            "Provider A",
+            json!({
+                "codexAggregateUpstreamModel": "gpt-5.6-sol",
+                "modelCatalog": {
+                    "models": [{ "model": "gpt-5.6-sol" }]
+                }
+            }),
+        );
+        let body = json!({
+            "model": "provider-a/gpt-5.6-sol",
+            "input": []
+        });
+
+        let mapped = fwd
+            .map_request_body_for_provider(&AppType::Codex, &provider, &body, true)
+            .expect("mapped body");
+
+        assert_eq!(mapped["model"], "gpt-5.6-sol");
     }
 
     #[test]

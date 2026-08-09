@@ -262,6 +262,136 @@ mod tests {
         })
     }
 
+    #[test]
+    fn aggregate_provider_update_preserves_generated_catalog_and_routes() {
+        let mut existing = Provider::with_id(
+            crate::services::codex_aggregation::CODEX_AGGREGATE_PROVIDER_ID.to_string(),
+            "Codex Multi Provider".to_string(),
+            json!({
+                "auth": {},
+                "config": "model = \"old\"\n",
+                "modelCatalog": {
+                    "models": [{ "model": "Provider A/model-a" }]
+                },
+                "codexAggregateRoutes": {
+                    "Provider A/model-a": {
+                        "providerId": "provider-a",
+                        "model": "model-a"
+                    }
+                }
+            }),
+            None,
+        );
+        existing.meta = Some(crate::provider::ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        let mut edited = existing.clone();
+        edited.settings_config = json!({
+            "auth": {},
+            "config": "model = \"new\"\n",
+            "modelCatalog": {
+                "models": [{ "model": "manually-edited" }]
+            }
+        });
+
+        ProviderService::preserve_codex_aggregate_managed_catalog(&existing, &mut edited);
+
+        assert_eq!(
+            edited.settings_config["modelCatalog"],
+            existing.settings_config["modelCatalog"]
+        );
+        assert_eq!(
+            edited.settings_config["codexAggregateRoutes"],
+            existing.settings_config["codexAggregateRoutes"]
+        );
+        assert_eq!(edited.settings_config["config"], json!("model = \"new\"\n"));
+    }
+
+    #[test]
+    fn updating_codex_source_refreshes_enabled_aggregate_catalog() {
+        with_test_home(|state, _home| {
+            let db = state.db.as_ref();
+            let mut official = Provider::with_id(
+                crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string(),
+                "OpenAI Official".to_string(),
+                json!({ "auth": {}, "config": "" }),
+                None,
+            );
+            official.category = Some("official".to_string());
+            let source = Provider::with_id(
+                "provider-a".to_string(),
+                "Provider A".to_string(),
+                json!({
+                    "auth": { "OPENAI_API_KEY": "key-a" },
+                    "config": "",
+                    "modelCatalog": {
+                        "models": [{ "model": "model-old", "displayName": "Old" }]
+                    }
+                }),
+                None,
+            );
+            db.save_provider(AppType::Codex.as_str(), &official)
+                .expect("save official");
+            db.save_provider(AppType::Codex.as_str(), &source)
+                .expect("save source");
+            db.set_setting(
+                crate::services::codex_aggregation::CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING,
+                r#"["provider-a"]"#,
+            )
+            .expect("save source selection");
+
+            let aggregate = tauri::async_runtime::block_on(
+                crate::services::codex_aggregation::build_codex_aggregate_provider(db),
+            )
+            .expect("build aggregate")
+            .provider;
+            db.save_provider(AppType::Codex.as_str(), &aggregate)
+                .expect("save aggregate");
+            db.set_current_provider(
+                AppType::Codex.as_str(),
+                crate::services::codex_aggregation::CODEX_AGGREGATE_PROVIDER_ID,
+            )
+            .expect("set db current");
+            crate::settings::set_current_provider(
+                &AppType::Codex,
+                Some(crate::services::codex_aggregation::CODEX_AGGREGATE_PROVIDER_ID),
+            )
+            .expect("set local current");
+            let mut proxy_config =
+                tauri::async_runtime::block_on(db.get_proxy_config_for_app("codex"))
+                    .expect("read proxy config");
+            proxy_config.enabled = true;
+            tauri::async_runtime::block_on(db.update_proxy_config_for_app(proxy_config))
+                .expect("enable takeover flag");
+
+            let mut updated_source = source;
+            updated_source.settings_config["modelCatalog"] = json!({
+                "models": [{ "model": "model-new", "displayName": "New" }]
+            });
+            ProviderService::update(state, AppType::Codex, None, updated_source)
+                .expect("update source");
+
+            let refreshed = db
+                .get_provider_by_id(
+                    crate::services::codex_aggregation::CODEX_AGGREGATE_PROVIDER_ID,
+                    AppType::Codex.as_str(),
+                )
+                .expect("read aggregate")
+                .expect("aggregate exists");
+            let models = refreshed
+                .settings_config
+                .pointer("/modelCatalog/models")
+                .and_then(Value::as_array)
+                .expect("refreshed catalog");
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0]["model"], "Provider A/model-new");
+
+            crate::settings::set_current_provider(&AppType::Codex, None)
+                .expect("clear local current");
+        });
+    }
+
     fn usage_script_with_credentials(
         api_key: Option<&str>,
         base_url: Option<&str>,
@@ -2440,6 +2570,59 @@ impl ProviderService {
         }
     }
 
+    fn preserve_codex_aggregate_managed_catalog(existing: &Provider, provider: &mut Provider) {
+        if !existing.is_codex_aggregate() {
+            return;
+        }
+        let (Some(existing_settings), Some(next_settings)) = (
+            existing.settings_config.as_object(),
+            provider.settings_config.as_object_mut(),
+        ) else {
+            return;
+        };
+
+        for key in ["modelCatalog", "codexAggregateRoutes"] {
+            if let Some(value) = existing_settings.get(key) {
+                next_settings.insert(key.to_string(), value.clone());
+            } else {
+                next_settings.remove(key);
+            }
+        }
+    }
+
+    fn refresh_codex_aggregation_after_source_change(
+        state: &AppState,
+        app_type: &AppType,
+        provider_id: &str,
+    ) {
+        if !matches!(app_type, AppType::Codex)
+            || provider_id == crate::services::codex_aggregation::CODEX_AGGREGATE_PROVIDER_ID
+        {
+            return;
+        }
+        let aggregate_provider_id = crate::services::codex_aggregation::CODEX_AGGREGATE_PROVIDER_ID;
+        if crate::settings::get_effective_current_provider(&state.db, app_type)
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some(aggregate_provider_id)
+        {
+            return;
+        }
+
+        match tauri::async_runtime::block_on(
+            state.proxy_service.refresh_codex_aggregation_if_enabled(),
+        ) {
+            Ok(Some(status)) => log::info!(
+                "Codex 源供应商变化后已刷新聚合目录：{} 个供应商，{} 个模型",
+                status.source_provider_count,
+                status.model_count
+            ),
+            Ok(None) => {}
+            Err(error) => log::error!("Codex 源供应商已更新，但自动刷新聚合目录失败: {error}"),
+        }
+    }
+
     /// Check whether a provider exists in live config, tolerating parse errors
     /// only for providers that are explicitly marked as DB-only.
     fn check_live_config_exists(
@@ -2605,6 +2788,7 @@ impl ProviderService {
             write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
         }
 
+        Self::refresh_codex_aggregation_after_source_change(state, &app_type, &provider.id);
         Ok(true)
     }
 
@@ -2623,6 +2807,11 @@ impl ProviderService {
             .get_provider_by_id(&original_id, app_type.as_str())?;
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
+        if matches!(app_type, AppType::Codex) {
+            if let Some(existing_provider) = existing_provider.as_ref() {
+                Self::preserve_codex_aggregate_managed_catalog(existing_provider, &mut provider);
+            }
+        }
         Self::validate_provider_settings(&app_type, &provider)?;
         normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
         Self::normalize_usage_script_credential_overrides(&app_type, &mut provider);
@@ -2832,6 +3021,7 @@ impl ProviderService {
             }
         }
 
+        Self::refresh_codex_aggregation_after_source_change(state, &app_type, &provider.id);
         Ok(true)
     }
 
@@ -2898,7 +3088,9 @@ impl ProviderService {
             ));
         }
 
-        state.db.delete_provider(app_type.as_str(), id)
+        state.db.delete_provider(app_type.as_str(), id)?;
+        Self::refresh_codex_aggregation_after_source_change(state, &app_type, id);
+        Ok(())
     }
 
     /// Remove provider from live config only (for additive mode apps like OpenCode, OpenClaw)

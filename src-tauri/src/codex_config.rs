@@ -15,6 +15,7 @@ use toml_edit::DocumentMut;
 
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
 const CODEX_OPENAI_MODEL_PROVIDER_ID: &str = "openai";
+pub const CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME: &str = "Codex Multi Provider";
 /// Legacy/default model-provider id used while the built-in `codex-official`
 /// provider is routed through CC Switch with unified history disabled. It is
 /// still recognized so older live configs can be detected and cleaned up.
@@ -1465,6 +1466,13 @@ fn codex_unified_official_provider_table() -> toml_edit::Table {
     codex_official_provider_table(None)
 }
 
+fn codex_aggregate_provider_table(base_url: &str) -> toml_edit::Table {
+    let mut table = codex_official_provider_table(Some(base_url));
+    table["name"] = toml_edit::value(CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME);
+    table["supports_standalone_web_search"] = toml_edit::value(true);
+    table
+}
+
 fn remove_codex_proxy_placeholders_from_providers(providers: &mut toml_edit::Table) {
     for (_, item) in providers.iter_mut() {
         if let Some(table) = item.as_table_mut() {
@@ -1498,6 +1506,36 @@ pub fn apply_codex_official_proxy_route(
     proxy_base_url: &str,
     unify_session_history: bool,
 ) -> Result<String, AppError> {
+    apply_codex_native_auth_proxy_route(
+        config_text,
+        proxy_base_url,
+        unify_session_history,
+        codex_official_provider_table(Some(proxy_base_url)),
+    )
+}
+
+/// Project the aggregate provider through the local proxy while preserving the
+/// built-in ChatGPT login. Its distinct name keeps Codex on local compaction
+/// because aggregate Chat-to-Responses routes do not emit compaction V2 items.
+pub fn apply_codex_aggregate_proxy_route(
+    config_text: &str,
+    proxy_base_url: &str,
+    unify_session_history: bool,
+) -> Result<String, AppError> {
+    apply_codex_native_auth_proxy_route(
+        config_text,
+        proxy_base_url,
+        unify_session_history,
+        codex_aggregate_provider_table(proxy_base_url),
+    )
+}
+
+fn apply_codex_native_auth_proxy_route(
+    config_text: &str,
+    proxy_base_url: &str,
+    unify_session_history: bool,
+    mut provider_table: toml_edit::Table,
+) -> Result<String, AppError> {
     let mut doc = config_text
         .parse::<DocumentMut>()
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
@@ -1530,15 +1568,15 @@ pub fn apply_codex_official_proxy_route(
     remove_codex_proxy_placeholders_from_providers(&mut providers);
 
     // The local proxy currently exposes HTTP/SSE, not Codex websocket routes.
-    let mut table = codex_official_provider_table(Some(proxy_base_url));
-    table["supports_websockets"] = toml_edit::value(false);
+    provider_table["base_url"] = toml_edit::value(proxy_base_url.trim_end_matches('/'));
+    provider_table["supports_websockets"] = toml_edit::value(false);
 
     if unify_session_history {
         // The legacy ownership id is never active in unified-history mode and
         // must not survive as a second official proxy definition.
         providers.remove(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID);
     }
-    providers.insert(active_provider_id, toml_edit::Item::Table(table));
+    providers.insert(active_provider_id, toml_edit::Item::Table(provider_table));
     doc["model_providers"] = toml_edit::Item::Table(providers);
     Ok(doc.to_string())
 }
@@ -1557,12 +1595,14 @@ fn is_local_codex_proxy_url(url: &str) -> bool {
         || rest.starts_with("::")
 }
 
-fn table_matches_codex_unified_official_proxy_provider(table: &toml_edit::Table) -> bool {
-    table.get("name").and_then(|item| item.as_str()) == Some("OpenAI")
-        && table
-            .get("requires_openai_auth")
-            .and_then(|item| item.as_bool())
-            == Some(true)
+fn table_matches_codex_native_auth_proxy_provider(table: &toml_edit::Table) -> bool {
+    matches!(
+        table.get("name").and_then(|item| item.as_str()),
+        Some("OpenAI") | Some(CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME)
+    ) && table
+        .get("requires_openai_auth")
+        .and_then(|item| item.as_bool())
+        == Some(true)
         && table.get("wire_api").and_then(|item| item.as_str()) == Some("responses")
         && table
             .get("supports_websockets")
@@ -1574,8 +1614,8 @@ fn table_matches_codex_unified_official_proxy_provider(table: &toml_edit::Table)
             .is_some_and(is_local_codex_proxy_url)
 }
 
-/// Whether a live Codex config is an official route projected by CC Switch.
-/// Recognizes both the legacy ownership id and the unified `custom` route.
+/// Whether a live Codex config is a native-auth route projected by CC Switch.
+/// Recognizes official and aggregate routes under the legacy or unified ids.
 pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
     let Ok(doc) = config_text.parse::<DocumentMut>() else {
         return false;
@@ -1591,7 +1631,7 @@ pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
         .and_then(|item| item.as_table())
         .and_then(|providers| providers.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
         .and_then(|item| item.as_table())
-        .is_some_and(table_matches_codex_unified_official_proxy_provider)
+        .is_some_and(table_matches_codex_native_auth_proxy_provider)
 }
 
 /// Remove only the legacy official takeover route owned by CC Switch. Unified
