@@ -2721,7 +2721,195 @@ impl ProxyService {
         Ok(())
     }
 
+    /// 读取 Codex 多供应商聚合入口的真实运行状态。
+    pub async fn get_codex_aggregation_status(
+        &self,
+    ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+        use crate::services::codex_aggregation::{
+            aggregate_provider_stats, CodexAggregationStatus, CODEX_AGGREGATE_PROVIDER_ID,
+        };
+
+        let current_provider =
+            crate::settings::get_effective_current_provider(&self.db, &AppType::Codex)
+                .map_err(|error| format!("读取 Codex 当前供应商失败: {error}"))?;
+        let takeover_enabled = self
+            .db
+            .get_proxy_config_for_app(AppType::Codex.as_str())
+            .await
+            .map_err(|error| format!("读取 Codex 接管状态失败: {error}"))?
+            .enabled;
+        let provider = self
+            .db
+            .get_provider_by_id(CODEX_AGGREGATE_PROVIDER_ID, AppType::Codex.as_str())
+            .map_err(|error| format!("读取 Codex 聚合供应商失败: {error}"))?;
+        let (model_count, source_provider_count) = provider
+            .as_ref()
+            .map(aggregate_provider_stats)
+            .unwrap_or((0, 0));
+
+        Ok(CodexAggregationStatus {
+            enabled: takeover_enabled
+                && current_provider.as_deref() == Some(CODEX_AGGREGATE_PROVIDER_ID),
+            provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
+            model_count,
+            source_provider_count,
+            warnings: Vec::new(),
+        })
+    }
+
+    /// 开启或关闭 Codex 多供应商聚合。
+    ///
+    /// 开启时先接管当前 Codex，再把代理目标热切换为自动生成的聚合 Provider；关闭时
+    /// 先切回开启前 Provider，再按原状态决定是否释放接管，确保 Live 备份始终可恢复。
+    pub async fn set_codex_aggregation(
+        &self,
+        enabled: bool,
+    ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+        use crate::services::codex_aggregation::{
+            build_codex_aggregate_provider, CodexAggregationStatus,
+            CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING, CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING,
+            CODEX_AGGREGATE_PROVIDER_ID,
+        };
+
+        let app_type = AppType::Codex;
+        let app_type_str = app_type.as_str();
+        let current_provider = crate::settings::get_effective_current_provider(&self.db, &app_type)
+            .map_err(|error| format!("读取 Codex 当前供应商失败: {error}"))?;
+        let takeover_enabled = self
+            .db
+            .get_proxy_config_for_app(app_type_str)
+            .await
+            .map_err(|error| format!("读取 Codex 接管状态失败: {error}"))?
+            .enabled;
+
+        if enabled {
+            let build = build_codex_aggregate_provider(self.db.as_ref()).await?;
+            let previous_provider =
+                if current_provider.as_deref() == Some(CODEX_AGGREGATE_PROVIDER_ID) {
+                    self.db
+                        .get_setting(CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING)
+                        .map_err(|error| format!("读取聚合前供应商失败: {error}"))?
+                        .filter(|provider_id| !provider_id.trim().is_empty())
+                        .unwrap_or_else(|| crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string())
+                } else {
+                    current_provider
+                        .clone()
+                        .unwrap_or_else(|| crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string())
+                };
+
+            self.db
+                .save_provider(app_type_str, &build.provider)
+                .map_err(|error| format!("保存 Codex 聚合供应商失败: {error}"))?;
+            self.db
+                .set_setting(
+                    CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING,
+                    &previous_provider,
+                )
+                .map_err(|error| format!("保存聚合前供应商失败: {error}"))?;
+            self.db
+                .set_setting(
+                    CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING,
+                    if takeover_enabled { "true" } else { "false" },
+                )
+                .map_err(|error| format!("保存聚合前接管状态失败: {error}"))?;
+
+            let started_takeover = !takeover_enabled;
+            if started_takeover {
+                if let Err(error) = self.set_takeover_for_app(app_type_str, true).await {
+                    let _ = self
+                        .db
+                        .delete_provider(app_type_str, CODEX_AGGREGATE_PROVIDER_ID);
+                    return Err(error);
+                }
+            }
+
+            if let Err(error) = self
+                .hot_switch_provider(app_type_str, CODEX_AGGREGATE_PROVIDER_ID)
+                .await
+            {
+                if started_takeover {
+                    let _ = self.set_takeover_for_app(app_type_str, false).await;
+                }
+                let _ = self
+                    .db
+                    .delete_provider(app_type_str, CODEX_AGGREGATE_PROVIDER_ID);
+                return Err(format!("启用 Codex 聚合供应商失败: {error}"));
+            }
+
+            return Ok(CodexAggregationStatus {
+                enabled: true,
+                provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
+                model_count: build.model_count,
+                source_provider_count: build.source_provider_count,
+                warnings: build.warnings,
+            });
+        }
+
+        let previous_provider = self
+            .db
+            .get_setting(CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING)
+            .map_err(|error| format!("读取聚合前供应商失败: {error}"))?
+            .filter(|provider_id| {
+                !provider_id.trim().is_empty()
+                    && provider_id.as_str() != CODEX_AGGREGATE_PROVIDER_ID
+            })
+            .filter(|provider_id| {
+                self.db
+                    .get_provider_by_id(provider_id, app_type_str)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+            .unwrap_or_else(|| crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string());
+        let previous_takeover = self
+            .db
+            .get_setting(CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING)
+            .map_err(|error| format!("读取聚合前接管状态失败: {error}"))?
+            .is_some_and(|value| value == "true");
+
+        if current_provider.as_deref() == Some(CODEX_AGGREGATE_PROVIDER_ID) {
+            if takeover_enabled {
+                self.hot_switch_provider(app_type_str, &previous_provider)
+                    .await
+                    .map_err(|error| format!("恢复 Codex 供应商失败: {error}"))?;
+            } else {
+                let target = self
+                    .db
+                    .get_provider_by_id(&previous_provider, app_type_str)
+                    .map_err(|error| format!("读取恢复目标供应商失败: {error}"))?
+                    .ok_or_else(|| format!("恢复目标供应商不存在: {previous_provider}"))?;
+                write_live_with_common_config(self.db.as_ref(), &app_type, &target)
+                    .map_err(|error| format!("恢复 Codex Live 配置失败: {error}"))?;
+                crate::settings::set_current_provider(&app_type, Some(&previous_provider))
+                    .map_err(|error| format!("恢复本地 Codex 当前供应商失败: {error}"))?;
+                self.db
+                    .set_current_provider(app_type_str, &previous_provider)
+                    .map_err(|error| format!("恢复数据库 Codex 当前供应商失败: {error}"))?;
+            }
+        }
+
+        if takeover_enabled && !previous_takeover {
+            self.set_takeover_for_app(app_type_str, false).await?;
+        }
+        self.db
+            .delete_provider(app_type_str, CODEX_AGGREGATE_PROVIDER_ID)
+            .map_err(|error| format!("删除 Codex 聚合供应商失败: {error}"))?;
+        let _ = self
+            .db
+            .set_setting(CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING, "");
+        let _ = self
+            .db
+            .set_setting(CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING, "false");
+
+        Ok(CodexAggregationStatus::disabled())
+    }
+
     // ==================== Live 配置读写辅助方法 ====================
+
+    fn codex_provider_uses_native_auth_facade(provider: &Provider) -> bool {
+        crate::proxy::providers::is_codex_official_provider(provider)
+            || provider.is_codex_aggregate()
+    }
 
     /// 接管 Codex 时，本地客户端必须继续以 Responses wire API 访问代理。
     /// 真实上游是否走 Chat Completions 由 provider 配置决定，并在代理内部转换。
@@ -2731,7 +2919,7 @@ impl ProxyService {
         provider: Option<&Provider>,
         unify_session_history: bool,
     ) -> Result<String, String> {
-        if provider.is_some_and(crate::proxy::providers::is_codex_official_provider) {
+        if provider.is_some_and(Self::codex_provider_uses_native_auth_facade) {
             return crate::codex_config::apply_codex_official_proxy_route(
                 toml_str,
                 proxy_url,
@@ -2758,7 +2946,7 @@ impl ProxyService {
     }
 
     fn apply_codex_takeover_auth_placeholder(settings: &mut Value, provider: Option<&Provider>) {
-        if provider.is_some_and(crate::proxy::providers::is_codex_official_provider) {
+        if provider.is_some_and(Self::codex_provider_uses_native_auth_facade) {
             return;
         }
 
@@ -2912,8 +3100,8 @@ impl ProxyService {
         config: &Value,
         provider: Option<&Provider>,
     ) -> Result<(), String> {
-        let official_passthrough =
-            provider.is_some_and(crate::proxy::providers::is_codex_official_provider);
+        let native_auth_passthrough =
+            provider.is_some_and(Self::codex_provider_uses_native_auth_facade);
         let placeholder_auth = config
             .get("auth")
             .is_some_and(Self::codex_auth_has_proxy_placeholder);
@@ -2922,7 +3110,7 @@ impl ProxyService {
         // third-party providers the placeholder is moved into config.toml; for
         // codex-official no placeholder is needed because requires_openai_auth
         // makes Codex supply its native authorization.
-        if official_passthrough || placeholder_auth {
+        if native_auth_passthrough || placeholder_auth {
             let config_str = config.get("config").and_then(|v| v.as_str()).unwrap_or("");
             let profile = provider
                 .map(crate::proxy::providers::resolve_codex_catalog_tool_profile)
@@ -2932,7 +3120,7 @@ impl ProxyService {
                     config, config_str, profile,
                 )
                 .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
-            let live_config = if official_passthrough {
+            let live_config = if native_auth_passthrough {
                 prepared_config
             } else {
                 crate::codex_config::prepare_codex_provider_live_config(

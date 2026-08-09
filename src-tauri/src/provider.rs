@@ -80,6 +80,14 @@ impl Provider {
             || self.claude_base_url_contains("githubcopilot.com")
     }
 
+    /// CC Switch 维护的 Codex 多供应商聚合入口。
+    ///
+    /// 该 Provider 只承载统一模型目录和 model -> provider 路由表，不能作为真实
+    /// 上游直接转发；请求必须先由 ProviderRouter 解析到具体 Codex Provider。
+    pub fn is_codex_aggregate(&self) -> bool {
+        self.provider_type() == Some("codex_aggregate")
+    }
+
     pub fn uses_managed_account_auth(&self) -> bool {
         self.is_github_copilot()
             || self.is_codex_oauth()
