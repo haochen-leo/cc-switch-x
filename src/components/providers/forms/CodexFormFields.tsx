@@ -105,6 +105,7 @@ interface CodexFormFieldsProps {
   // Model Catalog
   catalogModels?: CodexCatalogModel[];
   onCatalogModelsChange?: (models: CodexCatalogModel[]) => void;
+  catalogReadOnly?: boolean;
 
   // Speed Test Endpoints
   speedTestEndpoints: EndpointCandidate[];
@@ -203,6 +204,7 @@ export function CodexFormFields({
   onPromptCacheRoutingChange,
   catalogModels = [],
   onCatalogModelsChange,
+  catalogReadOnly = false,
   speedTestEndpoints,
   customUserAgent,
   onCustomUserAgentChange,
@@ -236,7 +238,8 @@ export function CodexFormFields({
   //（填了才生成 catalog）。两者都已与「路由接管」概念解耦。
   const isChatFormat = apiFormat === "openai_chat";
   const isAnthropicFormat = apiFormat === "anthropic";
-  const canEditCatalog = Boolean(onCatalogModelsChange);
+  const canEditCatalog = Boolean(onCatalogModelsChange) && !catalogReadOnly;
+  const showCatalog = canEditCatalog || catalogReadOnly;
   const canEditReasoning = Boolean(onCodexChatReasoningChange);
   const supportsThinking =
     codexChatReasoning.supportsThinking === true ||
@@ -609,17 +612,19 @@ export function CodexFormFields({
                 defaultValue:
                   "该模型不在模型映射中，Codex 的 /model 菜单不会列出它（直接请求仍然有效）。",
               })}
-              <Button
-                type="button"
-                variant="link"
-                size="sm"
-                className="h-auto p-0 text-xs"
-                onClick={handleAddDefaultModelToCatalog}
-              >
-                {t("codexConfig.addToModelMapping", {
-                  defaultValue: "加入映射",
-                })}
-              </Button>
+              {canEditCatalog && (
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-xs"
+                  onClick={handleAddDefaultModelToCatalog}
+                >
+                  {t("codexConfig.addToModelMapping", {
+                    defaultValue: "加入映射",
+                  })}
+                </Button>
+              )}
             </p>
           )}
         </div>
@@ -922,7 +927,7 @@ export function CodexFormFields({
             {/* 模型映射 / 模型目录 —— 与「路由接管」解耦，常驻显示（可编辑即渲染）。
                 填了才生成 catalog：Chat 模式生成兼容路由、原生 Responses 生成
                 model-catalogs.json；留空则不生成。排在自定义 UA 之前。 */}
-            {canEditCatalog && (
+            {showCatalog && (
               <div
                 className={cn(
                   "space-y-4",
@@ -937,25 +942,35 @@ export function CodexFormFields({
                         defaultValue: "模型映射",
                       })}
                     </FormLabel>
-                    {renderCatalogActionButtons(
-                      handleAddCatalogRow,
-                      t("codexConfig.addCatalogModel", {
-                        defaultValue: "添加模型",
-                      }),
-                    )}
+                    {canEditCatalog &&
+                      renderCatalogActionButtons(
+                        handleAddCatalogRow,
+                        t("codexConfig.addCatalogModel", {
+                          defaultValue: "添加模型",
+                        }),
+                      )}
                   </div>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    {t("codexConfig.modelMappingHint", {
-                      defaultValue:
-                        "选择模型角色后，CC Switch 会自动生成 Codex 兼容路由；菜单显示名可以填 DeepSeek、Kimi 等品牌模型，实际请求模型按右侧填写内容发送。",
-                    })}
+                    {catalogReadOnly
+                      ? "该目录由多模型来源供应商自动生成。"
+                      : t("codexConfig.modelMappingHint", {
+                          defaultValue:
+                            "选择模型角色后，CC Switch 会自动生成 Codex 兼容路由；菜单显示名可以填 DeepSeek、Kimi 等品牌模型，实际请求模型按右侧填写内容发送。",
+                        })}
                   </p>
                 </div>
 
                 {catalogRows.length > 0 && (
                   <div className="space-y-2">
                     {/* 列头：md+ 显示 */}
-                    <div className="hidden grid-cols-[1fr_1fr_140px_36px] gap-2 px-1 text-xs font-medium text-muted-foreground md:grid">
+                    <div
+                      className={cn(
+                        "hidden gap-2 px-1 text-xs font-medium text-muted-foreground md:grid",
+                        catalogReadOnly
+                          ? "grid-cols-[1fr_1fr_140px]"
+                          : "grid-cols-[1fr_1fr_140px_36px]",
+                      )}
+                    >
                       <span>
                         {t("codexConfig.catalogColumnDisplay", {
                           defaultValue: "菜单显示名",
@@ -971,13 +986,18 @@ export function CodexFormFields({
                           defaultValue: "上下文窗口",
                         })}
                       </span>
-                      <span />
+                      {!catalogReadOnly && <span />}
                     </div>
 
                     {catalogRows.map((row, index) => (
                       <div
                         key={row.rowId}
-                        className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_140px_36px]"
+                        className={cn(
+                          "grid grid-cols-1 gap-2",
+                          catalogReadOnly
+                            ? "md:grid-cols-[1fr_1fr_140px]"
+                            : "md:grid-cols-[1fr_1fr_140px_36px]",
+                        )}
                       >
                         <Input
                           value={row.displayName ?? ""}
@@ -995,6 +1015,7 @@ export function CodexFormFields({
                           aria-label={t("codexConfig.catalogColumnDisplay", {
                             defaultValue: "菜单显示名",
                           })}
+                          disabled={catalogReadOnly}
                         />
                         <div className="flex gap-1">
                           <Input
@@ -1014,8 +1035,9 @@ export function CodexFormFields({
                               defaultValue: "实际请求模型",
                             })}
                             className="flex-1"
+                            disabled={catalogReadOnly}
                           />
-                          {fetchedModels.length > 0 && (
+                          {!catalogReadOnly && fetchedModels.length > 0 && (
                             <ModelDropdown
                               models={fetchedModels}
                               onSelect={(id) =>
@@ -1051,17 +1073,22 @@ export function CodexFormFields({
                           aria-label={t("codexConfig.catalogColumnContext", {
                             defaultValue: "上下文窗口",
                           })}
+                          disabled={catalogReadOnly}
                         />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 text-muted-foreground hover:text-destructive"
-                          onClick={() => handleRemoveCatalogRow(index)}
-                          title={t("common.delete", { defaultValue: "删除" })}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {!catalogReadOnly && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 text-muted-foreground hover:text-destructive"
+                            onClick={() => handleRemoveCatalogRow(index)}
+                            title={t("common.delete", {
+                              defaultValue: "删除",
+                            })}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1077,7 +1104,7 @@ export function CodexFormFields({
                 className={cn(
                   (shouldShowSpeedTest ||
                     (isChatFormat && canEditReasoning) ||
-                    canEditCatalog) &&
+                    showCatalog) &&
                     "border-t border-border-default pt-3",
                 )}
               >

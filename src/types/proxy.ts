@@ -57,7 +57,16 @@ export interface CodexAggregationStatus {
   providerId: string;
   modelCount: number;
   sourceProviderCount: number;
+  selectedProviderIds: string[];
+  sourceProviders: CodexAggregationSourceProvider[];
   warnings: string[];
+}
+
+export interface CodexAggregationSourceProvider {
+  providerId: string;
+  name: string;
+  official: boolean;
+  selected: boolean;
 }
 
 export interface ProviderHealth {

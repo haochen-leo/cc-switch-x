@@ -99,6 +99,11 @@ export const useAddProviderMutation = (appId: AppId) => {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+      if (appId === "codex") {
+        await queryClient.invalidateQueries({
+          queryKey: ["codexAggregationStatus"],
+        });
+      }
 
       if (appId === "opencode") {
         await queryClient.invalidateQueries({
@@ -172,6 +177,11 @@ export const useUpdateProviderMutation = (appId: AppId) => {
     },
     onSuccess: async (provider, variables) => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+      if (appId === "codex") {
+        await queryClient.invalidateQueries({
+          queryKey: ["codexAggregationStatus"],
+        });
+      }
       await queryClient.invalidateQueries({
         queryKey: usageKeys.script(provider.id, appId),
       });
@@ -219,6 +229,11 @@ export const useDeleteProviderMutation = (appId: AppId) => {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+      if (appId === "codex") {
+        await queryClient.invalidateQueries({
+          queryKey: ["codexAggregationStatus"],
+        });
+      }
 
       if (appId === "opencode") {
         await queryClient.invalidateQueries({
