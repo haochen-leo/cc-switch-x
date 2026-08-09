@@ -137,21 +137,28 @@ export function EditProviderDialog({
       unknown
     >;
 
-    // Codex 的 modelCatalog 是 cc-switch 私有字段，SSOT 在数据库。Live 的 config.toml
-    // 仅在写入时投影出 model_catalog_json 指针；Codex.app 改写配置、代理接管/恢复周期、
-    // 来回切换供应商都可能让 Live 丢失该投影，从而 read_live_settings 反解为空。
-    // 若放任 Live 覆盖，编辑界面会显示空映射表，保存后连同数据库里的映射一起清空（数据丢失）。
-    // 因此始终以数据库 SSOT 的 modelCatalog 为准，仅在数据库确实没有时才回退到 Live 反解结果。
+    // Codex 的 modelCatalog / codexAggregateRoutes 是 cc-switch 私有字段，SSOT 在数据库。
+    // Live 配置不会完整携带这些字段，编辑时必须从数据库补回。
     if (
       appId === "codex" &&
       liveSettings &&
       provider?.settingsConfig &&
       typeof provider.settingsConfig === "object"
     ) {
-      const dbCatalog = (provider.settingsConfig as Record<string, unknown>)
-        .modelCatalog;
+      const dbSettings = provider.settingsConfig as Record<string, unknown>;
+      const dbCatalog = dbSettings.modelCatalog;
+      const dbAggregateRoutes = dbSettings.codexAggregateRoutes;
       if (dbCatalog !== undefined) {
-        return { ...base, modelCatalog: dbCatalog };
+        return {
+          ...base,
+          modelCatalog: dbCatalog,
+          ...(dbAggregateRoutes !== undefined
+            ? { codexAggregateRoutes: dbAggregateRoutes }
+            : {}),
+        };
+      }
+      if (dbAggregateRoutes !== undefined) {
+        return { ...base, codexAggregateRoutes: dbAggregateRoutes };
       }
     }
 
