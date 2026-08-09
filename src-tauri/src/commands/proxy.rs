@@ -79,6 +79,18 @@ pub async fn set_codex_aggregation(
     state.proxy_service.set_codex_aggregation(enabled).await
 }
 
+/// 设置 Codex 多模型聚合使用的来源供应商。
+#[tauri::command]
+pub async fn set_codex_aggregation_sources(
+    state: tauri::State<'_, AppState>,
+    source_provider_ids: Vec<String>,
+) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+    state
+        .proxy_service
+        .set_codex_aggregation_sources(source_provider_ids)
+        .await
+}
+
 /// 获取代理服务器状态
 #[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
