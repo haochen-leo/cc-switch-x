@@ -1604,6 +1604,19 @@ impl RequestForwarder {
             self.apply_media_prevention(&mut request_body, provider);
         }
 
+        if codex_official_auth_passthrough && endpoint.contains("responses") {
+            let changed =
+                super::providers::transform_codex_chat::normalize_replayed_item_ids_for_openai(
+                    &mut request_body,
+                );
+            if changed > 0 {
+                log::debug!(
+                    "[Codex] Normalized {changed} noncanonical replayed item ID(s) for OpenAI Responses (provider={})",
+                    provider.id
+                );
+            }
+        }
+
         // 过滤私有参数（以 `_` 开头的字段），防止内部信息泄露到上游
         // 默认使用空白名单，过滤所有 _ 前缀字段
         let mut filtered_body = prepare_upstream_request_body(request_body);

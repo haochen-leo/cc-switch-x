@@ -47,6 +47,62 @@ const CUSTOM_TOOL_INPUT_FIELD: &str = "input";
 const CHAT_TOOL_NAME_MAX_LEN: usize = 64;
 const CUSTOM_TOOL_INPUT_DESCRIPTION: &str = "Raw string input for the original custom tool. Preserve formatting exactly and follow the original tool definition embedded in the description.";
 const CUSTOM_TOOL_PRESERVED_METADATA_HEADING: &str = "Original tool definition:";
+
+/// Normalize third-party replay metadata before forwarding mixed-provider
+/// history to an OpenAI official Responses endpoint.
+pub(crate) fn normalize_replayed_item_ids_for_openai(body: &mut Value) -> usize {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+
+    let mut changed = 0;
+    for item in input {
+        let is_plain_reasoning = item.get("type").and_then(Value::as_str) == Some("reasoning")
+            && !item
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty());
+        if is_plain_reasoning {
+            if let Some(object) = item.as_object_mut() {
+                let removed_id = object.remove("id").is_some();
+                let removed_status = object.remove("status").is_some();
+                if removed_id || removed_status {
+                    changed += 1;
+                }
+            }
+            continue;
+        }
+
+        let Some(required_prefix) =
+            item.get("type")
+                .and_then(Value::as_str)
+                .and_then(|item_type| match item_type {
+                    "message" => Some("msg_"),
+                    "function_call" => Some("fc_"),
+                    "custom_tool_call" => Some("ctc_"),
+                    "web_search_call" => Some("ws_"),
+                    _ => None,
+                })
+        else {
+            continue;
+        };
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if id.starts_with(required_prefix) {
+            continue;
+        }
+
+        item["id"] = json!(format!(
+            "{required_prefix}ccswitch_{}",
+            short_sha256_hex(id.as_bytes())
+        ));
+        changed += 1;
+    }
+
+    changed
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CodexToolKind {
     Function,
@@ -1950,6 +2006,109 @@ mod tests {
 
     fn result_messages(result: &Value) -> &[Value] {
         result["messages"].as_array().unwrap()
+    }
+
+    #[test]
+    fn openai_request_normalizes_noncanonical_message_and_tool_item_ids() {
+        let message_id = "resp_chatcmpl-52be6db9-2144-9f90-b09a-9802ddf11929_msg";
+        let function_id = "call_vendor_function";
+        let custom_id = "call_vendor_custom";
+        let web_search_id = "call_vendor_web_search";
+        let mut body = json!({
+            "model": "gpt-5.6-sol",
+            "input": [
+                {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "done"}]
+                },
+                {
+                    "id": function_id,
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": "call_1",
+                    "name": "read_file",
+                    "arguments": "{}"
+                },
+                {
+                    "id": custom_id,
+                    "type": "custom_tool_call",
+                    "status": "completed",
+                    "call_id": "call_2",
+                    "name": "apply_patch",
+                    "input": "*** Begin Patch"
+                },
+                {
+                    "id": web_search_id,
+                    "type": "web_search_call",
+                    "status": "completed"
+                }
+            ]
+        });
+
+        assert_eq!(normalize_replayed_item_ids_for_openai(&mut body), 4);
+        assert_eq!(
+            body["input"][0]["id"],
+            format!("msg_ccswitch_{}", short_sha256_hex(message_id.as_bytes()))
+        );
+        assert_eq!(
+            body["input"][1]["id"],
+            format!("fc_ccswitch_{}", short_sha256_hex(function_id.as_bytes()))
+        );
+        assert_eq!(
+            body["input"][2]["id"],
+            format!("ctc_ccswitch_{}", short_sha256_hex(custom_id.as_bytes()))
+        );
+        assert_eq!(
+            body["input"][3]["id"],
+            format!("ws_ccswitch_{}", short_sha256_hex(web_search_id.as_bytes()))
+        );
+        assert_eq!(body["input"][1]["call_id"], "call_1");
+        assert_eq!(body["input"][2]["call_id"], "call_2");
+    }
+
+    #[test]
+    fn openai_request_inlines_plain_reasoning_without_dropping_summary() {
+        let mut body = json!({
+            "model": "gpt-5.6-sol",
+            "input": [{
+                "id": "rs_resp_chatcmpl-b4d3bcf7f34003ac",
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [{
+                    "type": "summary_text",
+                    "text": "plain third-party reasoning"
+                }]
+            }]
+        });
+
+        assert_eq!(normalize_replayed_item_ids_for_openai(&mut body), 1);
+        assert!(body["input"][0].get("id").is_none());
+        assert!(body["input"][0].get("status").is_none());
+        assert_eq!(
+            body["input"][0]["summary"][0]["text"],
+            "plain third-party reasoning"
+        );
+    }
+
+    #[test]
+    fn openai_request_keeps_encrypted_reasoning_identity() {
+        let mut body = json!({
+            "model": "gpt-5.6-sol",
+            "input": [{
+                "id": "vendor_encrypted_reasoning",
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [],
+                "encrypted_content": "opaque-provider-bound-payload"
+            }]
+        });
+
+        assert_eq!(normalize_replayed_item_ids_for_openai(&mut body), 0);
+        assert_eq!(body["input"][0]["id"], "vendor_encrypted_reasoning");
+        assert_eq!(body["input"][0]["status"], "completed");
     }
 
     #[test]
