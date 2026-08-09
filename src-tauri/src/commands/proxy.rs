@@ -62,6 +62,23 @@ pub async fn set_proxy_takeover_for_app(
         .await
 }
 
+/// 获取 Codex 官方 + 第三方模型聚合状态。
+#[tauri::command]
+pub async fn get_codex_aggregation_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+    state.proxy_service.get_codex_aggregation_status().await
+}
+
+/// 开启/关闭 Codex 官方 + 第三方模型聚合入口。
+#[tauri::command]
+pub async fn set_codex_aggregation(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+    state.proxy_service.set_codex_aggregation(enabled).await
+}
+
 /// 获取代理服务器状态
 #[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {

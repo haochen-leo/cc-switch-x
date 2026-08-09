@@ -52,6 +52,14 @@ export interface ProxyTakeoverStatus {
   hermes: boolean;
 }
 
+export interface CodexAggregationStatus {
+  enabled: boolean;
+  providerId: string;
+  modelCount: number;
+  sourceProviderCount: number;
+  warnings: string[];
+}
+
 export interface ProviderHealth {
   provider_id: string;
   app_type: string;

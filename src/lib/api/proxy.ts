@@ -6,6 +6,7 @@ import type {
   ProxyTakeoverStatus,
   GlobalProxyConfig,
   AppProxyConfig,
+  CodexAggregationStatus,
 } from "@/types/proxy";
 
 export const proxyApi = {
@@ -57,6 +58,14 @@ export const proxyApi = {
     enabled: boolean,
   ): Promise<void> {
     return invoke("set_proxy_takeover_for_app", { appType, enabled });
+  },
+
+  async getCodexAggregationStatus(): Promise<CodexAggregationStatus> {
+    return invoke("get_codex_aggregation_status");
+  },
+
+  async setCodexAggregation(enabled: boolean): Promise<CodexAggregationStatus> {
+    return invoke("set_codex_aggregation", { enabled });
   },
 
   // ========== Legacy 代理配置 API (兼容) ==========

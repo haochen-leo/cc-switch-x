@@ -1494,6 +1494,8 @@ pub fn run() {
             commands::stop_proxy_with_restore,
             commands::get_proxy_takeover_status,
             commands::set_proxy_takeover_for_app,
+            commands::get_codex_aggregation_status,
+            commands::set_codex_aggregation,
             commands::get_proxy_status,
             commands::get_proxy_config,
             commands::update_proxy_config,

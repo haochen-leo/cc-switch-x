@@ -66,6 +66,10 @@ import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UpdateBadge } from "@/components/UpdateBadge";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
+import {
+  CodexAggregationToggle,
+  CODEX_AGGREGATE_PROVIDER_ID,
+} from "@/components/proxy/CodexAggregationToggle";
 import { ClaudeDesktopRouteToggle } from "@/components/proxy/ClaudeDesktopRouteToggle";
 import { FailoverToggle } from "@/components/proxy/FailoverToggle";
 import UsageScriptModal from "@/components/UsageScriptModal";
@@ -1254,9 +1258,14 @@ function App() {
                   {activeApp === "claude-desktop" ? (
                     <ClaudeDesktopRouteToggle />
                   ) : (
-                    settingsData?.enableLocalProxy && (
-                      <ProxyToggle activeApp={activeApp} />
-                    )
+                    <>
+                      {activeApp === "codex" && <CodexAggregationToggle />}
+                      {settingsData?.enableLocalProxy &&
+                        !(
+                          activeApp === "codex" &&
+                          currentProviderId === CODEX_AGGREGATE_PROVIDER_ID
+                        ) && <ProxyToggle activeApp={activeApp} />}
+                    </>
                   )}
                   {activeApp !== "claude-desktop" &&
                     settingsData?.enableFailoverToggle && (

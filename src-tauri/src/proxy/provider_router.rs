@@ -110,7 +110,7 @@ impl ProviderRouter {
         Ok(result)
     }
 
-    /// 按请求内容选择可用供应商（Claude 支持模型级路由）
+    /// 按请求内容选择可用供应商（Claude 与 Codex 聚合入口支持模型级路由）
     ///
     /// 流程：
     /// 1. 从当前供应商的 env 映射模型名（如 claude-sonnet-4-6 → kimi-k2.6）
@@ -118,13 +118,24 @@ impl ProviderRouter {
     /// 3. 返回 (供应商列表, 是否路由命中, 已映射的模型名)
     ///
     /// 规则：
-    /// - 非 Claude：等同 `select_providers`，不做模型映射
+    /// - Codex 聚合入口：按统一模型目录中的精确 model 路由到真实 Provider
+    /// - 其它非 Claude：等同 `select_providers`，不做模型映射
     /// - Claude 无路由配置：回退默认链路
     pub async fn select_providers_for_request(
         &self,
         app_type: &str,
         request_body: &Value,
     ) -> Result<(Vec<Provider>, bool), AppError> {
+        if app_type == AppType::Codex.as_str() {
+            if let Some(target_provider) =
+                self.resolve_codex_aggregate_target(app_type, request_body)?
+            {
+                return Ok((vec![target_provider], true));
+            }
+            let fallback_chain = self.select_providers(app_type).await?;
+            return Ok((fallback_chain, false));
+        }
+
         if app_type != AppType::Claude.as_str() {
             let fallback_chain = self.select_providers(app_type).await?;
             return Ok((fallback_chain, false));
@@ -353,6 +364,89 @@ impl ProviderRouter {
                     .flatten()
             })
             .or_else(|| self.db.get_current_provider(app_type).ok().flatten())
+    }
+
+    fn resolve_codex_aggregate_target(
+        &self,
+        app_type: &str,
+        request_body: &Value,
+    ) -> Result<Option<Provider>, AppError> {
+        let Some(current_provider_id) = self.resolve_current_provider_id(app_type) else {
+            return Ok(None);
+        };
+        let Some(current_provider) = self.db.get_provider_by_id(&current_provider_id, app_type)?
+        else {
+            return Ok(None);
+        };
+        if !current_provider.is_codex_aggregate() {
+            return Ok(None);
+        }
+
+        let request_model = request_body
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .ok_or_else(|| {
+                AppError::Message("Codex 聚合请求缺少 model，无法选择真实供应商".to_string())
+            })?;
+        let target_provider_id = current_provider
+            .settings_config
+            .get("codexAggregateRoutes")
+            .and_then(Value::as_object)
+            .and_then(|routes| routes.get(request_model))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|provider_id| !provider_id.is_empty())
+            .ok_or_else(|| {
+                AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
+            })?;
+
+        let mut target_provider = self
+            .db
+            .get_provider_by_id(target_provider_id, app_type)?
+            .filter(|provider| !provider.is_codex_aggregate())
+            .ok_or_else(|| {
+                AppError::Message(format!(
+                    "Codex 聚合模型 {request_model} 指向不存在的供应商: {target_provider_id}"
+                ))
+            })?;
+
+        // `/models` 动态发现的模型只保存在聚合 Provider 中。给本次请求使用的真实
+        // Provider 克隆补一个 request-local catalog 条目，避免 Chat/Anthropic 转换链
+        // 把用户在 Codex 下拉列表选中的模型覆盖成该 Provider 的默认 model。
+        let target_has_selected_model = target_provider
+            .settings_config
+            .pointer("/modelCatalog/models")
+            .and_then(Value::as_array)
+            .is_some_and(|models| {
+                models
+                    .iter()
+                    .any(|entry| entry.get("model").and_then(Value::as_str) == Some(request_model))
+            });
+        if !target_has_selected_model {
+            let root = target_provider
+                .settings_config
+                .as_object_mut()
+                .ok_or_else(|| {
+                    AppError::Message(format!(
+                        "Codex 目标供应商配置格式错误: {target_provider_id}"
+                    ))
+                })?;
+            let catalog = root
+                .entry("modelCatalog")
+                .or_insert_with(|| serde_json::json!({ "models": [] }));
+            let models = catalog
+                .get_mut("models")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| {
+                    AppError::Message(format!(
+                        "Codex 目标供应商 modelCatalog 格式错误: {target_provider_id}"
+                    ))
+                })?;
+            models.push(serde_json::json!({ "model": request_model }));
+        }
+        Ok(Some(target_provider))
     }
 
     fn resolve_claude_route_target(
@@ -648,6 +742,64 @@ mod tests {
         let third = router.allow_provider_request("a", "claude").await;
         assert!(third.allowed);
         assert!(third.used_half_open_permit);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_aggregate_routes_selected_model_to_real_provider() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let mut aggregate = Provider::with_id(
+            "codex-multi-provider".to_string(),
+            "Codex Multi Provider".to_string(),
+            json!({
+                "codexAggregateRoutes": {
+                    "gpt-5.6-sol": "codex-official",
+                    "qwen3.8-max": "dashscope"
+                }
+            }),
+            None,
+        );
+        aggregate.meta = Some(ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        let official = Provider::with_id(
+            "codex-official".to_string(),
+            "OpenAI Official".to_string(),
+            json!({}),
+            None,
+        );
+        let dashscope = Provider::with_id(
+            "dashscope".to_string(),
+            "DashScope".to_string(),
+            json!({}),
+            None,
+        );
+
+        db.save_provider("codex", &aggregate).unwrap();
+        db.save_provider("codex", &official).unwrap();
+        db.save_provider("codex", &dashscope).unwrap();
+        db.set_current_provider("codex", "codex-multi-provider")
+            .unwrap();
+
+        let router = ProviderRouter::new(db);
+        let (providers, route_applied) = router
+            .select_providers_for_request("codex", &json!({"model": "qwen3.8-max"}))
+            .await
+            .unwrap();
+
+        assert!(route_applied);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "dashscope");
+        assert_eq!(
+            providers[0]
+                .settings_config
+                .pointer("/modelCatalog/models/0/model")
+                .and_then(Value::as_str),
+            Some("qwen3.8-max")
+        );
     }
 
     #[tokio::test]
