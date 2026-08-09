@@ -390,17 +390,40 @@ impl ProviderRouter {
             .ok_or_else(|| {
                 AppError::Message("Codex 聚合请求缺少 model，无法选择真实供应商".to_string())
             })?;
-        let target_provider_id = current_provider
+        let route = current_provider
             .settings_config
             .get("codexAggregateRoutes")
             .and_then(Value::as_object)
             .and_then(|routes| routes.get(request_model))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|provider_id| !provider_id.is_empty())
             .ok_or_else(|| {
                 AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
             })?;
+        let (target_provider_id, upstream_model) = if let Some(provider_id) = route.as_str() {
+            (provider_id.trim(), request_model)
+        } else {
+            let provider_id = route
+                .get("providerId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|provider_id| !provider_id.is_empty())
+                .ok_or_else(|| {
+                    AppError::Message(format!("Codex 聚合模型路由缺少供应商: {request_model}"))
+                })?;
+            let upstream_model = route
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .ok_or_else(|| {
+                    AppError::Message(format!("Codex 聚合模型路由缺少真实模型: {request_model}"))
+                })?;
+            (provider_id, upstream_model)
+        };
+        if target_provider_id.is_empty() {
+            return Err(AppError::Message(format!(
+                "Codex 聚合模型路由缺少供应商: {request_model}"
+            )));
+        }
 
         let mut target_provider = self
             .db
@@ -422,17 +445,21 @@ impl ProviderRouter {
             .is_some_and(|models| {
                 models
                     .iter()
-                    .any(|entry| entry.get("model").and_then(Value::as_str) == Some(request_model))
+                    .any(|entry| entry.get("model").and_then(Value::as_str) == Some(upstream_model))
             });
+        let root = target_provider
+            .settings_config
+            .as_object_mut()
+            .ok_or_else(|| {
+                AppError::Message(format!(
+                    "Codex 目标供应商配置格式错误: {target_provider_id}"
+                ))
+            })?;
+        root.insert(
+            crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY.to_string(),
+            serde_json::json!(upstream_model),
+        );
         if !target_has_selected_model {
-            let root = target_provider
-                .settings_config
-                .as_object_mut()
-                .ok_or_else(|| {
-                    AppError::Message(format!(
-                        "Codex 目标供应商配置格式错误: {target_provider_id}"
-                    ))
-                })?;
             let catalog = root
                 .entry("modelCatalog")
                 .or_insert_with(|| serde_json::json!({ "models": [] }));
@@ -444,7 +471,7 @@ impl ProviderRouter {
                         "Codex 目标供应商 modelCatalog 格式错误: {target_provider_id}"
                     ))
                 })?;
-            models.push(serde_json::json!({ "model": request_model }));
+            models.push(serde_json::json!({ "model": upstream_model }));
         }
         Ok(Some(target_provider))
     }
@@ -755,8 +782,14 @@ mod tests {
             "Codex Multi Provider".to_string(),
             json!({
                 "codexAggregateRoutes": {
-                    "gpt-5.6-sol": "codex-official",
-                    "qwen3.8-max": "dashscope"
+                    "codex-official/gpt-5.6-sol": {
+                        "providerId": "codex-official",
+                        "model": "gpt-5.6-sol"
+                    },
+                    "dashscope/qwen3.8-max": {
+                        "providerId": "dashscope",
+                        "model": "qwen3.8-max"
+                    }
                 }
             }),
             None,
@@ -786,7 +819,7 @@ mod tests {
 
         let router = ProviderRouter::new(db);
         let (providers, route_applied) = router
-            .select_providers_for_request("codex", &json!({"model": "qwen3.8-max"}))
+            .select_providers_for_request("codex", &json!({"model": "dashscope/qwen3.8-max"}))
             .await
             .unwrap();
 
@@ -797,6 +830,13 @@ mod tests {
             providers[0]
                 .settings_config
                 .pointer("/modelCatalog/models/0/model")
+                .and_then(Value::as_str),
+            Some("qwen3.8-max")
+        );
+        assert_eq!(
+            providers[0]
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
                 .and_then(Value::as_str),
             Some("qwen3.8-max")
         );
