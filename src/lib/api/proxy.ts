@@ -68,6 +68,12 @@ export const proxyApi = {
     return invoke("set_codex_aggregation", { enabled });
   },
 
+  async setCodexAggregationSources(
+    sourceProviderIds: string[],
+  ): Promise<CodexAggregationStatus> {
+    return invoke("set_codex_aggregation_sources", { sourceProviderIds });
+  },
+
   // ========== Legacy 代理配置 API (兼容) ==========
 
   // 获取代理配置（旧版 v2 兼容接口）
