@@ -400,6 +400,8 @@ function ProviderFormFull({
     isEditMode,
     initialCategory: initialData?.category,
   });
+  const isCodexAggregateProvider =
+    appId === "codex" && initialData?.meta?.providerType === "codex_aggregate";
   const isOmoCategory = appId === "opencode" && category === "omo";
   const isOmoSlimCategory = appId === "opencode" && category === "omo-slim";
   const isAnyOmoCategory = isOmoCategory || isOmoSlimCategory;
@@ -1414,7 +1416,7 @@ function ProviderFormFull({
             }),
           );
         }
-      } else if (appId === "codex") {
+      } else if (appId === "codex" && !isCodexAggregateProvider) {
         // 托管 OAuth 预设（xAI）：端点由 adapter 硬定向、token 由代理注入，
         // 两项都不需要用户填写
         if (!isXaiOauthProvider && !codexBaseUrl.trim()) {
@@ -1551,15 +1553,21 @@ function ProviderFormFull({
           );
         }
         const configObj = {
+          ...(isCodexAggregateProvider
+            ? (initialData?.settingsConfig ?? {})
+            : {}),
           auth: authJson,
           config: normalizedCodexConfig,
         } as {
           auth: unknown;
           config: string;
           modelCatalog?: { models: CodexCatalogModel[] };
+          codexAggregateRoutes?: unknown;
         };
         if (normalizedCatalogModels.length > 0) {
           configObj.modelCatalog = { models: normalizedCatalogModels };
+        } else {
+          delete configObj.modelCatalog;
         }
         settingsConfig = JSON.stringify(configObj);
       } catch (err) {
@@ -2500,7 +2508,10 @@ function ProviderFormFull({
               promptCacheRouting={promptCacheRouting}
               onPromptCacheRoutingChange={setPromptCacheRouting}
               catalogModels={codexCatalogModels}
-              onCatalogModelsChange={setCodexCatalogModels}
+              onCatalogModelsChange={
+                isCodexAggregateProvider ? undefined : setCodexCatalogModels
+              }
+              catalogReadOnly={isCodexAggregateProvider}
               speedTestEndpoints={speedTestEndpoints}
               customUserAgent={customUserAgent}
               onCustomUserAgentChange={setCustomUserAgent}
