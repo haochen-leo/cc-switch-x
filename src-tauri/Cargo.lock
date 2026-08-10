@@ -780,6 +780,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "image",
  "indexmap 2.13.0",
  "json-five",
  "json5",
@@ -2607,6 +2608,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

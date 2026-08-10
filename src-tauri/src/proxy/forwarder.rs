@@ -2190,6 +2190,24 @@ impl RequestForwarder {
         // 强行附带 JSON body 会让某些上游（如 Google Gemini 的 models.list）拒绝请求。
         let body_bytes = if matches!(method, &http::Method::GET | &http::Method::HEAD) {
             Vec::new()
+        } else if codex_third_party_needs_image_budget(app_type, codex_official_auth_passthrough) {
+            let result = super::image_budget::serialize_with_image_budget(
+                &mut filtered_body,
+                super::image_budget::CODEX_THIRD_PARTY_IMAGE_BUDGET_BYTES,
+            )?;
+            if result.changed() {
+                log::info!(
+                    "[{}] Codex third-party request body shrunk: bytes {} -> {}, budget={}, downsampled_images={}, removed_images={}, provider={}",
+                    log_fwd::REQUEST_BODY_BUDGET_SHRUNK,
+                    result.original_bytes,
+                    result.final_bytes(),
+                    result.budget_bytes,
+                    result.downsampled_images,
+                    result.removed_images,
+                    provider.id
+                );
+            }
+            result.body_bytes
         } else {
             serde_json::to_vec(&filtered_body).map_err(|e| {
                 ProxyError::Internal(format!("Failed to serialize request body: {e}"))
@@ -3580,6 +3598,13 @@ fn is_protected_local_proxy_override_header(name: &http::HeaderName) -> bool {
 
 fn prepare_upstream_request_body(request_body: Value) -> Value {
     canonicalize_value(filter_private_params_with_whitelist(request_body, &[]))
+}
+
+fn codex_third_party_needs_image_budget(
+    app_type: &AppType,
+    codex_official_auth_passthrough: bool,
+) -> bool {
+    matches!(app_type, AppType::Codex | AppType::GrokBuild) && !codex_official_auth_passthrough
 }
 
 fn log_prompt_cache_trace(
