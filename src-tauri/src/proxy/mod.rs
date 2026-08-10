@@ -18,6 +18,7 @@ mod handlers;
 mod health;
 pub mod http_client;
 pub mod hyper_client;
+pub(crate) mod image_budget;
 pub(crate) mod json_canonical;
 pub mod log_codes;
 pub mod media_sanitizer;
@@ -33,8 +34,8 @@ pub(crate) mod switch_lock;
 pub mod thinking_budget_rectifier;
 pub mod thinking_optimizer;
 pub mod thinking_rectifier;
-pub mod tool_use_id_rectifier;
 pub(crate) mod tool_media;
+pub mod tool_use_id_rectifier;
 pub(crate) mod types;
 pub mod usage;
 
