@@ -390,35 +390,10 @@ impl ProviderRouter {
             .ok_or_else(|| {
                 AppError::Message("Codex 聚合请求缺少 model，无法选择真实供应商".to_string())
             })?;
-        let route = current_provider
-            .settings_config
-            .get("codexAggregateRoutes")
-            .and_then(Value::as_object)
-            .and_then(|routes| routes.get(request_model))
-            .ok_or_else(|| {
-                AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
-            })?;
-        let (target_provider_id, upstream_model) = if let Some(provider_id) = route.as_str() {
-            (provider_id.trim(), request_model)
-        } else {
-            let provider_id = route
-                .get("providerId")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|provider_id| !provider_id.is_empty())
-                .ok_or_else(|| {
-                    AppError::Message(format!("Codex 聚合模型路由缺少供应商: {request_model}"))
-                })?;
-            let upstream_model = route
-                .get("model")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|model| !model.is_empty())
-                .ok_or_else(|| {
-                    AppError::Message(format!("Codex 聚合模型路由缺少真实模型: {request_model}"))
-                })?;
-            (provider_id, upstream_model)
-        };
+        let (target_provider_id, upstream_model) =
+            Self::resolve_codex_aggregate_route(&current_provider, request_model)?;
+        let target_provider_id = target_provider_id.as_str();
+        let upstream_model = upstream_model.as_str();
         if target_provider_id.is_empty() {
             return Err(AppError::Message(format!(
                 "Codex 聚合模型路由缺少供应商: {request_model}"
@@ -474,6 +449,80 @@ impl ProviderRouter {
             models.push(serde_json::json!({ "model": upstream_model }));
         }
         Ok(Some(target_provider))
+    }
+
+    fn resolve_codex_aggregate_route(
+        current_provider: &Provider,
+        request_model: &str,
+    ) -> Result<(String, String), AppError> {
+        let routes = current_provider
+            .settings_config
+            .get("codexAggregateRoutes")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
+            })?;
+
+        let route = routes
+            .get(request_model)
+            .map(|route| (request_model, route))
+            .or_else(|| {
+                routes
+                    .iter()
+                    .find(|(route_model, route)| {
+                        Self::codex_aggregate_upstream_model(route_model, route)
+                            == Some(request_model)
+                    })
+                    .map(|(route_model, route)| (route_model.as_str(), route))
+            })
+            .ok_or_else(|| {
+                AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
+            })?;
+
+        Self::codex_aggregate_route_target(request_model, route.0, route.1)
+    }
+
+    fn codex_aggregate_upstream_model<'a>(
+        route_model: &'a str,
+        route: &'a Value,
+    ) -> Option<&'a str> {
+        if route.as_str().is_some() {
+            return Some(route_model);
+        }
+        route
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+    }
+
+    fn codex_aggregate_route_target(
+        request_model: &str,
+        route_model: &str,
+        route: &Value,
+    ) -> Result<(String, String), AppError> {
+        let (target_provider_id, upstream_model) = if let Some(provider_id) = route.as_str() {
+            (provider_id.trim().to_string(), route_model.to_string())
+        } else {
+            let provider_id = route
+                .get("providerId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|provider_id| !provider_id.is_empty())
+                .ok_or_else(|| {
+                    AppError::Message(format!("Codex 聚合模型路由缺少供应商: {request_model}"))
+                })?;
+            let upstream_model = route
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .ok_or_else(|| {
+                    AppError::Message(format!("Codex 聚合模型路由缺少真实模型: {request_model}"))
+                })?;
+            (provider_id.to_string(), upstream_model.to_string())
+        };
+        Ok((target_provider_id, upstream_model))
     }
 
     fn resolve_claude_route_target(
@@ -839,6 +888,129 @@ mod tests {
                 .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
                 .and_then(Value::as_str),
             Some("qwen3.8-max")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_aggregate_bare_model_keeps_exact_official_route() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let mut aggregate = Provider::with_id(
+            "codex-multi-provider".to_string(),
+            "Codex Multi Provider".to_string(),
+            json!({
+                "codexAggregateRoutes": {
+                    "gpt-5.6-luna": {
+                        "providerId": "codex-official",
+                        "model": "gpt-5.6-luna"
+                    },
+                    "token-free/gpt-5.6-luna": {
+                        "providerId": "token-free",
+                        "model": "gpt-5.6-luna"
+                    }
+                }
+            }),
+            None,
+        );
+        aggregate.meta = Some(ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        let official = Provider::with_id(
+            "codex-official".to_string(),
+            "OpenAI Official".to_string(),
+            json!({}),
+            None,
+        );
+        let token_free = Provider::with_id(
+            "token-free".to_string(),
+            "token-free".to_string(),
+            json!({}),
+            None,
+        );
+
+        db.save_provider("codex", &aggregate).unwrap();
+        db.save_provider("codex", &official).unwrap();
+        db.save_provider("codex", &token_free).unwrap();
+        db.set_current_provider("codex", "codex-multi-provider")
+            .unwrap();
+
+        let router = ProviderRouter::new(db);
+        let (providers, route_applied) = router
+            .select_providers_for_request("codex", &json!({"model": "gpt-5.6-luna"}))
+            .await
+            .unwrap();
+
+        assert!(route_applied);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "codex-official");
+        assert_eq!(
+            providers[0]
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                .and_then(Value::as_str),
+            Some("gpt-5.6-luna")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_aggregate_bare_model_falls_back_to_first_upstream_match() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let mut aggregate = Provider::with_id(
+            "codex-multi-provider".to_string(),
+            "Codex Multi Provider".to_string(),
+            json!({
+                "codexAggregateRoutes": {
+                    "token-free/gpt-5.6-luna": {
+                        "providerId": "token-free",
+                        "model": "gpt-5.6-luna"
+                    },
+                    "other/gpt-5.6-luna": {
+                        "providerId": "other",
+                        "model": "gpt-5.6-luna"
+                    }
+                }
+            }),
+            None,
+        );
+        aggregate.meta = Some(ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        let token_free = Provider::with_id(
+            "token-free".to_string(),
+            "token-free".to_string(),
+            json!({}),
+            None,
+        );
+        let other = Provider::with_id("other".to_string(), "other".to_string(), json!({}), None);
+
+        db.save_provider("codex", &aggregate).unwrap();
+        db.save_provider("codex", &token_free).unwrap();
+        db.save_provider("codex", &other).unwrap();
+        db.set_current_provider("codex", "codex-multi-provider")
+            .unwrap();
+
+        let router = ProviderRouter::new(db);
+        let (providers, route_applied) = router
+            .select_providers_for_request("codex", &json!({"model": "gpt-5.6-luna"}))
+            .await
+            .unwrap();
+
+        assert!(route_applied);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "token-free");
+        assert_eq!(
+            providers[0]
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                .and_then(Value::as_str),
+            Some("gpt-5.6-luna")
         );
     }
 
