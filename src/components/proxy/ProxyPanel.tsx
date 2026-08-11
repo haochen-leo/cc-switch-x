@@ -87,6 +87,7 @@ export function ProxyPanel({
         routing.haikuProviderId,
         routing.sonnetProviderId,
         routing.opusProviderId,
+        routing.fableProviderId,
       ].some((v) => typeof v === "string" && v.trim().length > 0);
     });
   }, [claudeProvidersData?.providers]);
