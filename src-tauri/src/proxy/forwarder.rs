@@ -40,6 +40,7 @@ use tauri::Manager;
 use tokio::sync::RwLock;
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
+const DEFAULT_UPSTREAM_RESPONSE_TIMEOUT_SECS: u64 = 60;
 
 fn validate_codex_official_authorization(headers: &http::HeaderMap) -> Result<(), ProxyError> {
     let authorization = headers
@@ -2257,9 +2258,11 @@ impl RequestForwarder {
             short_value_hash(Some(&filtered_body))
         );
 
-        // 确定超时
+        // 0 表示不启用应用级超时，但对「等待响应头」保留 60 秒兜底：
+        // 远端接受连接后不回响应头视为无响应，及时断开；响应头已返回说明上游在
+        // 正常生成，不再用该兜底限制响应体/流式输出。
         let timeout = if self.non_streaming_timeout.is_zero() {
-            std::time::Duration::from_secs(600) // 默认 600 秒
+            std::time::Duration::from_secs(DEFAULT_UPSTREAM_RESPONSE_TIMEOUT_SECS)
         } else {
             self.non_streaming_timeout
         };
@@ -2294,6 +2297,7 @@ impl RequestForwarder {
                 // 的首包/静默期超时控制，避免长流被总时长误杀。
                 request = request.timeout(std::time::Duration::from_secs(24 * 60 * 60));
             } else if !self.non_streaming_timeout.is_zero() {
+                // 显式配置的非流式超时：整请求总时限（含响应体读取）。
                 request = request.timeout(self.non_streaming_timeout);
             }
             for (key, value) in &ordered_headers {
@@ -2314,6 +2318,15 @@ impl RequestForwarder {
                             header_timeout.as_secs()
                         ))
                     })?
+            } else if self.non_streaming_timeout.is_zero() {
+                // 未配置总时限：只对等待响应头做兜底超时，send() 返回即拿到响应头，
+                // 之后的响应体读取不受此限制。
+                tokio::time::timeout(timeout, send).await.map_err(|_| {
+                    ProxyError::Timeout(format!(
+                        "上游无响应超时: {}s（未返回响应头）",
+                        timeout.as_secs()
+                    ))
+                })?
             } else {
                 send.await
             };
