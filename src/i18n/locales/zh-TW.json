@@ -1144,7 +1144,8 @@
     "fetchModelsEndpointNotFound": "未找到可用的模型清單端點，請檢查 Base URL 或確認供應商是否開放該 API",
     "fetchModelsTimeout": "請求逾時，請檢查網路連線",
     "claudeRoutingDefault": "預設兜底",
-    "claudeRoutingHint": "可選：按模型類型將請求優先路由到指定供應商；未命中 Haiku、Sonnet、Opus、Fable 時走預設兜底；留空則跟隨當前供應商與故障轉移鏈。"
+    "claudeRoutingFable": "Fable",
+    "claudeRoutingHint": "可選：按模型類型將請求優先路由到指定供應商；留空則跟隨當前供應商與故障轉移鏈。"
   },
   "copilot": {
     "authSection": "GitHub Copilot 驗證",
