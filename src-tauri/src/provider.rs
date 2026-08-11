@@ -395,6 +395,9 @@ pub struct ClaudeModelRouting {
     /// Opus 路由供应商
     #[serde(rename = "opusProviderId", skip_serializing_if = "Option::is_none")]
     pub opus_provider_id: Option<String>,
+    /// Fable 路由供应商
+    #[serde(rename = "fableProviderId", skip_serializing_if = "Option::is_none")]
+    pub fable_provider_id: Option<String>,
 }
 
 impl ClaudeModelRouting {
@@ -428,6 +431,11 @@ impl ClaudeModelRouting {
                 return self.opus_provider_id.as_deref().filter(|s| !s.is_empty());
             }
         }
+        if let Some(ref v) = mapping.fable_model {
+            if model_lower == v.to_lowercase() {
+                return self.fable_provider_id.as_deref().filter(|s| !s.is_empty());
+            }
+        }
         if let Some(ref v) = mapping.default_model {
             if model_lower == v.to_lowercase() {
                 return self
@@ -441,10 +449,13 @@ impl ClaudeModelRouting {
         if model_lower.contains("haiku") {
             return self.haiku_provider_id.as_deref().filter(|s| !s.is_empty());
         }
+        if model_lower.contains("fable") {
+            return self.fable_provider_id.as_deref().filter(|s| !s.is_empty());
+        }
         if model_lower.contains("sonnet") {
             return self.sonnet_provider_id.as_deref().filter(|s| !s.is_empty());
         }
-        if model_lower.contains("opus") || model_lower.contains("fable") {
+        if model_lower.contains("opus") {
             return self.opus_provider_id.as_deref().filter(|s| !s.is_empty());
         }
 
@@ -1207,7 +1218,30 @@ mod tests {
     }
 
     #[test]
-    fn claude_model_routing_maps_fable_to_opus_provider() {
+    fn claude_model_routing_maps_fable_to_fable_provider() {
+        let routing = ClaudeModelRouting {
+            fable_provider_id: Some("provider-fable".to_string()),
+            ..ClaudeModelRouting::default()
+        };
+
+        assert_eq!(
+            routing.resolve_provider_id(
+                "claude-fable-5",
+                &ModelMapping {
+                    haiku_model: None,
+                    sonnet_model: None,
+                    opus_model: None,
+                    fable_model: None,
+                    subagent_model: None,
+                    default_model: None,
+                }
+            ),
+            Some("provider-fable")
+        );
+    }
+
+    #[test]
+    fn claude_model_routing_does_not_fall_back_from_fable_to_opus_provider() {
         let routing = ClaudeModelRouting {
             opus_provider_id: Some("provider-opus".to_string()),
             ..ClaudeModelRouting::default()
@@ -1225,7 +1259,7 @@ mod tests {
                     default_model: None,
                 }
             ),
-            Some("provider-opus")
+            None
         );
     }
 
