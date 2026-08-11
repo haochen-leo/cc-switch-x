@@ -2726,7 +2726,8 @@ impl ProxyService {
         &self,
     ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
         use crate::services::codex_aggregation::{
-            aggregate_provider_stats, codex_aggregation_source_providers, CodexAggregationStatus,
+            aggregate_provider_stats, codex_aggregation_source_providers,
+            read_codex_aggregate_responses_only, CodexAggregationStatus,
             CODEX_AGGREGATE_PROVIDER_ID,
         };
 
@@ -2748,6 +2749,7 @@ impl ProxyService {
             .map(aggregate_provider_stats)
             .unwrap_or((0, 0));
         let source_providers = codex_aggregation_source_providers(self.db.as_ref())?;
+        let responses_only = read_codex_aggregate_responses_only(self.db.as_ref())?;
         let selected_provider_ids = source_providers
             .iter()
             .filter(|source| source.selected)
@@ -2757,6 +2759,7 @@ impl ProxyService {
         Ok(CodexAggregationStatus {
             enabled: takeover_enabled
                 && current_provider.as_deref() == Some(CODEX_AGGREGATE_PROVIDER_ID),
+            responses_only,
             provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
             model_count,
             source_provider_count,
@@ -2810,6 +2813,7 @@ impl ProxyService {
 
         Ok(Some(CodexAggregationStatus {
             enabled: true,
+            responses_only: build.responses_only,
             provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
             model_count: build.model_count,
             source_provider_count: build.source_provider_count,
@@ -2943,6 +2947,7 @@ impl ProxyService {
 
             return Ok(CodexAggregationStatus {
                 enabled: true,
+                responses_only: build.responses_only,
                 provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
                 model_count: build.model_count,
                 source_provider_count: build.source_provider_count,
@@ -3007,6 +3012,43 @@ impl ProxyService {
         let _ = self
             .db
             .set_setting(CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING, "false");
+
+        self.get_codex_aggregation_status().await
+    }
+
+    /// 设置 Codex 多模型聚合是否只收录 Responses 上游供应商。
+    pub async fn set_codex_aggregation_responses_only(
+        &self,
+        responses_only: bool,
+    ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+        use crate::services::codex_aggregation::CODEX_AGGREGATE_RESPONSES_ONLY_SETTING;
+
+        let previous_setting = self
+            .db
+            .get_setting(CODEX_AGGREGATE_RESPONSES_ONLY_SETTING)
+            .map_err(|error| format!("读取原 Codex 聚合 Responses-only 设置失败: {error}"))?;
+        let was_enabled = self.get_codex_aggregation_status().await?.enabled;
+        let serialized = if responses_only { "true" } else { "false" };
+
+        self.db
+            .set_setting(CODEX_AGGREGATE_RESPONSES_ONLY_SETTING, serialized)
+            .map_err(|error| format!("保存 Codex 聚合 Responses-only 设置失败: {error}"))?;
+
+        if was_enabled {
+            match self.refresh_codex_aggregation_if_enabled().await {
+                Ok(Some(status)) => return Ok(status),
+                Ok(None) => {}
+                Err(error) => {
+                    if let Err(restore_error) = self.db.set_setting(
+                        CODEX_AGGREGATE_RESPONSES_ONLY_SETTING,
+                        previous_setting.as_deref().unwrap_or(""),
+                    ) {
+                        log::error!("恢复原 Codex 聚合 Responses-only 设置失败: {restore_error}");
+                    }
+                    return Err(error);
+                }
+            }
+        }
 
         self.get_codex_aggregation_status().await
     }

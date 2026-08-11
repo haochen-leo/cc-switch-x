@@ -91,6 +91,18 @@ pub async fn set_codex_aggregation_sources(
         .await
 }
 
+/// 设置 Codex 多模型聚合是否只收录 Responses 上游供应商。
+#[tauri::command]
+pub async fn set_codex_aggregation_responses_only(
+    state: tauri::State<'_, AppState>,
+    responses_only: bool,
+) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+    state
+        .proxy_service
+        .set_codex_aggregation_responses_only(responses_only)
+        .await
+}
+
 /// 获取代理服务器状态
 #[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
