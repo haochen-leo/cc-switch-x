@@ -22,6 +22,9 @@ pub const CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME: &str = "Codex Multi Provider"
 pub const CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID: &str = "cc-switch-official";
 pub const CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
 const CODEX_PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
+const CODEX_REASONING_EFFORT_MAX: &str = "max";
+const CODEX_DESKTOP_SECTION: &str = "desktop";
+const CODEX_DESKTOP_ENABLED_REASONING_EFFORTS: &str = "enabled-reasoning-efforts";
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -904,10 +907,12 @@ const CODEX_CATALOG_PARSER_REQUIRED_FIELDS: &[&str] = &["supports_reasoning_summ
 /// `ModelInfo` shape — the cache's field set follows whichever process wrote
 /// it last, so it cannot be assumed to satisfy the current external-catalog
 /// schema (observed live: 0.144.5 requires `supports_reasoning_summaries`
-/// while a coexisting build kept rewriting the cache without it). Backfill
-/// ONLY parser-required fields from the bundled static template: optional
-/// capability fields keep their missing-means-default semantics, and existing
-/// values always win.
+/// while a coexisting build kept rewriting the cache without it).
+///
+/// Keep cache/CLI templates as the base so new Codex fields survive, then
+/// layer in cc-switch-owned static additions:
+/// - parser-required fields that are missing, and
+/// - reasoning levels added by cc-switch's bundled template.
 fn fill_template_fields_from_static(template: &mut Value) {
     let Some(static_template) = load_codex_model_template_static() else {
         return;
@@ -923,6 +928,52 @@ fn fill_template_fields_from_static(template: &mut Value) {
                 template_obj.insert((*key).to_string(), value.clone());
             }
         }
+    }
+
+    merge_supported_reasoning_levels_from_static(template_obj, static_obj);
+}
+
+fn merge_supported_reasoning_levels_from_static(
+    template_obj: &mut serde_json::Map<String, Value>,
+    static_obj: &serde_json::Map<String, Value>,
+) {
+    let Some(static_levels) = static_obj
+        .get("supported_reasoning_levels")
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+
+    let existing_efforts = template_obj
+        .get("supported_reasoning_levels")
+        .and_then(Value::as_array)
+        .map(|levels| {
+            levels
+                .iter()
+                .filter_map(|level| level.get("effort").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+
+    if let Some(target_levels) = template_obj
+        .get_mut("supported_reasoning_levels")
+        .and_then(Value::as_array_mut)
+    {
+        let mut seen = existing_efforts;
+        for level in static_levels {
+            let Some(effort) = level.get("effort").and_then(Value::as_str) else {
+                continue;
+            };
+            if seen.insert(effort.to_string()) {
+                target_levels.push(level.clone());
+            }
+        }
+    } else {
+        template_obj.insert(
+            "supported_reasoning_levels".to_string(),
+            Value::Array(static_levels.clone()),
+        );
     }
 }
 
@@ -1038,6 +1089,58 @@ fn set_codex_model_catalog_json_field(
     Ok(doc.to_string())
 }
 
+fn catalog_supports_reasoning_effort(catalog: &Value, effort: &str) -> bool {
+    catalog
+        .get("models")
+        .and_then(Value::as_array)
+        .is_some_and(|models| {
+            models.iter().any(|model| {
+                model
+                    .get("supported_reasoning_levels")
+                    .and_then(Value::as_array)
+                    .is_some_and(|levels| {
+                        levels
+                            .iter()
+                            .filter_map(|level| level.get("effort").and_then(Value::as_str))
+                            .any(|candidate| candidate == effort)
+                    })
+            })
+        })
+}
+
+fn ensure_codex_desktop_reasoning_effort(
+    config_text: &str,
+    effort: &str,
+) -> Result<String, AppError> {
+    let mut doc = config_text
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
+
+    if doc.get(CODEX_DESKTOP_SECTION).is_none() {
+        doc[CODEX_DESKTOP_SECTION] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    let Some(desktop) = doc[CODEX_DESKTOP_SECTION].as_table_mut() else {
+        return Ok(config_text.to_string());
+    };
+
+    let key = CODEX_DESKTOP_ENABLED_REASONING_EFFORTS;
+    if let Some(array) = desktop.get_mut(key).and_then(|item| item.as_array_mut()) {
+        let exists = array.iter().any(|item| item.as_str() == Some(effort));
+        if !exists {
+            array.push(effort);
+        }
+    } else {
+        let mut array = toml_edit::Array::new();
+        for value in ["low", "medium", "high", "xhigh", effort] {
+            array.push(value);
+        }
+        desktop.insert(key, toml_edit::Item::Value(toml_edit::Value::Array(array)));
+    }
+
+    Ok(doc.to_string())
+}
+
 /// Pure toggle for the top-level `web_search` field that turns Codex's built-in
 /// web-search tool off. When `disable` is true we write `web_search = "disabled"`
 /// (the catalog's `supports_search_tool` does NOT gate this — the request-time
@@ -1079,7 +1182,11 @@ pub fn prepare_codex_config_text_with_model_catalog(
     let catalog_path = get_codex_model_catalog_path();
 
     if let Some(catalog) = codex_model_catalog_from_settings(settings, config_text, profile)? {
-        let config_text = set_codex_model_catalog_json_field(config_text, Some(&catalog_path))?;
+        let mut config_text = set_codex_model_catalog_json_field(config_text, Some(&catalog_path))?;
+        if catalog_supports_reasoning_effort(&catalog, CODEX_REASONING_EFFORT_MAX) {
+            config_text =
+                ensure_codex_desktop_reasoning_effort(&config_text, CODEX_REASONING_EFFORT_MAX)?;
+        }
         // Disable web_search only for native gateways on the reject blacklist
         // (MiMo/LongCat/MiniMax by host or model brand; Qwen3-Coder by model).
         // Everything else — relays, DouBao, web-search-capable Qwen models,
@@ -2124,6 +2231,80 @@ mod tests {
         assert_eq!(
             CodexCatalogToolProfile::from_api_format(None),
             CodexCatalogToolProfile::ProxyChat
+        );
+    }
+
+    #[test]
+    fn desktop_reasoning_efforts_appends_max_without_replacing_existing_values() {
+        let input = r#"[desktop]
+enabled-reasoning-efforts = ["low", "medium", "high", "xhigh"]
+"#;
+
+        let result =
+            ensure_codex_desktop_reasoning_effort(input, CODEX_REASONING_EFFORT_MAX).unwrap();
+        let parsed: toml::Value = toml::from_str(&result).unwrap();
+        let efforts = parsed
+            .get("desktop")
+            .and_then(|desktop| desktop.get("enabled-reasoning-efforts"))
+            .and_then(toml::Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert_eq!(efforts, vec!["low", "medium", "high", "xhigh", "max"]);
+    }
+
+    #[test]
+    fn catalog_supports_reasoning_effort_detects_model_level_max() {
+        let catalog = json!({
+            "models": [
+                {
+                    "slug": "token-free/gpt-5.6-sol",
+                    "supported_reasoning_levels": [
+                        { "effort": "low" },
+                        { "effort": "xhigh" },
+                        { "effort": "max" }
+                    ]
+                }
+            ]
+        });
+
+        assert!(catalog_supports_reasoning_effort(
+            &catalog,
+            CODEX_REASONING_EFFORT_MAX
+        ));
+    }
+
+    #[test]
+    fn static_template_reasoning_levels_are_merged_into_cache_template() {
+        let mut template = json!({
+            "slug": "gpt-5.5",
+            "supports_reasoning_summaries": true,
+            "supported_reasoning_levels": [
+                { "effort": "low" },
+                { "effort": "medium" },
+                { "effort": "high" },
+                { "effort": "xhigh" }
+            ]
+        });
+
+        fill_template_fields_from_static(&mut template);
+        let efforts = template
+            .get("supported_reasoning_levels")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|level| level.get("effort").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(efforts.contains(&CODEX_REASONING_EFFORT_MAX));
+        assert_eq!(
+            efforts
+                .iter()
+                .filter(|effort| **effort == CODEX_REASONING_EFFORT_MAX)
+                .count(),
+            1
         );
     }
 
