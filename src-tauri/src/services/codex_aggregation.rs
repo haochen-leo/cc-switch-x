@@ -11,6 +11,7 @@ pub const CODEX_AGGREGATE_PROVIDER_ID: &str = "codex-multi-provider";
 pub const CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING: &str = "codex_aggregate_previous_provider";
 pub const CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING: &str = "codex_aggregate_previous_takeover";
 pub const CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING: &str = "codex_aggregate_source_providers";
+pub const CODEX_AGGREGATE_RESPONSES_ONLY_SETTING: &str = "codex_aggregate_responses_only";
 pub const CODEX_AGGREGATE_UPSTREAM_MODEL_KEY: &str = "codexAggregateUpstreamModel";
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,12 +21,15 @@ pub struct CodexAggregationSourceProvider {
     pub name: String,
     pub official: bool,
     pub selected: bool,
+    pub conversion_required: bool,
+    pub aggregation_eligible: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexAggregationStatus {
     pub enabled: bool,
+    pub responses_only: bool,
     pub provider_id: String,
     pub model_count: usize,
     pub source_provider_count: usize,
@@ -38,6 +42,7 @@ impl CodexAggregationStatus {
     pub fn disabled() -> Self {
         Self {
             enabled: false,
+            responses_only: true,
             provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
             model_count: 0,
             source_provider_count: 0,
@@ -50,6 +55,7 @@ impl CodexAggregationStatus {
 
 pub struct CodexAggregationBuild {
     pub provider: Provider,
+    pub responses_only: bool,
     pub model_count: usize,
     pub source_provider_count: usize,
     pub selected_provider_ids: Vec<String>,
@@ -74,6 +80,13 @@ fn read_configured_source_provider_ids(db: &Database) -> Result<Option<HashSet<S
         .collect::<HashSet<_>>();
 
     Ok((!ids.is_empty()).then_some(ids))
+}
+
+pub fn read_codex_aggregate_responses_only(db: &Database) -> Result<bool, String> {
+    let raw = db
+        .get_setting(CODEX_AGGREGATE_RESPONSES_ONLY_SETTING)
+        .map_err(|error| format!("读取 Codex 聚合 Responses-only 设置失败: {error}"))?;
+    Ok(raw.as_deref() != Some("false"))
 }
 
 fn real_codex_source_providers(providers: impl IntoIterator<Item = Provider>) -> Vec<Provider> {
@@ -109,6 +122,7 @@ fn resolve_selected_provider_ids(
 fn source_provider_statuses(
     providers: &[Provider],
     selected_provider_ids: &HashSet<String>,
+    responses_only: bool,
 ) -> Vec<CodexAggregationSourceProvider> {
     providers
         .iter()
@@ -117,8 +131,19 @@ fn source_provider_statuses(
             name: provider.name.clone(),
             official: provider.id == CODEX_OFFICIAL_PROVIDER_ID,
             selected: selected_provider_ids.contains(&provider.id),
+            conversion_required: provider_requires_protocol_conversion(provider),
+            aggregation_eligible: provider_matches_aggregation_mode(provider, responses_only),
         })
         .collect()
+}
+
+fn provider_requires_protocol_conversion(provider: &Provider) -> bool {
+    crate::proxy::providers::codex_provider_uses_chat_completions(provider)
+        || crate::proxy::providers::codex_provider_uses_anthropic(provider)
+}
+
+fn provider_matches_aggregation_mode(provider: &Provider, responses_only: bool) -> bool {
+    !responses_only || !provider_requires_protocol_conversion(provider)
 }
 
 pub fn codex_aggregation_source_providers(
@@ -129,9 +154,19 @@ pub fn codex_aggregation_source_providers(
             .map_err(|error| format!("读取 Codex 供应商失败: {error}"))?
             .into_values(),
     );
+    let responses_only = read_codex_aggregate_responses_only(db)?;
+    let eligible_providers = providers
+        .iter()
+        .filter(|provider| provider_matches_aggregation_mode(provider, responses_only))
+        .cloned()
+        .collect::<Vec<_>>();
     let configured = read_configured_source_provider_ids(db)?;
-    let selected = resolve_selected_provider_ids(&providers, configured.as_ref());
-    Ok(source_provider_statuses(&providers, &selected))
+    let selected = resolve_selected_provider_ids(&eligible_providers, configured.as_ref());
+    Ok(source_provider_statuses(
+        &providers,
+        &selected,
+        responses_only,
+    ))
 }
 
 pub fn normalize_codex_aggregation_source_ids(
@@ -141,6 +176,7 @@ pub fn normalize_codex_aggregation_source_ids(
     let sources = codex_aggregation_source_providers(db)?;
     let available_ids = sources
         .iter()
+        .filter(|source| source.aggregation_eligible)
         .map(|source| source.provider_id.as_str())
         .collect::<HashSet<_>>();
     let requested = requested_provider_ids
@@ -151,6 +187,16 @@ pub fn normalize_codex_aggregation_source_ids(
 
     if requested.is_empty() {
         return Err("Codex 多模型至少选择一个供应商".to_string());
+    }
+    if let Some(source) = requested.iter().find_map(|provider_id| {
+        sources
+            .iter()
+            .find(|source| source.provider_id == **provider_id && !source.aggregation_eligible)
+    }) {
+        return Err(format!(
+            "Codex 聚合来源供应商需要协议转换，当前模式不可选择: {}",
+            source.name
+        ));
     }
     if let Some(provider_id) = requested
         .iter()
@@ -172,6 +218,7 @@ pub fn serialize_codex_aggregation_source_ids(
 ) -> Result<String, String> {
     let all_provider_ids = codex_aggregation_source_providers(db)?
         .into_iter()
+        .filter(|source| source.aggregation_eligible)
         .map(|source| source.provider_id)
         .collect::<Vec<_>>();
     if all_provider_ids == selected_provider_ids {
@@ -192,16 +239,22 @@ pub async fn build_codex_aggregate_provider(
         .get_all_providers(AppType::Codex.as_str())
         .map_err(|error| format!("读取 Codex 供应商失败: {error}"))?;
     let source_providers = real_codex_source_providers(providers.into_values());
+    let responses_only = read_codex_aggregate_responses_only(db)?;
     let official = source_providers
         .iter()
         .find(|provider| provider.id == CODEX_OFFICIAL_PROVIDER_ID)
         .cloned()
         .ok_or_else(|| "缺少 OpenAI Official 供应商，无法创建 Codex 聚合入口".to_string())?;
     let configured = read_configured_source_provider_ids(db)?;
+    let eligible_source_providers = source_providers
+        .iter()
+        .filter(|provider| provider_matches_aggregation_mode(provider, responses_only))
+        .cloned()
+        .collect::<Vec<_>>();
     let selected_provider_ids =
-        resolve_selected_provider_ids(&source_providers, configured.as_ref());
+        resolve_selected_provider_ids(&eligible_source_providers, configured.as_ref());
     let source_provider_statuses =
-        source_provider_statuses(&source_providers, &selected_provider_ids);
+        source_provider_statuses(&source_providers, &selected_provider_ids, responses_only);
     let selected_provider_ids_in_order = source_provider_statuses
         .iter()
         .filter(|source| source.selected)
@@ -314,6 +367,7 @@ pub async fn build_codex_aggregate_provider(
     });
 
     Ok(CodexAggregationBuild {
+        responses_only,
         model_count: provider
             .settings_config
             .pointer("/modelCatalog/models")
@@ -736,6 +790,51 @@ mod tests {
         assert_eq!(providers.len(), 2);
         assert!(selected.contains(CODEX_OFFICIAL_PROVIDER_ID));
         assert!(selected.contains("provider-a"));
+    }
+
+    #[test]
+    fn responses_only_filters_conversion_source_providers() {
+        let db = Database::memory().expect("in-memory database");
+        let mut official = Provider::with_id(
+            CODEX_OFFICIAL_PROVIDER_ID.to_string(),
+            "OpenAI Official".to_string(),
+            json!({}),
+            None,
+        );
+        official.category = Some("official".to_string());
+        let chat_provider = Provider::with_id(
+            "provider-chat".to_string(),
+            "Provider Chat".to_string(),
+            json!({ "apiFormat": "openai_chat" }),
+            None,
+        );
+        db.save_provider(AppType::Codex.as_str(), &official)
+            .expect("save official");
+        db.save_provider(AppType::Codex.as_str(), &chat_provider)
+            .expect("save chat provider");
+
+        let sources = codex_aggregation_source_providers(&db).expect("sources");
+        let chat = sources
+            .iter()
+            .find(|source| source.provider_id == "provider-chat")
+            .expect("chat source");
+        assert!(chat.conversion_required);
+        assert!(!chat.aggregation_eligible);
+        assert!(!chat.selected);
+        assert!(
+            normalize_codex_aggregation_source_ids(&db, &[String::from("provider-chat")]).is_err()
+        );
+
+        db.set_setting(CODEX_AGGREGATE_RESPONSES_ONLY_SETTING, "false")
+            .expect("disable responses-only");
+        let sources = codex_aggregation_source_providers(&db).expect("sources");
+        let chat = sources
+            .iter()
+            .find(|source| source.provider_id == "provider-chat")
+            .expect("chat source");
+        assert!(chat.conversion_required);
+        assert!(chat.aggregation_eligible);
+        assert!(chat.selected);
     }
 
     #[tokio::test]
