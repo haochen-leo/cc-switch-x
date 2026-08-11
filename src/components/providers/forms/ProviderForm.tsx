@@ -151,6 +151,8 @@ type ClaudeRoutingProviderSlotValues = {
   sonnetDisplayName: string;
   opusModel: string;
   opusDisplayName: string;
+  fableModel: string;
+  fableDisplayName: string;
 };
 
 function getProviderEnvString(provider: Provider, key: string): string {
@@ -182,6 +184,11 @@ function getClaudeRoutingProviderSlotValues(
       provider,
       "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
     ),
+    fableModel: getProviderEnvString(provider, "ANTHROPIC_DEFAULT_FABLE_MODEL"),
+    fableDisplayName: getProviderEnvString(
+      provider,
+      "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+    ),
   };
 }
 
@@ -190,10 +197,10 @@ function hasClaudeModelRoutingValues(
 ): boolean {
   if (!routing) return false;
   return [
-    routing.defaultProviderId,
     routing.haikuProviderId,
     routing.sonnetProviderId,
     routing.opusProviderId,
+    routing.fableProviderId,
   ].some((value) => typeof value === "string" && value.trim().length > 0);
 }
 
@@ -559,10 +566,10 @@ function ProviderFormFull({
   const handleClaudeModelRoutingChange = useCallback(
     (
       field:
-        | "defaultProviderId"
         | "haikuProviderId"
         | "sonnetProviderId"
-        | "opusProviderId",
+        | "opusProviderId"
+        | "fableProviderId",
       value: string,
     ) => {
       setClaudeModelRouting((prev) => ({
@@ -1708,10 +1715,10 @@ function ProviderFormFull({
       appId === "claude" && claudeModelRoutingEnabled
         ? (() => {
             const normalized: ClaudeModelRouting = {
-              defaultProviderId: claudeModelRouting.defaultProviderId?.trim(),
               haikuProviderId: claudeModelRouting.haikuProviderId?.trim(),
               sonnetProviderId: claudeModelRouting.sonnetProviderId?.trim(),
               opusProviderId: claudeModelRouting.opusProviderId?.trim(),
+              fableProviderId: claudeModelRouting.fableProviderId?.trim(),
             };
             const hasAny = hasClaudeModelRoutingValues(normalized);
             return hasAny ? normalized : undefined;

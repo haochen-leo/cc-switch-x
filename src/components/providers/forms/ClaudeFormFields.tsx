@@ -85,6 +85,8 @@ interface RoutingProviderOption {
     sonnetDisplayName: string;
     opusModel: string;
     opusDisplayName: string;
+    fableModel: string;
+    fableDisplayName: string;
   };
 }
 
@@ -175,10 +177,10 @@ interface ClaudeFormFieldsProps {
   onClaudeModelRoutingEnabledChange: (enabled: boolean) => void;
   onClaudeModelRoutingChange: (
     field:
-      | "defaultProviderId"
       | "haikuProviderId"
       | "sonnetProviderId"
-      | "opusProviderId",
+      | "opusProviderId"
+      | "fableProviderId",
     value: string,
   ) => void;
   routingProviderOptions: RoutingProviderOption[];
@@ -273,10 +275,10 @@ export function ClaudeFormFields({
   const { t } = useTranslation();
   const inheritValue = "__inherit__";
   const hasAnyRoutingValue = !!(
-    claudeModelRouting.defaultProviderId ||
     claudeModelRouting.haikuProviderId ||
     claudeModelRouting.sonnetProviderId ||
-    claudeModelRouting.opusProviderId
+    claudeModelRouting.opusProviderId ||
+    claudeModelRouting.fableProviderId
   );
   const hasRequestOverrides = Boolean(
     localProxyHeadersOverride.trim() || localProxyBodyOverride.trim(),
@@ -755,13 +757,6 @@ export function ClaudeFormFields({
     routingProviderOptions.map((provider) => [provider.id, provider]),
   ) as Record<string, RoutingProviderOption>;
 
-  const defaultRoutingProvider = claudeModelRouting.defaultProviderId
-    ? routingProviderById[claudeModelRouting.defaultProviderId]
-    : undefined;
-  const effectiveFallbackModel = defaultRoutingProvider
-    ? defaultRoutingProvider.slots.defaultModel
-    : claudeModel;
-  const effectiveFallbackUsesOneM = hasClaudeOneMMarker(effectiveFallbackModel);
   const haikuRoutingProvider = claudeModelRouting.haikuProviderId
     ? routingProviderById[claudeModelRouting.haikuProviderId]
     : undefined;
@@ -771,11 +766,15 @@ export function ClaudeFormFields({
   const opusRoutingProvider = claudeModelRouting.opusProviderId
     ? routingProviderById[claudeModelRouting.opusProviderId]
     : undefined;
+  const fableRoutingProvider = claudeModelRouting.fableProviderId
+    ? routingProviderById[claudeModelRouting.fableProviderId]
+    : undefined;
 
   const getRoleRoutingProvider = (role: ModelRoleRow["role"]) => {
     if (role === "haiku") return haikuRoutingProvider;
     if (role === "sonnet") return sonnetRoutingProvider;
     if (role === "opus") return opusRoutingProvider;
+    if (role === "fable") return fableRoutingProvider;
     return undefined;
   };
 
@@ -1111,7 +1110,9 @@ export function ClaudeFormFields({
                       ? (routedProvider?.slots.sonnetModel ?? "")
                       : row.role === "opus"
                         ? (routedProvider?.slots.opusModel ?? "")
-                        : "";
+                        : row.role === "fable"
+                          ? (routedProvider?.slots.fableModel ?? "")
+                          : "";
                 const routedDisplayName =
                   row.role === "haiku"
                     ? (routedProvider?.slots.haikuDisplayName ?? "")
@@ -1119,7 +1120,9 @@ export function ClaudeFormFields({
                       ? (routedProvider?.slots.sonnetDisplayName ?? "")
                       : row.role === "opus"
                         ? (routedProvider?.slots.opusDisplayName ?? "")
-                        : "";
+                        : row.role === "fable"
+                          ? (routedProvider?.slots.fableDisplayName ?? "")
+                          : "";
                 const effectiveModelBase = routedProvider
                   ? stripClaudeOneMMarker(routedModel)
                   : modelBase;
@@ -1223,7 +1226,7 @@ export function ClaudeFormFields({
               <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_minmax(0,104px)]">
                 {renderModelInput(
                   "claudeModel",
-                  stripClaudeOneMMarker(effectiveFallbackModel),
+                  stripClaudeOneMMarker(claudeModel),
                   "ANTHROPIC_MODEL",
                   t("providerForm.modelPlaceholder", { defaultValue: "" }),
                   (value) =>
@@ -1231,11 +1234,11 @@ export function ClaudeFormFields({
                       "ANTHROPIC_MODEL",
                       setClaudeOneMMarker(value, fallbackUsesOneM),
                     ),
-                  Boolean(defaultRoutingProvider),
+                  false,
                 )}
                 <label className="flex h-9 items-center gap-2 text-sm text-muted-foreground">
                   <Checkbox
-                    checked={effectiveFallbackUsesOneM}
+                    checked={fallbackUsesOneM}
                     onCheckedChange={(checked) => {
                       const base = stripClaudeOneMMarker(claudeModel).trim();
                       if (!base) return;
@@ -1244,7 +1247,7 @@ export function ClaudeFormFields({
                         setClaudeOneMMarker(base, checked === true),
                       );
                     }}
-                    disabled={Boolean(defaultRoutingProvider)}
+                    disabled={false}
                   />
                   {t("providerForm.modelOneMLabel", {
                     defaultValue: "1M",
@@ -1252,22 +1255,10 @@ export function ClaudeFormFields({
                 </label>
               </div>
               <p className="text-xs text-muted-foreground">
-                {defaultRoutingProvider
-                  ? defaultRoutingProvider.slots.defaultModel
-                    ? t("providerForm.claudeRoutingDefaultEffectiveHint", {
-                        defaultValue:
-                          "当前已配置默认兜底路由到 {{provider}}。未命中其他档位时，将使用该供应商的默认兜底模型。",
-                        provider: defaultRoutingProvider.name,
-                      })
-                    : t("providerForm.claudeRoutingDefaultMissingHint", {
-                        defaultValue:
-                          "当前已配置默认兜底路由到 {{provider}}，但该供应商尚未配置默认兜底模型，请到目标供应商中补齐。",
-                        provider: defaultRoutingProvider.name,
-                      })
-                  : t("providerForm.fallbackModelHint", {
-                      defaultValue:
-                        "用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方/中转端点时建议填写：否则这些请求（含 Haiku 后台子任务）会以原始 Claude 模型名透传给上游，可能因上游无此模型而报错。官方端点可留空。",
-                    })}
+                {t("providerForm.fallbackModelHint", {
+                  defaultValue:
+                    "用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方/中转端点时建议填写：否则这些请求（含 Haiku 后台子任务）会以原始 Claude 模型名透传给上游，可能因上游无此模型而报错。官方端点可留空。",
+                })}
               </p>
             </div>
 
@@ -1317,44 +1308,6 @@ export function ClaudeFormFields({
                     </p>
                   ) : null}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <FormLabel htmlFor="routingDefaultProvider">
-                        {t("providerForm.claudeRoutingDefault", {
-                          defaultValue: "默认兜底",
-                        })}
-                      </FormLabel>
-                      <Select
-                        value={
-                          claudeModelRouting.defaultProviderId || inheritValue
-                        }
-                        onValueChange={(value) =>
-                          onClaudeModelRoutingChange(
-                            "defaultProviderId",
-                            value === inheritValue ? "" : value,
-                          )
-                        }
-                      >
-                        <SelectTrigger
-                          id="routingDefaultProvider"
-                          className="w-full"
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={inheritValue}>
-                            {t("providerForm.claudeRoutingInheritCurrent", {
-                              defaultValue: "跟随当前供应商",
-                            })}
-                          </SelectItem>
-                          {routingProviderOptions.map((provider) => (
-                            <SelectItem key={provider.id} value={provider.id}>
-                              {provider.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
                     <div className="space-y-2">
                       <FormLabel htmlFor="routingHaikuProvider">
                         {t("providerForm.claudeRoutingHaiku", {
@@ -1468,11 +1421,49 @@ export function ClaudeFormFields({
                         </SelectContent>
                       </Select>
                     </div>
+
+                    <div className="space-y-2">
+                      <FormLabel htmlFor="routingFableProvider">
+                        {t("providerForm.claudeRoutingFable", {
+                          defaultValue: "Fable",
+                        })}
+                      </FormLabel>
+                      <Select
+                        value={
+                          claudeModelRouting.fableProviderId || inheritValue
+                        }
+                        onValueChange={(value) =>
+                          onClaudeModelRoutingChange(
+                            "fableProviderId",
+                            value === inheritValue ? "" : value,
+                          )
+                        }
+                      >
+                        <SelectTrigger
+                          id="routingFableProvider"
+                          className="w-full"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={inheritValue}>
+                            {t("providerForm.claudeRoutingInheritCurrent", {
+                              defaultValue: "跟随当前供应商",
+                            })}
+                          </SelectItem>
+                          {routingProviderOptions.map((provider) => (
+                            <SelectItem key={provider.id} value={provider.id}>
+                              {provider.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {t("providerForm.claudeRoutingHint", {
                       defaultValue:
-                        "可选：按模型类型将请求优先路由到指定供应商；未命中 Haiku、Sonnet、Opus、Fable 时走“默认兜底”；留空则跟随当前供应商与故障转移链。",
+                        "可选：按模型类型将请求优先路由到指定供应商；留空则跟随当前供应商与故障转移链。",
                     })}
                   </p>
                 </>

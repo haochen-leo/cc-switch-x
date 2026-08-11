@@ -130,6 +130,7 @@ export interface ClaudeModelRouting {
   haikuProviderId?: string;
   sonnetProviderId?: string;
   opusProviderId?: string;
+  fableProviderId?: string;
 }
 
 export type CodexChatThinkingParam =

@@ -202,6 +202,8 @@ describe("ClaudeFormFields", () => {
             sonnetDisplayName: "B Sonnet",
             opusModel: "",
             opusDisplayName: "",
+            fableModel: "",
+            fableDisplayName: "",
           },
         },
       ],
