@@ -48,9 +48,9 @@ const CHAT_TOOL_NAME_MAX_LEN: usize = 64;
 const CUSTOM_TOOL_INPUT_DESCRIPTION: &str = "Raw string input for the original custom tool. Preserve formatting exactly and follow the original tool definition embedded in the description.";
 const CUSTOM_TOOL_PRESERVED_METADATA_HEADING: &str = "Original tool definition:";
 
-/// Normalize third-party replay metadata before forwarding mixed-provider
-/// history to an OpenAI official Responses endpoint.
-pub(crate) fn normalize_replayed_item_ids_for_openai(body: &mut Value) -> usize {
+/// Normalize replay metadata before forwarding mixed-provider history to a
+/// native Responses upstream.
+pub(crate) fn normalize_replayed_item_ids_for_responses_upstream(body: &mut Value) -> usize {
     let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
         return 0;
     };
@@ -77,10 +77,19 @@ pub(crate) fn normalize_replayed_item_ids_for_openai(body: &mut Value) -> usize 
             item.get("type")
                 .and_then(Value::as_str)
                 .and_then(|item_type| match item_type {
+                    "additional_tools" => Some("at_"),
                     "message" => Some("msg_"),
+                    "agent_message" => Some("amsg_"),
+                    "local_shell_call" => Some("lsh_"),
                     "function_call" => Some("fc_"),
+                    "function_call_output" => Some("fco_"),
                     "custom_tool_call" => Some("ctc_"),
+                    "custom_tool_call_output" => Some("ctco_"),
+                    "tool_search_call" => Some("tsc_"),
+                    "tool_search_output" => Some("tso_"),
                     "web_search_call" => Some("ws_"),
+                    "image_generation_call" => Some("ig_"),
+                    "compaction" | "context_compaction" => Some("cmp_"),
                     _ => None,
                 })
         else {
@@ -2009,20 +2018,50 @@ mod tests {
     }
 
     #[test]
-    fn openai_request_normalizes_noncanonical_message_and_tool_item_ids() {
+    fn responses_upstream_normalizes_noncanonical_replayed_item_ids() {
+        let additional_tools_id = "msg_vendor_additional_tools";
         let message_id = "resp_chatcmpl-52be6db9-2144-9f90-b09a-9802ddf11929_msg";
+        let agent_message_id = "msg_vendor_agent_message";
+        let local_shell_id = "call_vendor_local_shell";
         let function_id = "call_vendor_function";
+        let function_output_id = "msg_vendor_function_output";
         let custom_id = "call_vendor_custom";
+        let custom_output_id = "msg_vendor_custom_output";
+        let tool_search_id = "msg_vendor_tool_search";
+        let tool_search_output_id = "msg_vendor_tool_search_output";
         let web_search_id = "call_vendor_web_search";
+        let image_generation_id = "msg_vendor_image_generation";
+        let compaction_id = "msg_vendor_compaction";
+        let context_compaction_id = "msg_vendor_context_compaction";
         let mut body = json!({
             "model": "gpt-5.6-sol",
             "input": [
+                {
+                    "id": additional_tools_id,
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": []
+                },
                 {
                     "id": message_id,
                     "type": "message",
                     "role": "assistant",
                     "status": "completed",
                     "content": [{"type": "output_text", "text": "done"}]
+                },
+                {
+                    "id": agent_message_id,
+                    "type": "agent_message",
+                    "author": "assistant",
+                    "recipient": "user",
+                    "content": [{"type": "input_text", "text": "agent done"}]
+                },
+                {
+                    "id": local_shell_id,
+                    "type": "local_shell_call",
+                    "call_id": "call_shell",
+                    "status": "completed",
+                    "action": {"type": "exec", "command": ["echo", "ok"]}
                 },
                 {
                     "id": function_id,
@@ -2033,6 +2072,12 @@ mod tests {
                     "arguments": "{}"
                 },
                 {
+                    "id": function_output_id,
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "file contents"
+                },
+                {
                     "id": custom_id,
                     "type": "custom_tool_call",
                     "status": "completed",
@@ -2041,32 +2086,218 @@ mod tests {
                     "input": "*** Begin Patch"
                 },
                 {
+                    "id": custom_output_id,
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_2",
+                    "output": "Done!"
+                },
+                {
+                    "id": tool_search_id,
+                    "type": "tool_search_call",
+                    "call_id": "call_3",
+                    "status": "completed",
+                    "execution": "client",
+                    "arguments": {"query": "browser"}
+                },
+                {
+                    "id": tool_search_output_id,
+                    "type": "tool_search_output",
+                    "call_id": "call_3",
+                    "status": "completed",
+                    "execution": "client",
+                    "tools": [{"name": "browser"}]
+                },
+                {
                     "id": web_search_id,
                     "type": "web_search_call",
                     "status": "completed"
+                },
+                {
+                    "id": image_generation_id,
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "result": "Zm9v"
+                },
+                {
+                    "id": compaction_id,
+                    "type": "compaction",
+                    "encrypted_content": "encrypted-summary"
+                },
+                {
+                    "id": context_compaction_id,
+                    "type": "context_compaction",
+                    "encrypted_content": "encrypted-context"
                 }
             ]
         });
 
-        assert_eq!(normalize_replayed_item_ids_for_openai(&mut body), 4);
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            14
+        );
         assert_eq!(
             body["input"][0]["id"],
-            format!("msg_ccswitch_{}", short_sha256_hex(message_id.as_bytes()))
+            format!(
+                "at_ccswitch_{}",
+                short_sha256_hex(additional_tools_id.as_bytes())
+            )
         );
         assert_eq!(
             body["input"][1]["id"],
-            format!("fc_ccswitch_{}", short_sha256_hex(function_id.as_bytes()))
+            format!("msg_ccswitch_{}", short_sha256_hex(message_id.as_bytes()))
         );
         assert_eq!(
             body["input"][2]["id"],
-            format!("ctc_ccswitch_{}", short_sha256_hex(custom_id.as_bytes()))
+            format!(
+                "amsg_ccswitch_{}",
+                short_sha256_hex(agent_message_id.as_bytes())
+            )
         );
         assert_eq!(
             body["input"][3]["id"],
+            format!(
+                "lsh_ccswitch_{}",
+                short_sha256_hex(local_shell_id.as_bytes())
+            )
+        );
+        assert_eq!(
+            body["input"][4]["id"],
+            format!("fc_ccswitch_{}", short_sha256_hex(function_id.as_bytes()))
+        );
+        assert_eq!(
+            body["input"][5]["id"],
+            format!(
+                "fco_ccswitch_{}",
+                short_sha256_hex(function_output_id.as_bytes())
+            )
+        );
+        assert_eq!(
+            body["input"][6]["id"],
+            format!("ctc_ccswitch_{}", short_sha256_hex(custom_id.as_bytes()))
+        );
+        assert_eq!(
+            body["input"][7]["id"],
+            format!(
+                "ctco_ccswitch_{}",
+                short_sha256_hex(custom_output_id.as_bytes())
+            )
+        );
+        assert_eq!(
+            body["input"][8]["id"],
+            format!(
+                "tsc_ccswitch_{}",
+                short_sha256_hex(tool_search_id.as_bytes())
+            )
+        );
+        assert_eq!(
+            body["input"][9]["id"],
+            format!(
+                "tso_ccswitch_{}",
+                short_sha256_hex(tool_search_output_id.as_bytes())
+            )
+        );
+        assert_eq!(
+            body["input"][10]["id"],
             format!("ws_ccswitch_{}", short_sha256_hex(web_search_id.as_bytes()))
         );
-        assert_eq!(body["input"][1]["call_id"], "call_1");
-        assert_eq!(body["input"][2]["call_id"], "call_2");
+        assert_eq!(
+            body["input"][11]["id"],
+            format!(
+                "ig_ccswitch_{}",
+                short_sha256_hex(image_generation_id.as_bytes())
+            )
+        );
+        assert_eq!(
+            body["input"][12]["id"],
+            format!(
+                "cmp_ccswitch_{}",
+                short_sha256_hex(compaction_id.as_bytes())
+            )
+        );
+        assert_eq!(
+            body["input"][13]["id"],
+            format!(
+                "cmp_ccswitch_{}",
+                short_sha256_hex(context_compaction_id.as_bytes())
+            )
+        );
+        assert_eq!(body["input"][3]["call_id"], "call_shell");
+        assert_eq!(body["input"][3]["action"]["type"], "exec");
+        assert_eq!(body["input"][4]["call_id"], "call_1");
+        assert_eq!(body["input"][5]["call_id"], "call_1");
+        assert_eq!(body["input"][5]["output"], "file contents");
+        assert_eq!(body["input"][6]["call_id"], "call_2");
+        assert_eq!(body["input"][7]["call_id"], "call_2");
+        assert_eq!(body["input"][7]["output"], "Done!");
+        assert_eq!(body["input"][8]["call_id"], "call_3");
+        assert_eq!(body["input"][9]["call_id"], "call_3");
+        assert_eq!(body["input"][9]["tools"][0]["name"], "browser");
+        assert_eq!(body["input"][11]["result"], "Zm9v");
+        assert_eq!(body["input"][12]["encrypted_content"], "encrypted-summary");
+        assert_eq!(body["input"][13]["encrypted_content"], "encrypted-context");
+    }
+
+    #[test]
+    fn responses_upstream_keeps_canonical_replayed_item_ids() {
+        let mut body = json!({
+            "input": [
+                {"id": "at_1", "type": "additional_tools"},
+                {"id": "msg_1", "type": "message"},
+                {"id": "amsg_1", "type": "agent_message"},
+                {"id": "lsh_1", "type": "local_shell_call"},
+                {"id": "fc_1", "type": "function_call"},
+                {"id": "fco_1", "type": "function_call_output"},
+                {"id": "ctc_1", "type": "custom_tool_call"},
+                {"id": "ctco_1", "type": "custom_tool_call_output"},
+                {"id": "tsc_1", "type": "tool_search_call"},
+                {"id": "tso_1", "type": "tool_search_output"},
+                {"id": "ws_1", "type": "web_search_call"},
+                {"id": "ig_1", "type": "image_generation_call"},
+                {"id": "cmp_1", "type": "compaction"},
+                {"id": "cmp_2", "type": "context_compaction"}
+            ]
+        });
+
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            0
+        );
+        assert_eq!(body["input"][0]["id"], "at_1");
+        assert_eq!(body["input"][1]["id"], "msg_1");
+        assert_eq!(body["input"][2]["id"], "amsg_1");
+        assert_eq!(body["input"][3]["id"], "lsh_1");
+        assert_eq!(body["input"][4]["id"], "fc_1");
+        assert_eq!(body["input"][5]["id"], "fco_1");
+        assert_eq!(body["input"][6]["id"], "ctc_1");
+        assert_eq!(body["input"][7]["id"], "ctco_1");
+        assert_eq!(body["input"][8]["id"], "tsc_1");
+        assert_eq!(body["input"][9]["id"], "tso_1");
+        assert_eq!(body["input"][10]["id"], "ws_1");
+        assert_eq!(body["input"][11]["id"], "ig_1");
+        assert_eq!(body["input"][12]["id"], "cmp_1");
+        assert_eq!(body["input"][13]["id"], "cmp_2");
+    }
+
+    #[test]
+    fn responses_upstream_normalizes_message_id_used_by_web_search_call() {
+        let source_id = "msg_ddd6f038-4842-48ae-8764-1dd35de686c4";
+        let mut body = json!({
+            "model": "gpt-5.5",
+            "input": [{
+                "id": source_id,
+                "type": "web_search_call",
+                "status": "completed"
+            }]
+        });
+
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            1
+        );
+        assert_eq!(
+            body["input"][0]["id"],
+            format!("ws_ccswitch_{}", short_sha256_hex(source_id.as_bytes()))
+        );
     }
 
     #[test]
@@ -2084,7 +2315,10 @@ mod tests {
             }]
         });
 
-        assert_eq!(normalize_replayed_item_ids_for_openai(&mut body), 1);
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            1
+        );
         assert!(body["input"][0].get("id").is_none());
         assert!(body["input"][0].get("status").is_none());
         assert_eq!(
@@ -2106,7 +2340,10 @@ mod tests {
             }]
         });
 
-        assert_eq!(normalize_replayed_item_ids_for_openai(&mut body), 0);
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            0
+        );
         assert_eq!(body["input"][0]["id"], "vendor_encrypted_reasoning");
         assert_eq!(body["input"][0]["status"], "completed");
     }

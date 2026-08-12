@@ -1605,14 +1605,20 @@ impl RequestForwarder {
             self.apply_media_prevention(&mut request_body, provider);
         }
 
-        if codex_official_auth_passthrough && endpoint.contains("responses") {
+        if should_normalize_codex_native_responses_item_ids(
+            app_type,
+            endpoint,
+            request_body.get("model").and_then(Value::as_str),
+            codex_responses_to_chat,
+            codex_responses_to_anthropic,
+        ) {
             let changed =
-                super::providers::transform_codex_chat::normalize_replayed_item_ids_for_openai(
+                super::providers::transform_codex_chat::normalize_replayed_item_ids_for_responses_upstream(
                     &mut request_body,
                 );
             if changed > 0 {
                 log::debug!(
-                    "[Codex] Normalized {changed} noncanonical replayed item ID(s) for OpenAI Responses (provider={})",
+                    "[Codex] Normalized {changed} noncanonical replayed item ID(s) for native Responses upstream (provider={})",
                     provider.id
                 );
             }
@@ -3620,6 +3626,31 @@ fn codex_third_party_needs_image_budget(
     matches!(app_type, AppType::Codex | AppType::GrokBuild) && !codex_official_auth_passthrough
 }
 
+fn should_normalize_codex_native_responses_item_ids(
+    app_type: &AppType,
+    endpoint: &str,
+    model: Option<&str>,
+    codex_responses_to_chat: bool,
+    codex_responses_to_anthropic: bool,
+) -> bool {
+    let path = endpoint
+        .split_once('?')
+        .map_or(endpoint, |(path, _query)| path);
+
+    matches!(app_type, AppType::Codex)
+        && matches!(
+            path,
+            "/responses" | "/v1/responses" | "/responses/compact" | "/v1/responses/compact"
+        )
+        && !codex_responses_to_chat
+        && !codex_responses_to_anthropic
+        // 仅 gpt 系模型走的严格 Responses 上游会按类型校验 item ID 前缀；
+        // 百炼等宽松第三方上游接受原始 ID，无需改写。
+        && model
+            .map(|model| model.trim().to_ascii_lowercase().starts_with("gpt-"))
+            .unwrap_or(false)
+}
+
 fn log_prompt_cache_trace(
     app_type: &AppType,
     provider: &Provider,
@@ -3776,6 +3807,80 @@ mod tests {
             streaming_first_byte_timeout,
             max_attempts: 1,
         }
+    }
+
+    #[test]
+    fn native_responses_item_id_normalization_is_codex_gpt_only() {
+        assert!(should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses?stream=true",
+            Some("gpt-5.6-sol"),
+            false,
+            false
+        ));
+        assert!(should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses",
+            Some("GPT-5.5"),
+            false,
+            false
+        ));
+        assert!(should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses/compact",
+            Some(" gpt-5.5 "),
+            false,
+            false
+        ));
+        assert!(!should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses",
+            Some("qwen3.8-max"),
+            false,
+            false
+        ));
+        assert!(!should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses",
+            Some("MiniMax-M2.5"),
+            false,
+            false
+        ));
+        assert!(!should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses",
+            None,
+            false,
+            false
+        ));
+        assert!(!should_normalize_codex_native_responses_item_ids(
+            &AppType::GrokBuild,
+            "/v1/responses",
+            Some("gpt-5.6-sol"),
+            false,
+            false
+        ));
+        assert!(!should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses",
+            Some("gpt-5.6-sol"),
+            true,
+            false
+        ));
+        assert!(!should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses",
+            Some("gpt-5.6-sol"),
+            false,
+            true
+        ));
+        assert!(!should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/chat/completions",
+            Some("gpt-5.6-sol"),
+            false,
+            false
+        ));
     }
 
     fn test_provider_with_models(
