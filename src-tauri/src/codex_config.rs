@@ -23,6 +23,10 @@ pub const CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID: &str = "cc-switch-official
 pub const CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
 const CODEX_PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
 const CODEX_REASONING_EFFORT_MAX: &str = "max";
+const CODEX_REALTIME_WEBRTC_CALL_BASE_URL_KEY: &str = "experimental_realtime_webrtc_call_base_url";
+const CODEX_REALTIME_WS_BASE_URL_KEY: &str = "experimental_realtime_ws_base_url";
+const CODEX_REALTIME_WEBRTC_CALL_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const CODEX_REALTIME_WS_BASE_URL: &str = "https://api.openai.com/v1";
 const CODEX_DESKTOP_SECTION: &str = "desktop";
 const CODEX_DESKTOP_ENABLED_REASONING_EFFORTS: &str = "enabled-reasoning-efforts";
 
@@ -1602,6 +1606,24 @@ fn remove_codex_proxy_placeholders_from_providers(providers: &mut toml_edit::Tab
     }
 }
 
+fn remove_owned_codex_realtime_overrides(doc: &mut DocumentMut) {
+    let table = doc.as_table_mut();
+    if table
+        .get(CODEX_REALTIME_WEBRTC_CALL_BASE_URL_KEY)
+        .and_then(|item| item.as_str())
+        == Some(CODEX_REALTIME_WEBRTC_CALL_BASE_URL)
+    {
+        table.remove(CODEX_REALTIME_WEBRTC_CALL_BASE_URL_KEY);
+    }
+    if table
+        .get(CODEX_REALTIME_WS_BASE_URL_KEY)
+        .and_then(|item| item.as_str())
+        == Some(CODEX_REALTIME_WS_BASE_URL)
+    {
+        table.remove(CODEX_REALTIME_WS_BASE_URL_KEY);
+    }
+}
+
 /// Project the built-in Codex official provider through the local proxy while
 /// keeping authentication owned by Codex itself.
 ///
@@ -1677,6 +1699,10 @@ fn apply_codex_native_auth_proxy_route(
     // The local proxy currently exposes HTTP/SSE, not Codex websocket routes.
     provider_table["base_url"] = toml_edit::value(proxy_base_url.trim_end_matches('/'));
     provider_table["supports_websockets"] = toml_edit::value(false);
+    // Codex realtime voice is a separate official WebRTC/WebSocket path.
+    doc[CODEX_REALTIME_WEBRTC_CALL_BASE_URL_KEY] =
+        toml_edit::value(CODEX_REALTIME_WEBRTC_CALL_BASE_URL);
+    doc[CODEX_REALTIME_WS_BASE_URL_KEY] = toml_edit::value(CODEX_REALTIME_WS_BASE_URL);
 
     if unify_session_history {
         // The legacy ownership id is never active in unified-history mode and
@@ -1754,6 +1780,7 @@ pub fn remove_codex_official_proxy_route(config_text: &str) -> Result<String, Ap
         return Ok(config_text.to_string());
     }
 
+    remove_owned_codex_realtime_overrides(&mut doc);
     doc.as_table_mut().remove("model_provider");
     if let Some(item) = doc.as_table_mut().remove("model_providers") {
         let mut providers = item.into_table().map_err(|_| {
@@ -2363,6 +2390,16 @@ command = "example"
             Some("http://127.0.0.1:15721/v1")
         );
         assert_eq!(
+            doc.get(CODEX_REALTIME_WEBRTC_CALL_BASE_URL_KEY)
+                .and_then(toml::Value::as_str),
+            Some(CODEX_REALTIME_WEBRTC_CALL_BASE_URL)
+        );
+        assert_eq!(
+            doc.get(CODEX_REALTIME_WS_BASE_URL_KEY)
+                .and_then(toml::Value::as_str),
+            Some(CODEX_REALTIME_WS_BASE_URL)
+        );
+        assert_eq!(
             provider
                 .get("requires_openai_auth")
                 .and_then(toml::Value::as_bool),
@@ -2409,6 +2446,16 @@ supports_websockets = false
             Some("http://127.0.0.1:15721/v1")
         );
         assert_eq!(
+            doc.get(CODEX_REALTIME_WEBRTC_CALL_BASE_URL_KEY)
+                .and_then(toml::Value::as_str),
+            Some(CODEX_REALTIME_WEBRTC_CALL_BASE_URL)
+        );
+        assert_eq!(
+            doc.get(CODEX_REALTIME_WS_BASE_URL_KEY)
+                .and_then(toml::Value::as_str),
+            Some(CODEX_REALTIME_WS_BASE_URL)
+        );
+        assert_eq!(
             provider
                 .get("requires_openai_auth")
                 .and_then(toml::Value::as_bool),
@@ -2432,6 +2479,45 @@ supports_websockets = false
         assert_eq!(
             doc.get("model").and_then(toml::Value::as_str),
             Some("gpt-5.4")
+        );
+        assert!(doc.get(CODEX_REALTIME_WEBRTC_CALL_BASE_URL_KEY).is_none());
+        assert!(doc.get(CODEX_REALTIME_WS_BASE_URL_KEY).is_none());
+    }
+
+    #[test]
+    fn aggregate_proxy_route_keeps_models_on_proxy_and_realtime_on_official() {
+        let output = apply_codex_aggregate_proxy_route(
+            "model = \"gpt-5.4\"\n",
+            "http://127.0.0.1:15721/v1",
+            true,
+        )
+        .expect("apply aggregate proxy route");
+        let doc: toml::Value = toml::from_str(&output).expect("parse output");
+
+        let provider = &doc["model_providers"][CC_SWITCH_CODEX_MODEL_PROVIDER_ID];
+        assert_eq!(
+            provider.get("name").and_then(toml::Value::as_str),
+            Some(CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME)
+        );
+        assert_eq!(
+            provider.get("base_url").and_then(toml::Value::as_str),
+            Some("http://127.0.0.1:15721/v1")
+        );
+        assert_eq!(
+            provider
+                .get("supports_websockets")
+                .and_then(toml::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            doc.get(CODEX_REALTIME_WEBRTC_CALL_BASE_URL_KEY)
+                .and_then(toml::Value::as_str),
+            Some(CODEX_REALTIME_WEBRTC_CALL_BASE_URL)
+        );
+        assert_eq!(
+            doc.get(CODEX_REALTIME_WS_BASE_URL_KEY)
+                .and_then(toml::Value::as_str),
+            Some(CODEX_REALTIME_WS_BASE_URL)
         );
     }
 
