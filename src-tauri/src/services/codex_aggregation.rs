@@ -631,7 +631,7 @@ fn namespace_catalog_entry(
     let catalog_model = if provider.id == CODEX_OFFICIAL_PROVIDER_ID {
         upstream_model.to_string()
     } else {
-        format!("{provider_name}/{upstream_model}")
+        format!("{upstream_model}/{provider_name}")
     };
 
     object.insert("model".to_string(), json!(catalog_model));
@@ -896,14 +896,14 @@ mod tests {
         assert_eq!(build.selected_provider_ids, vec!["provider-a"]);
         assert_eq!(build.source_provider_count, 1);
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0]["model"], "Provider A/model-a");
+        assert_eq!(models[0]["model"], "model-a/Provider A");
         assert_eq!(
-            build.provider.settings_config["codexAggregateRoutes"]["Provider A/model-a"]
+            build.provider.settings_config["codexAggregateRoutes"]["model-a/Provider A"]
                 ["providerId"],
             "provider-a"
         );
         assert!(build.provider.settings_config["codexAggregateRoutes"]
-            .get("Provider B/model-b")
+            .get("model-b/Provider B")
             .is_none());
     }
 
@@ -933,8 +933,8 @@ mod tests {
             json!({ "displayName": "GPT-5.6-Sol" }),
         );
 
-        assert_eq!(model_a, "Provider A/gpt-5.6-sol");
-        assert_eq!(model_b, "Provider B/gpt-5.6-sol");
+        assert_eq!(model_a, "gpt-5.6-sol/Provider A");
+        assert_eq!(model_b, "gpt-5.6-sol/Provider B");
         assert_ne!(model_a, model_b);
         assert_eq!(entry_a["displayName"], "GPT-5.6-Sol / Provider A");
         assert_eq!(entry_b["displayName"], "GPT-5.6-Sol / Provider B");
@@ -967,16 +967,16 @@ mod tests {
             json!({
                 "modelCatalog": {
                     "models": [
-                        { "model": "provider-a/gpt-5.6-sol" },
-                        { "model": "provider-b/gpt-5.6-sol" }
+                        { "model": "gpt-5.6-sol/provider-a" },
+                        { "model": "gpt-5.6-sol/provider-b" }
                     ]
                 },
                 "codexAggregateRoutes": {
-                    "provider-a/gpt-5.6-sol": {
+                    "gpt-5.6-sol/provider-a": {
                         "providerId": "provider-a",
                         "model": "gpt-5.6-sol"
                     },
-                    "provider-b/gpt-5.6-sol": {
+                    "gpt-5.6-sol/provider-b": {
                         "providerId": "provider-b",
                         "model": "gpt-5.6-sol"
                     }

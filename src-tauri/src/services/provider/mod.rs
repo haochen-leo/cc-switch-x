@@ -271,10 +271,10 @@ mod tests {
                 "auth": {},
                 "config": "model = \"old\"\n",
                 "modelCatalog": {
-                    "models": [{ "model": "Provider A/model-a" }]
+                    "models": [{ "model": "model-a/Provider A" }]
                 },
                 "codexAggregateRoutes": {
-                    "Provider A/model-a": {
+                    "model-a/Provider A": {
                         "providerId": "provider-a",
                         "model": "model-a"
                     }
@@ -385,7 +385,7 @@ mod tests {
                 .and_then(Value::as_array)
                 .expect("refreshed catalog");
             assert_eq!(models.len(), 1);
-            assert_eq!(models[0]["model"], "Provider A/model-new");
+            assert_eq!(models[0]["model"], "model-new/Provider A");
 
             crate::settings::set_current_provider(&AppType::Codex, None)
                 .expect("clear local current");

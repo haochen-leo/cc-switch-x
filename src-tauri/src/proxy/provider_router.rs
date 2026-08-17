@@ -831,11 +831,11 @@ mod tests {
             "Codex Multi Provider".to_string(),
             json!({
                 "codexAggregateRoutes": {
-                    "codex-official/gpt-5.6-sol": {
+                    "gpt-5.6-sol": {
                         "providerId": "codex-official",
                         "model": "gpt-5.6-sol"
                     },
-                    "dashscope/qwen3.8-max": {
+                    "qwen3.8-max/dashscope": {
                         "providerId": "dashscope",
                         "model": "qwen3.8-max"
                     }
@@ -868,7 +868,7 @@ mod tests {
 
         let router = ProviderRouter::new(db);
         let (providers, route_applied) = router
-            .select_providers_for_request("codex", &json!({"model": "dashscope/qwen3.8-max"}))
+            .select_providers_for_request("codex", &json!({"model": "qwen3.8-max/dashscope"}))
             .await
             .unwrap();
 
@@ -906,7 +906,7 @@ mod tests {
                         "providerId": "codex-official",
                         "model": "gpt-5.6-luna"
                     },
-                    "token-free/gpt-5.6-luna": {
+                    "gpt-5.6-luna/token-free": {
                         "providerId": "token-free",
                         "model": "gpt-5.6-luna"
                     }
@@ -966,11 +966,11 @@ mod tests {
             "Codex Multi Provider".to_string(),
             json!({
                 "codexAggregateRoutes": {
-                    "token-free/gpt-5.6-luna": {
+                    "gpt-5.6-luna/token-free": {
                         "providerId": "token-free",
                         "model": "gpt-5.6-luna"
                     },
-                    "other/gpt-5.6-luna": {
+                    "gpt-5.6-luna/other": {
                         "providerId": "other",
                         "model": "gpt-5.6-luna"
                     }
