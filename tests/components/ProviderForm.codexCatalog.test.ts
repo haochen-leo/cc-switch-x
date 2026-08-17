@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCodexCatalogModelsForSave } from "@/components/providers/forms/ProviderForm";
+import {
+  ensureCodexChatReasoningDefaults,
+  normalizeCodexCatalogModelsForSave,
+} from "@/components/providers/forms/ProviderForm";
 
 describe("ProviderForm Codex catalog helpers", () => {
   it("normalizes catalog rows and removes empty or duplicate models", () => {
@@ -48,5 +51,32 @@ describe("ProviderForm Codex catalog helpers", () => {
       },
       { model: "mimo-v2.5-pro", supportsParallelToolCalls: false },
     ]);
+  });
+
+  it("defaults Codex Chat reasoning switches and preserves custom parameter names", () => {
+    expect(ensureCodexChatReasoningDefaults()).toMatchObject({
+      supportsThinking: true,
+      supportsEffort: true,
+      thinkingParam: "thinking",
+      effortParam: "reasoning_effort",
+      effortValueMode: "passthrough",
+      outputFormat: "auto",
+    });
+
+    expect(
+      ensureCodexChatReasoningDefaults({
+        thinkingParam: "enable_thinking",
+        effortParam: "reasoning.effort",
+        effortValueMode: "openrouter",
+        outputFormat: "reasoning_details",
+      }),
+    ).toMatchObject({
+      supportsThinking: true,
+      supportsEffort: true,
+      thinkingParam: "enable_thinking",
+      effortParam: "reasoning.effort",
+      effortValueMode: "openrouter",
+      outputFormat: "reasoning_details",
+    });
   });
 });

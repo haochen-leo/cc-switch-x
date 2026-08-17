@@ -248,6 +248,18 @@ export const normalizeCodexCatalogModelsForSave = (
   return normalized;
 };
 
+export const ensureCodexChatReasoningDefaults = (
+  value?: CodexChatReasoning,
+): CodexChatReasoning => ({
+  ...value,
+  supportsThinking: true,
+  supportsEffort: true,
+  thinkingParam: value?.thinkingParam ?? "thinking",
+  effortParam: value?.effortParam ?? "reasoning_effort",
+  effortValueMode: value?.effortValueMode ?? "passthrough",
+  outputFormat: value?.outputFormat ?? "auto",
+});
+
 const normalizeCodexChatReasoningForSave = (
   value?: CodexChatReasoning,
 ): CodexChatReasoning | undefined => {
@@ -412,6 +424,20 @@ function ProviderFormFull({
   const isOmoCategory = appId === "opencode" && category === "omo";
   const isOmoSlimCategory = appId === "opencode" && category === "omo-slim";
   const isAnyOmoCategory = isOmoCategory || isOmoSlimCategory;
+  const initialCodexApiFormat: CodexApiFormat =
+    initialData?.meta?.apiFormat === "openai_chat"
+      ? "openai_chat"
+      : initialData?.meta?.apiFormat === "anthropic"
+        ? "anthropic"
+        : initialData?.meta?.apiFormat === "openai_responses"
+          ? "openai_responses"
+          : (codexApiFormatFromWireApi(
+              extractCodexWireApi(
+                typeof initialData?.settingsConfig?.config === "string"
+                  ? initialData.settingsConfig.config
+                  : "",
+              ),
+            ) ?? "openai_responses");
 
   useEffect(() => {
     setSelectedPresetId(initialData ? null : "custom");
@@ -433,7 +459,14 @@ function ProviderFormFull({
         initialData?.meta?.pricingModelSource,
       ),
     });
-    setCodexChatReasoning(initialData?.meta?.codexChatReasoning ?? {});
+    setLocalCodexApiFormat(initialCodexApiFormat);
+    setCodexChatReasoning(
+      initialCodexApiFormat === "openai_chat"
+        ? ensureCodexChatReasoningDefaults(
+            initialData?.meta?.codexChatReasoning,
+          )
+        : (initialData?.meta?.codexChatReasoning ?? {}),
+    );
     setPromptCacheRouting(initialData?.meta?.promptCacheRouting ?? "auto");
     setCustomUserAgent(initialData?.meta?.customUserAgent ?? "");
     setLocalProxyHeadersOverride(
@@ -446,7 +479,7 @@ function ProviderFormFull({
         initialData?.meta?.localProxyRequestOverrides?.body,
       ),
     );
-  }, [appId, initialData, supportsFullUrl]);
+  }, [appId, initialCodexApiFormat, initialData, supportsFullUrl]);
 
   const defaultValues: ProviderFormData = useMemo(
     () => ({
@@ -674,8 +707,12 @@ function ProviderFormFull({
     () => initialData?.meta?.codexFastMode ?? false,
   );
   const [codexChatReasoning, setCodexChatReasoning] =
-    useState<CodexChatReasoning>(
-      () => initialData?.meta?.codexChatReasoning ?? {},
+    useState<CodexChatReasoning>(() =>
+      initialCodexApiFormat === "openai_chat"
+        ? ensureCodexChatReasoningDefaults(
+            initialData?.meta?.codexChatReasoning,
+          )
+        : (initialData?.meta?.codexChatReasoning ?? {}),
     );
   const [promptCacheRouting, setPromptCacheRouting] =
     useState<PromptCacheRoutingMode>(
@@ -714,21 +751,6 @@ function ProviderFormFull({
     handleCodexConfigChange: originalHandleCodexConfigChange,
     resetCodexConfig,
   } = useCodexConfigState({ initialData });
-
-  const initialCodexApiFormat: CodexApiFormat =
-    initialData?.meta?.apiFormat === "openai_chat"
-      ? "openai_chat"
-      : initialData?.meta?.apiFormat === "anthropic"
-        ? "anthropic"
-        : initialData?.meta?.apiFormat === "openai_responses"
-          ? "openai_responses"
-          : (codexApiFormatFromWireApi(
-              extractCodexWireApi(
-                typeof initialData?.settingsConfig?.config === "string"
-                  ? initialData.settingsConfig.config
-                  : "",
-              ),
-            ) ?? "openai_responses");
 
   const [localCodexApiFormat, setLocalCodexApiFormat] =
     useState<CodexApiFormat>(initialCodexApiFormat);
@@ -769,6 +791,9 @@ function ProviderFormFull({
   const handleCodexApiFormatChange = useCallback(
     (format: CodexApiFormat) => {
       setLocalCodexApiFormat(format);
+      if (format === "openai_chat") {
+        setCodexChatReasoning((prev) => ensureCodexChatReasoningDefaults(prev));
+      }
       // wire_api is always "responses" for Codex; format controls proxy-layer conversion
       setCodexConfig((prev) => {
         const updated = setCodexWireApi(prev, "responses");
@@ -782,8 +807,16 @@ function ProviderFormFull({
   useEffect(() => {
     if (appId === "codex" && !initialData && selectedPresetId === "custom") {
       const template = getCodexCustomTemplate();
+      const templateApiFormat =
+        codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
+        "openai_responses";
       resetCodexConfig(template.auth, template.config);
-      setCodexChatReasoning({});
+      setLocalCodexApiFormat(templateApiFormat);
+      setCodexChatReasoning(
+        templateApiFormat === "openai_chat"
+          ? ensureCodexChatReasoningDefaults()
+          : {},
+      );
       setPromptCacheRouting("auto");
     }
   }, [appId, initialData, selectedPresetId, resetCodexConfig]);
@@ -1952,13 +1985,17 @@ function ProviderFormFull({
 
       if (appId === "codex") {
         const template = getCodexCustomTemplate();
-        resetCodexConfig(template.auth, template.config);
-        setCodexChatReasoning({});
-        setPromptCacheRouting("auto");
-        setLocalCodexApiFormat(
+        const templateApiFormat =
           codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
-            "openai_responses",
+          "openai_responses";
+        resetCodexConfig(template.auth, template.config);
+        setCodexChatReasoning(
+          templateApiFormat === "openai_chat"
+            ? ensureCodexChatReasoningDefaults()
+            : {},
         );
+        setPromptCacheRouting("auto");
+        setLocalCodexApiFormat(templateApiFormat);
       }
       if (appId === "gemini") {
         resetGeminiConfig({}, {});
@@ -1993,15 +2030,19 @@ function ProviderFormFull({
       const preset = entry.preset as CodexProviderPreset;
       const auth = preset.auth ?? {};
       const config = preset.config ?? "";
+      const presetApiFormat =
+        preset.apiFormat ??
+        codexApiFormatFromWireApi(extractCodexWireApi(config)) ??
+        "openai_responses";
 
       resetCodexConfig(auth, config, preset.modelCatalog ?? []);
-      setCodexChatReasoning(preset.codexChatReasoning ?? {});
-      setPromptCacheRouting(preset.promptCacheRouting ?? "auto");
-      setLocalCodexApiFormat(
-        preset.apiFormat ??
-          codexApiFormatFromWireApi(extractCodexWireApi(config)) ??
-          "openai_responses",
+      setCodexChatReasoning(
+        presetApiFormat === "openai_chat"
+          ? ensureCodexChatReasoningDefaults(preset.codexChatReasoning)
+          : (preset.codexChatReasoning ?? {}),
       );
+      setPromptCacheRouting(preset.promptCacheRouting ?? "auto");
+      setLocalCodexApiFormat(presetApiFormat);
 
       form.reset({
         name: preset.nameKey ? t(preset.nameKey) : preset.name,
