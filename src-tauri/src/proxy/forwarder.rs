@@ -1608,14 +1608,19 @@ impl RequestForwarder {
         if should_normalize_codex_native_responses_item_ids(
             app_type,
             endpoint,
-            request_body.get("model").and_then(Value::as_str),
+            provider,
             codex_responses_to_chat,
             codex_responses_to_anthropic,
         ) {
-            let changed =
+            let changed = if super::providers::is_codex_official_provider(provider) {
+                super::providers::transform_codex_chat::normalize_official_replayed_item_ids_for_responses_upstream(
+                    &mut request_body,
+                )
+            } else {
                 super::providers::transform_codex_chat::normalize_replayed_item_ids_for_responses_upstream(
                     &mut request_body,
-                );
+                )
+            };
             if changed > 0 {
                 log::debug!(
                     "[Codex] Normalized {changed} noncanonical replayed item ID(s) for native Responses upstream (provider={})",
@@ -3629,7 +3634,7 @@ fn codex_third_party_needs_image_budget(
 fn should_normalize_codex_native_responses_item_ids(
     app_type: &AppType,
     endpoint: &str,
-    model: Option<&str>,
+    provider: &Provider,
     codex_responses_to_chat: bool,
     codex_responses_to_anthropic: bool,
 ) -> bool {
@@ -3644,11 +3649,9 @@ fn should_normalize_codex_native_responses_item_ids(
         )
         && !codex_responses_to_chat
         && !codex_responses_to_anthropic
-        // 仅 gpt 系模型走的严格 Responses 上游会按类型校验 item ID 前缀；
-        // 百炼等宽松第三方上游接受原始 ID，无需改写。
-        && model
-            .map(|model| model.trim().to_ascii_lowercase().starts_with("gpt-"))
-            .unwrap_or(false)
+        && super::providers::codex_provider_requires_native_responses_item_id_normalization(
+            provider,
+        )
 }
 
 fn log_prompt_cache_trace(
@@ -3810,74 +3813,124 @@ mod tests {
     }
 
     #[test]
-    fn native_responses_item_id_normalization_is_codex_gpt_only() {
+    fn native_responses_item_id_normalization_is_provider_capability_driven() {
+        let native = Provider {
+            id: "dashscope".to_string(),
+            name: "DashScope".to_string(),
+            settings_config: json!({ "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1" }),
+            website_url: None,
+            category: None,
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: Some(crate::provider::ProviderMeta {
+                api_format: Some("openai_responses".to_string()),
+                ..Default::default()
+            }),
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        };
+        let mut chat = test_provider_with_models(
+            "chat",
+            "Chat",
+            json!({ "api_format": "openai_chat", "base_url": "https://chat.example/v1" }),
+        );
+        chat.meta = Some(crate::provider::ProviderMeta {
+            api_format: Some("openai_chat".to_string()),
+            ..Default::default()
+        });
+        let mut anthropic = test_provider_with_models(
+            "anthropic",
+            "Anthropic",
+            json!({ "api_format": "anthropic", "base_url": "https://anthropic.example/v1" }),
+        );
+        anthropic.meta = Some(crate::provider::ProviderMeta {
+            api_format: Some("anthropic".to_string()),
+            ..Default::default()
+        });
+        let official = Provider {
+            id: crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string(),
+            name: "Codex".to_string(),
+            settings_config: json!({ "base_url": "https://chatgpt.com/backend-api/codex" }),
+            website_url: None,
+            category: Some("official".to_string()),
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: None,
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        };
+
         assert!(should_normalize_codex_native_responses_item_ids(
             &AppType::Codex,
             "/v1/responses?stream=true",
-            Some("gpt-5.6-sol"),
+            &native,
             false,
             false
         ));
         assert!(should_normalize_codex_native_responses_item_ids(
             &AppType::Codex,
             "/v1/responses",
-            Some("GPT-5.5"),
+            &native,
             false,
             false
         ));
         assert!(should_normalize_codex_native_responses_item_ids(
             &AppType::Codex,
             "/v1/responses/compact",
-            Some(" gpt-5.5 "),
+            &native,
             false,
             false
         ));
         assert!(!should_normalize_codex_native_responses_item_ids(
             &AppType::Codex,
             "/v1/responses",
-            Some("qwen3.8-max"),
+            &chat,
             false,
             false
         ));
         assert!(!should_normalize_codex_native_responses_item_ids(
             &AppType::Codex,
             "/v1/responses",
-            Some("MiniMax-M2.5"),
-            false,
-            false
-        ));
-        assert!(!should_normalize_codex_native_responses_item_ids(
-            &AppType::Codex,
-            "/v1/responses",
-            None,
+            &anthropic,
             false,
             false
         ));
         assert!(!should_normalize_codex_native_responses_item_ids(
             &AppType::GrokBuild,
             "/v1/responses",
-            Some("gpt-5.6-sol"),
+            &native,
+            false,
+            false
+        ));
+        assert!(should_normalize_codex_native_responses_item_ids(
+            &AppType::Codex,
+            "/v1/responses",
+            &official,
             false,
             false
         ));
         assert!(!should_normalize_codex_native_responses_item_ids(
             &AppType::Codex,
             "/v1/responses",
-            Some("gpt-5.6-sol"),
+            &native,
             true,
             false
         ));
         assert!(!should_normalize_codex_native_responses_item_ids(
             &AppType::Codex,
             "/v1/responses",
-            Some("gpt-5.6-sol"),
+            &native,
             false,
             true
         ));
         assert!(!should_normalize_codex_native_responses_item_ids(
             &AppType::Codex,
             "/v1/chat/completions",
-            Some("gpt-5.6-sol"),
+            &native,
             false,
             false
         ));
