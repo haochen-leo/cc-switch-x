@@ -308,7 +308,7 @@ impl ChatToResponsesState {
 
         if !self.text.added {
             let output_index = self.next_output_index();
-            let item_id = format!("{}_msg", self.response_id);
+            let item_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
             self.text.output_index = Some(output_index);
             self.text.item_id = item_id.clone();
             self.text.added = true;
@@ -887,6 +887,46 @@ mod tests {
         assert!(output.contains("\"text\":\"Hello\""));
         assert!(output.contains("event: response.completed"));
         assert!(output.contains("\"input_tokens\":4"));
+    }
+
+    #[tokio::test]
+    async fn streamed_message_item_id_uses_canonical_msg_prefix() {
+        let output = collect(vec![
+            "data: {\"id\":\"chatcmpl_1\",\"created\":123,\"model\":\"gpt-5.4\",\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_1\",\"created\":123,\"model\":\"gpt-5.4\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ])
+        .await;
+
+        let events = parse_sse_events(&output);
+        let added = events
+            .iter()
+            .find(|event| event["type"] == "response.output_item.added")
+            .expect("output_item.added event");
+        let item_id = added["item"]["id"].as_str().unwrap();
+
+        assert!(item_id.starts_with("msg_"), "item id: {item_id}");
+        let suffix = &item_id["msg_".len()..];
+        assert_eq!(suffix.len(), 32);
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+
+        let delta = events
+            .iter()
+            .find(|event| event["type"] == "response.output_text.delta")
+            .expect("output_text.delta event");
+        assert_eq!(delta["item_id"], item_id);
+
+        let completed = events
+            .iter()
+            .find(|event| event["type"] == "response.completed")
+            .expect("response.completed event");
+        let completed_ids: Vec<&str> = completed["response"]["output"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect();
+        assert!(completed_ids.contains(&item_id));
     }
 
     #[tokio::test]
