@@ -1794,7 +1794,7 @@ pub(crate) fn chat_completion_to_response_with_context(
     {
         output.push(reasoning_item);
     }
-    if let Some(message_item) = chat_message_to_response_output_item(message, &response_id) {
+    if let Some(message_item) = chat_message_to_response_output_item(message) {
         output.push(message_item);
     }
     output.extend(chat_tool_calls_to_response_output_items(
@@ -1855,7 +1855,7 @@ fn chat_reasoning_text(message: &Value) -> Option<String> {
     None
 }
 
-fn chat_message_to_response_output_item(message: &Value, response_id: &str) -> Option<Value> {
+fn chat_message_to_response_output_item(message: &Value) -> Option<Value> {
     let mut content = Vec::new();
 
     if let Some(text) = message.get("content").and_then(|v| v.as_str()) {
@@ -1913,7 +1913,7 @@ fn chat_message_to_response_output_item(message: &Value, response_id: &str) -> O
     }
 
     Some(json!({
-        "id": format!("{response_id}_msg"),
+        "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
         "type": "message",
         "status": "completed",
         "role": "assistant",
@@ -3583,6 +3583,28 @@ mod tests {
             "Need to inspect the code."
         );
         assert_eq!(result["output"][1]["content"][0]["text"], "Done");
+    }
+
+    #[test]
+    fn chat_response_message_item_id_uses_canonical_msg_prefix() {
+        let input = json!({
+            "id": "chatcmpl_1",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "gpt-5.4",
+            "choices": [{
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop"
+            }]
+        });
+
+        let result = chat_completion_to_response(input).unwrap();
+        let message_id = result["output"][0]["id"].as_str().unwrap();
+
+        assert!(message_id.starts_with("msg_"), "message id: {message_id}");
+        let suffix = &message_id["msg_".len()..];
+        assert_eq!(suffix.len(), 32);
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
