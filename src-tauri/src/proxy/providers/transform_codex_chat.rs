@@ -16,12 +16,15 @@ use crate::proxy::{
         canonical_json_string, canonicalize_json_string_if_parseable, canonicalize_tool_arguments,
         short_sha256_hex,
     },
+    sse::{append_utf8_safe, strip_sse_field, take_sse_block},
     tool_media::{
         chat_file_from_input_file, flush_pending_chat_tool_media, plan_chat_tool_output_media,
         queue_chat_tool_output_media, strip_and_clamp_media_from_tool_value, ToolMediaScope,
         TOOL_RESULT_MEDIA_MOVED_MARKER,
     },
 };
+use bytes::Bytes;
+use futures::stream::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -51,65 +54,385 @@ const CUSTOM_TOOL_PRESERVED_METADATA_HEADING: &str = "Original tool definition:"
 /// Normalize replay metadata before forwarding mixed-provider history to a
 /// native Responses upstream.
 pub(crate) fn normalize_replayed_item_ids_for_responses_upstream(body: &mut Value) -> usize {
+    normalize_replayed_item_ids_for_responses_upstream_with_policy(
+        body,
+        ReplayedReasoningIdPolicy::Canonicalize,
+    )
+}
+
+/// Normalize replay metadata for the official Codex backend.
+///
+/// Official Responses does not persist cc-switch generated client replay IDs.
+/// Plain reasoning items must therefore drop their client-controlled identity
+/// instead of being rewritten; other item types still get canonical prefixes.
+pub(crate) fn normalize_official_replayed_item_ids_for_responses_upstream(
+    body: &mut Value,
+) -> usize {
+    normalize_replayed_item_ids_for_responses_upstream_with_policy(
+        body,
+        ReplayedReasoningIdPolicy::StripPlainReasoningIdentity,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayedReasoningIdPolicy {
+    Canonicalize,
+    StripPlainReasoningIdentity,
+}
+
+fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
+    body: &mut Value,
+    reasoning_policy: ReplayedReasoningIdPolicy,
+) -> usize {
     let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
         return 0;
     };
 
     let mut changed = 0;
-    for item in input {
-        let is_plain_reasoning = item.get("type").and_then(Value::as_str) == Some("reasoning")
-            && !item
+    for (index, item) in input.iter_mut().enumerate() {
+        let item_type = item.get("type").and_then(Value::as_str);
+        if item_type == Some("reasoning")
+            && item
                 .get("encrypted_content")
                 .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty());
-        if is_plain_reasoning {
+                .is_some_and(|value| !value.is_empty())
+        {
+            continue;
+        }
+        let is_plain_reasoning = item_type == Some("reasoning");
+        if is_plain_reasoning
+            && reasoning_policy == ReplayedReasoningIdPolicy::StripPlainReasoningIdentity
+        {
             if let Some(object) = item.as_object_mut() {
                 let removed_id = object.remove("id").is_some();
                 let removed_status = object.remove("status").is_some();
-                if removed_id || removed_status {
-                    changed += 1;
-                }
+                changed += usize::from(removed_id || removed_status);
             }
             continue;
         }
+        let Some(required_prefix) = item_type.and_then(|item_type| match item_type {
+            "additional_tools" => Some("at_"),
+            "message" => Some("msg_"),
+            "agent_message" => Some("amsg_"),
+            "reasoning" => Some("rs_"),
+            "local_shell_call" => Some("lsh_"),
+            "function_call" => Some("fc_"),
+            "function_call_output" => Some("fco_"),
+            "custom_tool_call" => Some("ctc_"),
+            "custom_tool_call_output" => Some("ctco_"),
+            "tool_search_call" => Some("tsc_"),
+            "tool_search_output" => Some("tso_"),
+            "web_search_call" => Some("ws_"),
+            "image_generation_call" => Some("ig_"),
+            "compaction" | "context_compaction" => Some("cmp_"),
+            _ => None,
+        }) else {
+            continue;
+        };
 
-        let Some(required_prefix) =
-            item.get("type")
-                .and_then(Value::as_str)
-                .and_then(|item_type| match item_type {
-                    "additional_tools" => Some("at_"),
-                    "message" => Some("msg_"),
-                    "agent_message" => Some("amsg_"),
-                    "local_shell_call" => Some("lsh_"),
-                    "function_call" => Some("fc_"),
-                    "function_call_output" => Some("fco_"),
-                    "custom_tool_call" => Some("ctc_"),
-                    "custom_tool_call_output" => Some("ctco_"),
-                    "tool_search_call" => Some("tsc_"),
-                    "tool_search_output" => Some("tso_"),
-                    "web_search_call" => Some("ws_"),
-                    "image_generation_call" => Some("ig_"),
-                    "compaction" | "context_compaction" => Some("cmp_"),
-                    _ => None,
-                })
-        else {
-            continue;
-        };
-        let Some(id) = item.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        if id.starts_with(required_prefix) {
+        let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+        if !id.is_empty() && id.starts_with(required_prefix) {
             continue;
         }
 
+        let id_seed = if id.is_empty() {
+            // Empty IDs are common in compacted/forked Codex history. The input
+            // index keeps otherwise identical messages unique for this request;
+            // content hashing preserves the ID across retries with the same body.
+            format!(
+                "{required_prefix}:input[{index}]:{}",
+                canonical_json_string(item)
+            )
+        } else {
+            id.to_string()
+        };
         item["id"] = json!(format!(
             "{required_prefix}ccswitch_{}",
-            short_sha256_hex(id.as_bytes())
+            short_sha256_hex(id_seed.as_bytes())
         ));
         changed += 1;
     }
 
     changed
+}
+
+/// Normalize third-party native Responses output before Codex records it as
+/// replay history. Chat bridges already rebuild canonical IDs on entry; this
+/// applies the same target shape to native Responses providers.
+pub(crate) fn normalize_response_output_item_ids(value: &mut Value) -> usize {
+    let mut state = ResponseOutputIdNormalizationState::default();
+    normalize_response_output_item_ids_with_state(value, &mut state)
+}
+
+pub(crate) fn create_response_output_id_normalize_sse_stream<E>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send
+where
+    E: std::error::Error + Send + 'static,
+{
+    async_stream::stream! {
+        let mut buffer = String::new();
+        let mut utf8_remainder: Vec<u8> = Vec::new();
+        let mut state = ResponseOutputIdNormalizationState::default();
+
+        tokio::pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
+                    while let Some(block) = take_sse_block(&mut buffer) {
+                        if block.trim().is_empty() {
+                            continue;
+                        }
+                        yield Ok(normalize_response_output_id_sse_block(&block, &mut state));
+                    }
+                }
+                Err(e) => {
+                    yield Err(std::io::Error::other(e.to_string()));
+                    return;
+                }
+            }
+        }
+
+        if !utf8_remainder.is_empty() {
+            buffer.push_str(&String::from_utf8_lossy(&utf8_remainder));
+        }
+        let tail = std::mem::take(&mut buffer);
+        if !tail.trim().is_empty() {
+            yield Ok(normalize_response_output_id_sse_block(&tail, &mut state));
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ResponseOutputIdNormalizationState {
+    id_map: HashMap<String, String>,
+}
+
+fn normalize_response_output_item_ids_with_state(
+    value: &mut Value,
+    state: &mut ResponseOutputIdNormalizationState,
+) -> usize {
+    let mut changed = 0;
+    if let Some(output) = value.get_mut("output").and_then(Value::as_array_mut) {
+        for item in output {
+            if normalize_response_output_item_id(item, state).is_some() {
+                changed += 1;
+            }
+        }
+    }
+    if let Some(response) = value.get_mut("response") {
+        changed += normalize_response_output_item_ids_with_state(response, state);
+    }
+    changed
+}
+
+fn normalize_response_output_item_id(
+    item: &mut Value,
+    state: &mut ResponseOutputIdNormalizationState,
+) -> Option<(String, String)> {
+    if item.get("type").and_then(Value::as_str) == Some("reasoning")
+        && item
+            .get("encrypted_content")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    {
+        return None;
+    }
+    let required_prefix = item
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(response_output_item_required_id_prefix)?;
+    normalize_item_id_with_state(item, required_prefix, state)
+}
+
+fn normalize_item_id_with_state(
+    item: &mut Value,
+    required_prefix: &str,
+    state: &mut ResponseOutputIdNormalizationState,
+) -> Option<(String, String)> {
+    let old_id = item.get("id").and_then(Value::as_str)?.to_string();
+    if old_id.starts_with(required_prefix) {
+        return None;
+    }
+    let new_id = state
+        .id_map
+        .entry(old_id.clone())
+        .or_insert_with(|| normalized_responses_item_id(required_prefix, &old_id))
+        .clone();
+    item["id"] = json!(new_id.clone());
+    Some((old_id, new_id))
+}
+
+fn normalized_responses_item_id(required_prefix: &str, old_id: &str) -> String {
+    format!(
+        "{required_prefix}ccswitch_{}",
+        short_sha256_hex(old_id.as_bytes())
+    )
+}
+
+fn response_output_item_required_id_prefix(item_type: &str) -> Option<&'static str> {
+    if item_type == "reasoning" {
+        return Some("rs_");
+    }
+    responses_item_required_id_prefix(item_type)
+}
+
+fn responses_item_required_id_prefix(item_type: &str) -> Option<&'static str> {
+    match item_type {
+        "additional_tools" => Some("at_"),
+        "message" => Some("msg_"),
+        "agent_message" => Some("amsg_"),
+        "reasoning" => Some("rs_"),
+        "local_shell_call" => Some("lsh_"),
+        "function_call" => Some("fc_"),
+        "function_call_output" => Some("fco_"),
+        "custom_tool_call" => Some("ctc_"),
+        "custom_tool_call_output" => Some("ctco_"),
+        "tool_search_call" => Some("tsc_"),
+        "tool_search_output" => Some("tso_"),
+        "web_search_call" => Some("ws_"),
+        "image_generation_call" => Some("ig_"),
+        "compaction" | "context_compaction" => Some("cmp_"),
+        _ => None,
+    }
+}
+
+fn normalize_response_output_id_sse_block(
+    block: &str,
+    state: &mut ResponseOutputIdNormalizationState,
+) -> Bytes {
+    let mut event_name: Option<&str> = None;
+    let mut http_status: Option<u16> = None;
+    let mut data_parts: Vec<&str> = Vec::new();
+    for line in block.lines() {
+        if let Some(event) = strip_sse_field(line, "event") {
+            event_name = Some(event.trim());
+        }
+        if let Some(status) = strip_sse_status_comment(line) {
+            http_status = Some(status);
+        }
+        if let Some(data) = strip_sse_field(line, "data") {
+            data_parts.push(data);
+        }
+    }
+
+    if data_parts.is_empty() {
+        return Bytes::from(format!("{block}\n\n"));
+    }
+
+    let data = data_parts.join("\n");
+    if data.trim() == "[DONE]" {
+        return Bytes::from(format!("{block}\n\n"));
+    }
+
+    let mut event: Value = match serde_json::from_str(&data) {
+        Ok(value) => value,
+        Err(_) => return Bytes::from(format!("{block}\n\n")),
+    };
+
+    if event_name == Some("error") && event.get("type").and_then(Value::as_str).is_none() {
+        return normalize_upstream_error_event(&event, http_status);
+    }
+
+    if normalize_response_output_id_sse_event(&mut event, state) == 0 {
+        return Bytes::from(format!("{block}\n\n"));
+    }
+
+    let normalized = serde_json::to_string(&event).unwrap_or(data);
+    let mut out = String::new();
+    if let Some(name) = event_name {
+        out.push_str("event: ");
+        out.push_str(name);
+        out.push('\n');
+    }
+    out.push_str("data: ");
+    out.push_str(&normalized);
+    out.push_str("\n\n");
+    Bytes::from(out)
+}
+
+fn strip_sse_status_comment(line: &str) -> Option<u16> {
+    let value = line.strip_prefix(':')?.strip_prefix("HTTP_STATUS/")?.trim();
+    value.parse().ok()
+}
+
+fn normalize_upstream_error_event(event: &Value, http_status: Option<u16>) -> Bytes {
+    let error = event.get("error").unwrap_or(event);
+    let code = error
+        .get("code")
+        .or_else(|| event.get("code"))
+        .and_then(Value::as_str)
+        .filter(|code| !code.is_empty())
+        .map(ToString::to_string);
+    let message = error
+        .get("message")
+        .or_else(|| event.get("message"))
+        .and_then(Value::as_str)
+        .filter(|message| !message.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "Responses upstream returned an error".to_string());
+    let error_type = error
+        .get("type")
+        .or_else(|| event.get("type"))
+        .and_then(Value::as_str)
+        .filter(|error_type| !error_type.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            if http_status.is_some_and(|status| (400..500).contains(&status)) {
+                "invalid_request_error".to_string()
+            } else {
+                "server_error".to_string()
+            }
+        });
+
+    let mut error_value = json!({
+        "type": error_type,
+        "message": message
+    });
+    if let Some(code) = code {
+        error_value["code"] = json!(code);
+    }
+    let response = json!({
+        "id": format!(
+            "resp_ccswitch_failed_{}",
+            short_sha256_hex(
+                canonical_json_string(&error_value).as_bytes()
+            )
+        ),
+        "object": "response",
+        "created_at": 0,
+        "status": "failed",
+        "error": error_value
+    });
+
+    super::codex_responses_sse::response_failed(&response)
+}
+
+fn normalize_response_output_id_sse_event(
+    event: &mut Value,
+    state: &mut ResponseOutputIdNormalizationState,
+) -> usize {
+    let mut changed = 0;
+    if let Some(item) = event.get_mut("item") {
+        if let Some((old_id, new_id)) = normalize_response_output_item_id(item, state) {
+            if event.get("item_id").and_then(Value::as_str) == Some(old_id.as_str()) {
+                event["item_id"] = json!(new_id);
+                changed += 1;
+            }
+            changed += 1;
+        }
+    }
+    if let Some(item_id) = event
+        .get("item_id")
+        .and_then(Value::as_str)
+        .and_then(|id| state.id_map.get(id).cloned())
+    {
+        event["item_id"] = json!(item_id);
+        changed += 1;
+    }
+    changed + normalize_response_output_item_ids_with_state(event, state)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2301,7 +2624,137 @@ mod tests {
     }
 
     #[test]
-    fn openai_request_inlines_plain_reasoning_without_dropping_summary() {
+    fn response_output_normalizes_third_party_native_responses_item_ids() {
+        let message_id = "resp_vendor_msg";
+        let reasoning_id = "vendor_reasoning";
+        let function_id = "call_vendor_function";
+        let encrypted_reasoning_id = "vendor_encrypted";
+        let mut body = json!({
+            "id": "resp_vendor",
+            "object": "response",
+            "output": [
+                {
+                    "id": message_id,
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}]
+                },
+                {
+                    "id": reasoning_id,
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [{"type": "summary_text", "text": "thinking"}]
+                },
+                {
+                    "id": function_id,
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": "call_1",
+                    "name": "read_file",
+                    "arguments": "{}"
+                },
+                {
+                    "id": encrypted_reasoning_id,
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": "opaque-provider-bound-payload"
+                }
+            ]
+        });
+
+        assert_eq!(normalize_response_output_item_ids(&mut body), 3);
+        assert_eq!(
+            body["output"][0]["id"],
+            format!("msg_ccswitch_{}", short_sha256_hex(message_id.as_bytes()))
+        );
+        assert_eq!(
+            body["output"][1]["id"],
+            format!("rs_ccswitch_{}", short_sha256_hex(reasoning_id.as_bytes()))
+        );
+        assert_eq!(body["output"][1]["status"], "completed");
+        assert_eq!(
+            body["output"][2]["id"],
+            format!("fc_ccswitch_{}", short_sha256_hex(function_id.as_bytes()))
+        );
+        assert_eq!(body["output"][3]["id"], encrypted_reasoning_id);
+        assert_eq!(
+            body["output"][3]["encrypted_content"],
+            "opaque-provider-bound-payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn response_output_normalize_sse_rewrites_item_id_references() {
+        use futures::{stream, StreamExt};
+
+        let source_id = "resp_vendor_msg";
+        let input = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(format!(
+            "event: response.output_item.added\n\
+             data: {{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{{\"id\":\"{source_id}\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}}}\n\n\
+             event: response.output_text.delta\n\
+             data: {{\"type\":\"response.output_text.delta\",\"item_id\":\"{source_id}\",\"output_index\":0,\"content_index\":0,\"delta\":\"hi\"}}\n\n"
+        )))]);
+        let out = create_response_output_id_normalize_sse_stream(input)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(Result::unwrap)
+            .map(|bytes| String::from_utf8(bytes.to_vec()).unwrap())
+            .collect::<String>();
+        let normalized = format!("msg_ccswitch_{}", short_sha256_hex(source_id.as_bytes()));
+
+        assert!(out.contains(&format!("\"id\":\"{normalized}\"")));
+        assert!(out.contains(&format!("\"item_id\":\"{normalized}\"")));
+        assert!(!out.contains(source_id));
+    }
+
+    #[tokio::test]
+    async fn response_output_normalize_sse_rewrites_nested_completed_output() {
+        use futures::{stream, StreamExt};
+
+        let source_id = "resp_vendor_msg";
+        let input = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(format!(
+            "event: response.completed\n\
+             data: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\",\"output\":[{{\"id\":\"{source_id}\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"done\"}}]}}]}}}}\n\n"
+        )))]);
+        let out = create_response_output_id_normalize_sse_stream(input)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(Result::unwrap)
+            .map(|bytes| String::from_utf8(bytes.to_vec()).unwrap())
+            .collect::<String>();
+        let normalized = format!("msg_ccswitch_{}", short_sha256_hex(source_id.as_bytes()));
+
+        assert!(out.contains(&format!("\"id\":\"{normalized}\"")));
+        assert!(!out.contains(source_id));
+    }
+
+    #[tokio::test]
+    async fn response_output_normalize_sse_converts_upstream_error_to_response_failed() {
+        use futures::{stream, StreamExt};
+
+        let input = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
+            "event: error\n:HTTP_STATUS/400\ndata: {\"code\":\"InvalidParameter\",\"message\":\"message[0]: id must start with msg_\"}\n\n",
+        ))]);
+        let out = create_response_output_id_normalize_sse_stream(input)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(Result::unwrap)
+            .map(|bytes| String::from_utf8(bytes.to_vec()).unwrap())
+            .collect::<String>();
+
+        assert!(out.contains("event: response.failed"));
+        assert!(out.contains("InvalidParameter"));
+        assert!(out.contains("message[0]: id must start with msg_"));
+        assert!(out.contains("invalid_request_error"));
+        assert!(!out.contains("event: error"));
+    }
+
+    #[test]
+    fn responses_upstream_preserves_canonical_plain_reasoning_status_and_summary() {
         let mut body = json!({
             "model": "gpt-5.6-sol",
             "input": [{
@@ -2317,14 +2770,132 @@ mod tests {
 
         assert_eq!(
             normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            0
+        );
+        assert_eq!(body["input"][0]["id"], "rs_resp_chatcmpl-b4d3bcf7f34003ac");
+        assert_eq!(body["input"][0]["status"], "completed");
+        assert_eq!(
+            body["input"][0]["summary"][0]["text"],
+            "plain third-party reasoning"
+        );
+    }
+
+    #[test]
+    fn responses_upstream_normalizes_noncanonical_plain_reasoning_without_dropping_fields() {
+        let mut body = json!({
+            "input": [{
+                "id": "vendor_reasoning",
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [{
+                    "type": "summary_text",
+                    "text": "third-party reasoning"
+                }]
+            }]
+        });
+
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            1
+        );
+        assert_eq!(
+            body["input"][0]["id"],
+            format!(
+                "rs_ccswitch_{}",
+                short_sha256_hex("vendor_reasoning".as_bytes())
+            )
+        );
+        assert_eq!(body["input"][0]["status"], "completed");
+        assert_eq!(
+            body["input"][0]["summary"][0]["text"],
+            "third-party reasoning"
+        );
+    }
+
+    #[test]
+    fn official_responses_upstream_strips_plain_reasoning_identity_without_dropping_summary() {
+        let mut body = json!({
+            "input": [{
+                "id": "msg_d54d69c1-79ad-4c26-ab28-a07e7e7b5e83",
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [{
+                    "type": "summary_text",
+                    "text": "third-party reasoning"
+                }]
+            }]
+        });
+
+        assert_eq!(
+            normalize_official_replayed_item_ids_for_responses_upstream(&mut body),
             1
         );
         assert!(body["input"][0].get("id").is_none());
         assert!(body["input"][0].get("status").is_none());
         assert_eq!(
             body["input"][0]["summary"][0]["text"],
-            "plain third-party reasoning"
+            "third-party reasoning"
         );
+    }
+
+    #[test]
+    fn official_responses_upstream_still_normalizes_non_reasoning_item_ids() {
+        let source_id = "msg_ddd6f038-4842-48ae-8764-1dd35de686c4";
+        let mut body = json!({
+            "input": [{
+                "id": source_id,
+                "type": "web_search_call",
+                "status": "completed"
+            }]
+        });
+
+        assert_eq!(
+            normalize_official_replayed_item_ids_for_responses_upstream(&mut body),
+            1
+        );
+        assert_eq!(
+            body["input"][0]["id"],
+            format!("ws_ccswitch_{}", short_sha256_hex(source_id.as_bytes()))
+        );
+    }
+
+    #[test]
+    fn responses_upstream_assigns_unique_ids_to_empty_or_missing_replay_ids() {
+        let mut body = json!({
+            "input": [
+                {
+                    "id": "",
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "same"}]
+                },
+                {
+                    "id": "",
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "same"}]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "reply"}]
+                }
+            ]
+        });
+
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            3
+        );
+        let first = body["input"][0]["id"].as_str().unwrap();
+        let second = body["input"][1]["id"].as_str().unwrap();
+        let third = body["input"][2]["id"].as_str().unwrap();
+        assert!(first.starts_with("msg_ccswitch_"));
+        assert!(second.starts_with("msg_ccswitch_"));
+        assert!(third.starts_with("msg_ccswitch_"));
+        assert_ne!(first, second);
+        assert_ne!(first, third);
+        assert_ne!(second, third);
     }
 
     #[test]

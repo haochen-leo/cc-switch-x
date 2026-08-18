@@ -84,6 +84,15 @@ pub fn should_convert_codex_responses_to_chat(provider: &Provider, endpoint: &st
     ) && codex_provider_uses_chat_completions(provider)
 }
 
+/// Whether a Codex provider should have replay item IDs normalized when
+/// forwarding unchanged over the native Responses protocol.
+///
+/// Chat and Anthropic bridges rebuild item IDs in their own request transforms.
+/// Official Codex uses a stricter plain-reasoning policy in the requestizer.
+pub fn codex_provider_requires_native_responses_item_id_normalization(provider: &Provider) -> bool {
+    !codex_provider_uses_chat_completions(provider) && !codex_provider_uses_anthropic(provider)
+}
+
 /// Whether a converted Codex Responses request may send `prompt_cache_key` to
 /// its Chat Completions upstream. Unknown OpenAI-compatible gateways default to
 /// false because many reject unsupported request fields with HTTP 400.
