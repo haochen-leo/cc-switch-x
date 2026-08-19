@@ -358,6 +358,23 @@ pub struct LogConfig {
     /// 日志级别: error, warn, info, debug, trace
     #[serde(default = "default_log_level")]
     pub level: String,
+    /// 是否持续记录代理请求和响应正文
+    #[serde(default)]
+    pub capture_payloads: bool,
+    /// 单个正文日志文件的最大大小（MB），超过后轮转为归档
+    #[serde(default = "default_capture_max_size_mb")]
+    pub capture_max_size_mb: u64,
+    /// 保留的正文日志归档数量
+    #[serde(default = "default_capture_archives")]
+    pub capture_archives: u32,
+}
+
+fn default_capture_max_size_mb() -> u64 {
+    50
+}
+
+fn default_capture_archives() -> u32 {
+    10
 }
 
 impl Default for LogConfig {
@@ -365,6 +382,9 @@ impl Default for LogConfig {
         Self {
             enabled: true,
             level: "info".to_string(),
+            capture_payloads: false,
+            capture_max_size_mb: default_capture_max_size_mb(),
+            capture_archives: default_capture_archives(),
         }
     }
 }
@@ -481,6 +501,9 @@ mod tests {
         let config = LogConfig::default();
         assert!(config.enabled);
         assert_eq!(config.level, "info");
+        assert!(!config.capture_payloads);
+        assert_eq!(config.capture_max_size_mb, 50);
+        assert_eq!(config.capture_archives, 10);
     }
 
     #[test]
@@ -489,6 +512,9 @@ mod tests {
         let config: LogConfig = serde_json::from_str(json).unwrap();
         assert!(config.enabled);
         assert_eq!(config.level, "info");
+        assert!(!config.capture_payloads);
+        assert_eq!(config.capture_max_size_mb, 50);
+        assert_eq!(config.capture_archives, 10);
     }
 
     #[test]
@@ -534,6 +560,7 @@ mod tests {
         let config = LogConfig {
             enabled: false,
             level: "debug".to_string(),
+            ..Default::default()
         };
         assert_eq!(config.to_level_filter(), log::LevelFilter::Off);
     }
@@ -543,10 +570,16 @@ mod tests {
         let config = LogConfig {
             enabled: true,
             level: "debug".to_string(),
+            capture_payloads: true,
+            capture_max_size_mb: 50,
+            capture_archives: 8,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: LogConfig = serde_json::from_str(&json).unwrap();
         assert!(parsed.enabled);
         assert_eq!(parsed.level, "debug");
+        assert!(parsed.capture_payloads);
+        assert_eq!(parsed.capture_max_size_mb, 50);
+        assert_eq!(parsed.capture_archives, 8);
     }
 }
