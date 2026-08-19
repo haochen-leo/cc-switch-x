@@ -227,6 +227,9 @@ pub fn responses_request_to_anthropic(
     body: Value,
     default_max_tokens: u64,
 ) -> Result<Value, ProxyError> {
+    let mut body = body;
+    super::transform_codex_compaction::normalize_codex_local_compaction_handoff(&mut body);
+
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);
     let model = body
@@ -1605,6 +1608,14 @@ mod tests {
 
     // ==================== Request: Responses → Anthropic ====================
 
+    fn codex_local_handoff_text(summary: &str) -> String {
+        format!(
+            "{}\n{}",
+            crate::proxy::providers::transform_codex_compaction::CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX,
+            summary
+        )
+    }
+
     #[test]
     fn test_request_simple_text() {
         let input = json!({
@@ -1620,6 +1631,35 @@ mod tests {
         assert_eq!(result["messages"][0]["role"], "user");
         assert_eq!(result["messages"][0]["content"][0]["type"], "text");
         assert_eq!(result["messages"][0]["content"][0]["text"], "Hello");
+    }
+
+    #[test]
+    fn test_request_wraps_codex_local_compaction_handoff() {
+        let input = json!({
+            "model": "claude-3-5-sonnet",
+            "max_output_tokens": 1024,
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": codex_local_handoff_text("The user has sent a new message: continue.")
+                }]
+            }]
+        });
+
+        let result = responses_request_to_anthropic(input, 4096).unwrap();
+        let text = result["messages"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(result["messages"][0]["role"], "user");
+        assert!(text.starts_with("<conversation-checkpoint>"));
+        assert!(text.contains("historical context"));
+        assert!(text.contains("The user has sent a new message: continue."));
+        assert!(!text.contains(
+            crate::proxy::providers::transform_codex_compaction::CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX
+        ));
     }
 
     #[test]

@@ -653,6 +653,9 @@ pub fn responses_to_chat_completions_with_reasoning(
     body: Value,
     reasoning_config: Option<&CodexChatReasoningConfig>,
 ) -> Result<Value, ProxyError> {
+    let mut body = body;
+    super::transform_codex_compaction::normalize_codex_local_compaction_handoff(&mut body);
+
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);
 
@@ -2340,6 +2343,14 @@ mod tests {
         result["messages"].as_array().unwrap()
     }
 
+    fn codex_local_handoff_text(summary: &str) -> String {
+        format!(
+            "{}\n{}",
+            crate::proxy::providers::transform_codex_compaction::CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX,
+            summary
+        )
+    }
+
     #[test]
     fn responses_upstream_normalizes_noncanonical_replayed_item_ids() {
         let additional_tools_id = "msg_vendor_additional_tools";
@@ -2943,6 +2954,33 @@ mod tests {
         let result = responses_to_chat_completions(input).unwrap();
 
         assert!(result.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn responses_request_to_chat_wraps_codex_local_compaction_handoff() {
+        let input = json!({
+            "model": "kimi-k2.6",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": codex_local_handoff_text("The user has sent a new message: continue.")
+                }]
+            }]
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        let messages = result_messages(&result);
+        let text = messages[0]["content"].as_str().unwrap();
+
+        assert_eq!(messages[0]["role"], "user");
+        assert!(text.starts_with("<conversation-checkpoint>"));
+        assert!(text.contains("historical context"));
+        assert!(text.contains("The user has sent a new message: continue."));
+        assert!(!text.contains(
+            crate::proxy::providers::transform_codex_compaction::CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX
+        ));
     }
 
     #[test]

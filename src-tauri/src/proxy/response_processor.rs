@@ -8,6 +8,7 @@ use super::{
     handler_config::{StreamUsageEventFilter, UsageParserConfig},
     handler_context::{RequestContext, StreamingTimeoutConfig},
     hyper_client::ProxyResponse,
+    payload_capture::{self, PayloadCaptureContext},
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
     usage::parser::TokenUsage,
@@ -16,7 +17,7 @@ use super::{
 use crate::database::PRICING_SOURCE_REQUEST;
 use axum::http::{header::HeaderMap, HeaderName};
 use axum::response::{IntoResponse, Response};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::stream::{Stream, StreamExt};
 use serde_json::Value;
 use std::{
@@ -83,6 +84,7 @@ pub(crate) async fn read_decoded_body(
     response: ProxyResponse,
     tag: &str,
     body_timeout: Duration,
+    capture: Option<&PayloadCaptureContext>,
 ) -> Result<(HeaderMap, http::StatusCode, Bytes), ProxyError> {
     let mut headers = response.headers().clone();
     let status = response.status();
@@ -127,6 +129,18 @@ pub(crate) async fn read_decoded_body(
 
     if decoded {
         strip_entity_headers_for_rebuilt_body(&mut headers);
+    }
+
+    if let Some(capture) = capture {
+        let content_type = headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok());
+        capture.record_bytes(
+            "upstream_response",
+            Some(status.as_u16()),
+            content_type,
+            &body_bytes,
+        );
     }
 
     Ok((headers, status, body_bytes))
@@ -177,7 +191,15 @@ pub async fn handle_streaming(
     }
 
     // 创建字节流
-    let stream = response.bytes_stream();
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
+    let content_type = response.content_type().map(str::to_owned);
+    let stream = payload_capture::capture_stream(
+        response.bytes_stream(),
+        capture,
+        "upstream_response",
+        status.as_u16(),
+        content_type,
+    );
 
     // 创建使用量收集器；关闭 usage logging 时不要在流式热路径上解析每个 SSE event。
     let usage_collector = create_usage_collector(ctx, state, status.as_u16(), parser_config);
@@ -185,13 +207,15 @@ pub async fn handle_streaming(
     // 获取流式超时配置
     let timeout_config = ctx.streaming_timeout_config();
 
-    // 创建带日志和超时的透传流
+    // 透传路径下客户端字节与上游完全一致，upstream_response 已由 capture_stream 记录，
+    // 不再重复记录 client_response，避免日志体积与流缓冲翻倍
     let logged_stream = create_logged_passthrough_stream(
         stream,
         ctx.tag,
         usage_collector,
         timeout_config,
         connection_guard,
+        None,
     );
 
     let body = axum::body::Body::from_stream(logged_stream);
@@ -220,8 +244,9 @@ pub async fn handle_non_streaming(
         } else {
             Duration::ZERO
         };
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
     let (mut response_headers, status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+        read_decoded_body(response, ctx.tag, body_timeout, Some(&capture)).await?;
     strip_hop_by_hop_response_headers(&mut response_headers);
 
     log::debug!(
@@ -308,6 +333,8 @@ pub async fn handle_non_streaming(
         builder = builder.header(key, value);
     }
 
+    // 透传路径下客户端字节与上游一致，upstream_response 已在 read_decoded_body 记录，
+    // 不再重复记录 client_response
     let body = axum::body::Body::from(body_bytes);
     builder.body(body).map_err(|e| {
         log::error!("[{}] 构建响应失败: {e}", ctx.tag);
@@ -681,9 +708,14 @@ pub fn create_logged_passthrough_stream(
     usage_collector: Option<SseUsageCollector>,
     timeout_config: StreamingTimeoutConfig,
     connection_guard: Option<ActiveConnectionGuard>,
+    payload_capture: Option<PayloadCaptureContext>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
         let _conn_guard = connection_guard;
+        let mut captured_body = payload_capture
+            .as_ref()
+            .filter(|capture| capture.enabled())
+            .map(|_| BytesMut::new());
         let mut buffer = String::new();
         let mut utf8_remainder: Vec<u8> = Vec::new();
         let mut collector = usage_collector;
@@ -733,6 +765,9 @@ pub fn create_logged_passthrough_stream(
 
             match chunk_result {
                 Some(Ok(bytes)) => {
+                    if let Some(body) = captured_body.as_mut() {
+                        body.extend_from_slice(&bytes);
+                    }
                     if is_first_chunk {
                         log::debug!(
                             "[{tag}] 已接收上游流式首包: bytes={}",
@@ -794,6 +829,14 @@ pub fn create_logged_passthrough_stream(
         }
         if let Some(guard) = &mut finish_guard {
             guard.disarm();
+        }
+        if let (Some(capture), Some(body)) = (payload_capture, captured_body) {
+            capture.record_bytes(
+                "client_response",
+                None,
+                Some("text/event-stream"),
+                &body,
+            );
         }
     }
 }
