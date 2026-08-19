@@ -24,6 +24,7 @@ use super::{
     ProxyError,
 };
 use crate::commands::{CodexOAuthState, CopilotAuthState, XaiOAuthState};
+use crate::database::Database;
 use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
 use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
@@ -116,6 +117,9 @@ impl Drop for ActiveConnectionGuard {
 }
 
 pub struct RequestForwarder {
+    db: Arc<Database>,
+    request_id: String,
+    tag: &'static str,
     /// 共享的 ProviderRouter（持有熔断器状态）
     router: Arc<ProviderRouter>,
     status: Arc<RwLock<ProxyStatus>>,
@@ -222,6 +226,9 @@ impl RequestForwarder {
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        db: Arc<Database>,
+        request_id: String,
+        tag: &'static str,
         router: Arc<ProviderRouter>,
         non_streaming_timeout: u64,
         status: Arc<RwLock<ProxyStatus>>,
@@ -245,6 +252,9 @@ impl RequestForwarder {
         // saturating_add 防止 u32::MAX + 1 溢出。
         let max_attempts = (max_retries as usize).saturating_add(1);
         Self {
+            db,
+            request_id,
+            tag,
             router,
             status,
             current_providers,
@@ -1214,6 +1224,20 @@ impl RequestForwarder {
         // the optional Responses -> Chat/Anthropic bridge.
         if matches!(app_type, AppType::GrokBuild) {
             super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
+        }
+
+        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
+            && !codex_official_auth_passthrough
+        {
+            let normalized =
+                super::providers::transform_codex_compaction::normalize_codex_local_compaction_handoff(
+                    &mut mapped_body,
+                );
+            if normalized > 0 {
+                log::debug!(
+                    "[Codex] Normalized {normalized} local compaction handoff message(s) as conversation checkpoint"
+                );
+            }
         }
 
         if is_copilot {
@@ -2226,6 +2250,28 @@ impl RequestForwarder {
             })?
         };
 
+        // 日志目标 URL 的脱敏分两种情形：
+        // - 有已知密钥(log_secrets 非空)：记录脱敏后的完整 URL，剥 userinfo/query
+        //   并抹掉已知密钥值，保留 host+path 便于诊断 base_url 配错路径导致的 404。
+        // - 无已知密钥：凭据可能整个内嵌在 path 里且无从脱敏，只记 origin，
+        //   避免默认 Info 级把形如 https://gw/<KEY>/v1 的 path 完整落盘。
+        let target_for_log = if log_secrets.is_empty() {
+            crate::redact_url_origin_for_log(&url)
+        } else {
+            crate::redact_url_for_log_with_secrets(&url, &log_secrets)
+        };
+
+        let payload_capture = super::payload_capture::PayloadCaptureContext::from_parts(
+            self.db.clone(),
+            self.request_id.clone(),
+            self.tag,
+            app_type.as_str(),
+            endpoint,
+            &self.session_id,
+            provider,
+        );
+        payload_capture.record_upstream_request(&target_for_log, &body_bytes);
+
         // 确保 content-type 存在
         if !ordered_headers.contains_key(http::header::CONTENT_TYPE) {
             ordered_headers.insert(
@@ -2244,17 +2290,6 @@ impl RequestForwarder {
         );
 
         reject_proxy_placeholder_for_managed_account_upstream(&url, &ordered_headers)?;
-
-        // 日志目标 URL 的脱敏分两种情形：
-        // - 有已知密钥(log_secrets 非空)：记录脱敏后的完整 URL，剥 userinfo/query
-        //   并抹掉已知密钥值，保留 host+path 便于诊断 base_url 配错路径导致的 404。
-        // - 无已知密钥：凭据可能整个内嵌在 path 里且无从脱敏，只记 origin，
-        //   避免默认 Info 级把形如 https://gw/<KEY>/v1 的 path 完整落盘。
-        let target_for_log = if log_secrets.is_empty() {
-            crate::redact_url_origin_for_log(&url)
-        } else {
-            crate::redact_url_for_log_with_secrets(&url, &log_secrets)
-        };
 
         // 输出请求信息日志
         let tag = adapter.name();
@@ -3790,14 +3825,19 @@ mod tests {
         streaming_first_byte_timeout: Duration,
     ) -> RequestForwarder {
         let db = Arc::new(Database::memory().expect("memory db"));
+        let router_db = db.clone();
+        let failover_db = db.clone();
 
         RequestForwarder {
-            router: Arc::new(ProviderRouter::new(db.clone())),
+            db,
+            request_id: String::new(),
+            tag: "Test",
+            router: Arc::new(ProviderRouter::new(router_db)),
             status: Arc::new(RwLock::new(ProxyStatus::default())),
             current_providers: Arc::new(RwLock::new(HashMap::new())),
             gemini_shadow: Arc::new(GeminiShadowStore::new()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
-            failover_manager: Arc::new(FailoverSwitchManager::new(db)),
+            failover_manager: Arc::new(FailoverSwitchManager::new(failover_db)),
             app_handle: None,
             current_provider_id_at_start: String::new(),
             suppress_current_provider_sync: false,

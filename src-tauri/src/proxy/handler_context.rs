@@ -35,6 +35,10 @@ pub struct StreamingTimeoutConfig {
 pub struct RequestContext {
     /// 请求开始时间
     pub start_time: Instant,
+    /// 请求关联 ID
+    pub request_id: String,
+    /// 客户端请求端点
+    pub endpoint: String,
     /// 应用级代理配置（per-app，包含重试次数和超时配置）
     pub app_config: AppProxyConfig,
     /// 选中的 Provider（故障转移链的第一个）
@@ -96,6 +100,7 @@ impl RequestContext {
         app_type_str: &'static str,
     ) -> Result<Self, ProxyError> {
         let start_time = Instant::now();
+        let request_id = uuid::Uuid::new_v4().to_string();
 
         // 从数据库读取应用级代理配置（per-app）
         let app_config = state
@@ -161,6 +166,8 @@ impl RequestContext {
 
         Ok(Self {
             start_time,
+            request_id,
+            endpoint: String::new(),
             app_config,
             provider,
             providers,
@@ -227,6 +234,9 @@ impl RequestContext {
         };
 
         RequestForwarder::new(
+            state.db.clone(),
+            self.request_id.clone(),
+            self.tag,
             state.provider_router.clone(),
             non_streaming_timeout,
             state.status.clone(),

@@ -16,6 +16,7 @@ use super::{
         CODEX_PARSER_CONFIG, GEMINI_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
     },
     handler_context::RequestContext,
+    payload_capture,
     providers::{
         codex_chat_common::extract_reasoning_field_text,
         codex_chat_history::record_responses_sse_stream,
@@ -184,6 +185,8 @@ async fn handle_messages_for_app(
     let endpoint = strip_prefix
         .and_then(|prefix| raw_endpoint.strip_prefix(prefix))
         .unwrap_or(raw_endpoint);
+    ctx.endpoint = endpoint.to_string();
+    payload_capture::PayloadCaptureContext::from_request(&state, &ctx).record_request(&body_bytes);
 
     let is_stream = body
         .get("stream")
@@ -377,6 +380,7 @@ async fn handle_claude_transform(
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
     let is_codex_oauth = ctx
         .provider
         .meta
@@ -405,7 +409,14 @@ async fn handle_claude_transform(
 
     if use_streaming {
         // 根据 api_format 选择流式转换器
-        let stream = response.bytes_stream();
+        let content_type = response.content_type().map(str::to_owned);
+        let stream = payload_capture::capture_stream(
+            response.bytes_stream(),
+            capture.clone(),
+            "upstream_response",
+            status.as_u16(),
+            content_type,
+        );
         let sse_stream: Box<
             dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
         > = if api_format == "openai_responses" {
@@ -492,6 +503,7 @@ async fn handle_claude_transform(
             usage_collector,
             timeout_config,
             connection_guard,
+            Some(capture.clone()),
         );
 
         let mut headers = axum::http::HeaderMap::new();
@@ -516,7 +528,7 @@ async fn handle_claude_transform(
             std::time::Duration::ZERO
         };
     let (mut response_headers, _status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+        read_decoded_body(response, ctx.tag, body_timeout, Some(&capture)).await?;
 
     let body_str = String::from_utf8_lossy(&body_bytes);
 
@@ -633,6 +645,12 @@ async fn handle_claude_transform(
         ProxyError::TransformError(format!("Failed to serialize response: {e}"))
     })?;
 
+    capture.record_bytes(
+        "client_response",
+        Some(status.as_u16()),
+        Some("application/json"),
+        &response_body,
+    );
     let body = axum::body::Body::from(response_body);
     builder.body(body).map_err(|e| {
         log::error!("[Claude] 构建响应失败: {e}");
@@ -716,6 +734,8 @@ pub async fn handle_chat_completions(
     let mut ctx =
         RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
     let endpoint = endpoint_with_query(&uri, "/chat/completions");
+    ctx.endpoint = endpoint.clone();
+    payload_capture::PayloadCaptureContext::from_request(&state, &ctx).record_request(&body_bytes);
 
     let is_stream = body
         .get("stream")
@@ -806,6 +826,8 @@ async fn handle_responses_for_app(
     let mut ctx =
         RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
     let endpoint = endpoint_with_query(&uri, "/responses");
+    ctx.endpoint = endpoint.clone();
+    payload_capture::PayloadCaptureContext::from_request(&state, &ctx).record_request(&body_bytes);
 
     let is_stream = body
         .get("stream")
@@ -948,6 +970,8 @@ async fn handle_responses_compact_for_app(
     let mut ctx =
         RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
     let endpoint = endpoint_with_query(&uri, "/responses/compact");
+    ctx.endpoint = endpoint.clone();
+    payload_capture::PayloadCaptureContext::from_request(&state, &ctx).record_request(&body_bytes);
 
     let is_stream = body
         .get("stream")
@@ -1053,6 +1077,7 @@ async fn handle_codex_responses_namespace_restore(
     normalize_response_output_item_ids: bool,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
 
     // Error bodies (and any non-SSE, non-success response) never contain
     // restorable function calls; hand them to the generic passthrough so error
@@ -1071,9 +1096,17 @@ async fn handle_codex_responses_namespace_restore(
             builder = builder.header(key, value);
         }
 
+        let content_type = response.content_type().map(str::to_owned);
+        let upstream_stream = payload_capture::capture_stream(
+            response.bytes_stream(),
+            capture.clone(),
+            "upstream_response",
+            status.as_u16(),
+            content_type,
+        );
         let restore_stream =
             transform_codex_responses_namespace::create_namespace_restore_sse_stream(
-                response.bytes_stream(),
+                upstream_stream,
                 restore_map,
             );
         let restore_stream: Box<
@@ -1102,6 +1135,7 @@ async fn handle_codex_responses_namespace_restore(
             usage_collector,
             ctx.streaming_timeout_config(),
             connection_guard,
+            Some(capture.clone()),
         );
 
         let body = axum::body::Body::from_stream(logged_stream);
@@ -1121,7 +1155,7 @@ async fn handle_codex_responses_namespace_restore(
             std::time::Duration::ZERO
         };
     let (mut response_headers, status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+        read_decoded_body(response, ctx.tag, body_timeout, Some(&capture)).await?;
     strip_hop_by_hop_response_headers(&mut response_headers);
 
     // Restore names when the body parses as JSON; otherwise pass the bytes
@@ -1199,6 +1233,12 @@ async fn handle_codex_responses_namespace_restore(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
     );
+    capture.record_bytes(
+        "client_response",
+        Some(status.as_u16()),
+        Some("application/json"),
+        &restored_bytes,
+    );
     builder
         .body(axum::body::Body::from(restored_bytes))
         .map_err(|e| {
@@ -1215,6 +1255,7 @@ async fn handle_codex_apply_patch_input_sanitize(
     normalize_response_output_item_ids: bool,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
 
     if !status.is_success() {
         return process_response(response, ctx, state, &CODEX_PARSER_CONFIG, connection_guard)
@@ -1230,16 +1271,24 @@ async fn handle_codex_apply_patch_input_sanitize(
             builder = builder.header(key, value);
         }
 
+        let content_type = response.content_type().map(str::to_owned);
+        let upstream_stream = payload_capture::capture_stream(
+            response.bytes_stream(),
+            capture.clone(),
+            "upstream_response",
+            status.as_u16(),
+            content_type,
+        );
         let response_stream: Box<
             dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
         > = if normalize_response_output_item_ids {
             Box::new(Box::pin(
                 transform_codex_chat::create_response_output_id_normalize_sse_stream(
-                    response.bytes_stream(),
+                    upstream_stream,
                 ),
             ))
         } else {
-            Box::new(Box::pin(response.bytes_stream()))
+            Box::new(Box::pin(upstream_stream))
         };
         let sanitize_stream =
             transform_codex_apply_patch::create_apply_patch_input_sanitize_sse_stream(
@@ -1253,6 +1302,7 @@ async fn handle_codex_apply_patch_input_sanitize(
             usage_collector,
             ctx.streaming_timeout_config(),
             connection_guard,
+            Some(capture.clone()),
         );
 
         let body = axum::body::Body::from_stream(logged_stream);
@@ -1270,7 +1320,7 @@ async fn handle_codex_apply_patch_input_sanitize(
             std::time::Duration::ZERO
         };
     let (mut response_headers, status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+        read_decoded_body(response, ctx.tag, body_timeout, Some(&capture)).await?;
     strip_hop_by_hop_response_headers(&mut response_headers);
 
     let mut rebuilt_as_json = false;
@@ -1351,6 +1401,12 @@ async fn handle_codex_apply_patch_input_sanitize(
             axum::http::HeaderValue::from_static("application/json"),
         );
     }
+    capture.record_bytes(
+        "client_response",
+        Some(status.as_u16()),
+        rebuilt_as_json.then_some("application/json"),
+        &response_bytes,
+    );
     builder
         .body(axum::body::Body::from(response_bytes))
         .map_err(|e| {
@@ -1368,17 +1424,27 @@ async fn handle_codex_chat_to_responses_transform(
     tool_context: transform_codex_chat::CodexToolContext,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
 
     if !status.is_success() {
         // 上游 Chat 错误体形状与 Responses 不一致（如 MiniMax 的 base_resp、自定义 detail 字段）；
         // 直接透传会让 Codex 客户端无法识别错误码。这里统一转换为 Responses 风格
         // `{"error": {message, type, code, param}}`，保留原始 HTTP 状态码。
-        return handle_codex_chat_error_response(response, ctx, status).await;
+        return handle_codex_chat_error_response(response, ctx, state, status).await;
     }
 
     if is_stream || response.is_sse() {
-        let stream = response.bytes_stream();
+        let content_type = response.content_type().map(str::to_owned);
+        let stream = payload_capture::capture_stream(
+            response.bytes_stream(),
+            capture.clone(),
+            "upstream_response",
+            status.as_u16(),
+            content_type,
+        );
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
+        let sse_stream =
+            transform_codex_apply_patch::create_apply_patch_input_sanitize_sse_stream(sse_stream);
         let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
 
         let usage_collector = if usage_logging_enabled(state) {
@@ -1451,6 +1517,7 @@ async fn handle_codex_chat_to_responses_transform(
             usage_collector,
             ctx.streaming_timeout_config(),
             connection_guard,
+            Some(capture.clone()),
         );
 
         let mut headers = axum::http::HeaderMap::new();
@@ -1475,7 +1542,7 @@ async fn handle_codex_chat_to_responses_transform(
             std::time::Duration::ZERO
         };
     let (mut response_headers, status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+        read_decoded_body(response, ctx.tag, body_timeout, Some(&capture)).await?;
     let body_str = String::from_utf8_lossy(&body_bytes);
     let chat_response: Value = match serde_json::from_slice(&body_bytes) {
         Ok(value) => value,
@@ -1505,7 +1572,7 @@ async fn handle_codex_chat_to_responses_transform(
             ));
         }
     };
-    let responses_response = transform_codex_chat::chat_completion_to_response_with_context(
+    let mut responses_response = transform_codex_chat::chat_completion_to_response_with_context(
         chat_response,
         &tool_context,
     )
@@ -1513,6 +1580,7 @@ async fn handle_codex_chat_to_responses_transform(
         log::error!("[Codex] Chat → Responses 响应转换失败: {e}");
         e
     })?;
+    transform_codex_apply_patch::sanitize_response_apply_patch_inputs(&mut responses_response);
     state
         .codex_chat_history
         .record_response(&responses_response)
@@ -1582,6 +1650,12 @@ async fn handle_codex_chat_to_responses_transform(
         ProxyError::TransformError(format!("Failed to serialize responses response: {e}"))
     })?;
 
+    capture.record_bytes(
+        "client_response",
+        Some(status.as_u16()),
+        Some("application/json"),
+        &response_body,
+    );
     builder
         .body(axum::body::Body::from(response_body))
         .map_err(|e| {
@@ -1607,16 +1681,24 @@ async fn handle_codex_anthropic_to_responses_transform(
     codex_tool_context: transform_codex_chat::CodexToolContext,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
 
     if !status.is_success() {
-        return handle_codex_chat_error_response(response, ctx, status).await;
+        return handle_codex_chat_error_response(response, ctx, state, status).await;
     }
 
     // Preserve live streaming when the gateway marks SSE correctly or omits an
     // explicit JSON media type. Explicit JSON is buffered below so 2xx error
     // envelopes and gateways that ignore stream:true can be converted faithfully.
     if response.is_sse() || (is_stream && !response.is_json()) {
-        let stream = response.bytes_stream();
+        let content_type = response.content_type().map(str::to_owned);
+        let stream = payload_capture::capture_stream(
+            response.bytes_stream(),
+            capture.clone(),
+            "upstream_response",
+            status.as_u16(),
+            content_type,
+        );
         let sse_stream =
             create_responses_sse_stream_from_anthropic_with_context(stream, codex_tool_context);
         return build_codex_anthropic_sse_response(
@@ -1635,7 +1717,7 @@ async fn handle_codex_anthropic_to_responses_transform(
             std::time::Duration::ZERO
         };
     let (mut response_headers, status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+        read_decoded_body(response, ctx.tag, body_timeout, Some(&capture)).await?;
     let body_str = String::from_utf8_lossy(&body_bytes);
     let anthropic_response: Value = match serde_json::from_slice(&body_bytes) {
         Ok(value) => value,
@@ -1677,7 +1759,7 @@ async fn handle_codex_anthropic_to_responses_transform(
     }
 
     let _connection_guard = connection_guard;
-    let responses_response =
+    let mut responses_response =
         transform_codex_anthropic::anthropic_response_to_responses_with_context(
             anthropic_response,
             &codex_tool_context,
@@ -1686,6 +1768,7 @@ async fn handle_codex_anthropic_to_responses_transform(
             log::error!("[Codex] Failed to convert Anthropic response to Responses: {e}");
             e
         })?;
+    transform_codex_apply_patch::sanitize_response_apply_patch_inputs(&mut responses_response);
 
     if let Some(usage) = TokenUsage::from_codex_response_auto(&responses_response)
         .filter(TokenUsage::has_billable_tokens)
@@ -1746,6 +1829,12 @@ async fn handle_codex_anthropic_to_responses_transform(
         ProxyError::TransformError(format!("Failed to serialize responses response: {e}"))
     })?;
 
+    capture.record_bytes(
+        "client_response",
+        Some(status.as_u16()),
+        Some("application/json"),
+        &response_body,
+    );
     builder
         .body(axum::body::Body::from(response_body))
         .map_err(|e| {
@@ -1761,6 +1850,9 @@ fn build_codex_anthropic_sse_response(
     status: StatusCode,
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> Result<axum::response::Response, ProxyError> {
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
+    let sse_stream =
+        transform_codex_apply_patch::create_apply_patch_input_sanitize_sse_stream(sse_stream);
     let usage_collector = if usage_logging_enabled(state) {
         let state = state.clone();
         let provider_id = ctx.provider.id.clone();
@@ -1824,6 +1916,7 @@ fn build_codex_anthropic_sse_response(
         usage_collector,
         ctx.streaming_timeout_config(),
         connection_guard,
+        Some(capture),
     );
 
     let mut headers = axum::http::HeaderMap::new();
@@ -1849,8 +1942,10 @@ fn build_codex_anthropic_sse_response(
 async fn handle_codex_chat_error_response(
     response: super::hyper_client::ProxyResponse,
     ctx: &RequestContext,
+    state: &ProxyState,
     status: axum::http::StatusCode,
 ) -> Result<axum::response::Response, ProxyError> {
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
     let body_timeout =
         if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
             std::time::Duration::from_secs(ctx.app_config.non_streaming_timeout as u64)
@@ -1858,7 +1953,7 @@ async fn handle_codex_chat_error_response(
             std::time::Duration::ZERO
         };
     let (mut response_headers, _status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+        read_decoded_body(response, ctx.tag, body_timeout, Some(&capture)).await?;
 
     // 非 JSON 上游错误体（Cloudflare HTML、纯文本 "Unauthorized" 等）若丢成 None，
     // 客户端就看不到原始诊断信息；包成 Value::String 走转换函数的字符串分支。
@@ -1905,6 +2000,12 @@ async fn handle_codex_chat_error_response(
         ProxyError::TransformError(format!("Failed to serialize responses error: {e}"))
     })?;
 
+    capture.record_bytes(
+        "client_response",
+        Some(status.as_u16()),
+        Some("application/json"),
+        &body,
+    );
     builder.body(axum::body::Body::from(body)).map_err(|e| {
         log::error!("[Codex] 构建 Responses 错误响应失败: {e}");
         ProxyError::Internal(format!("Failed to build response: {e}"))
@@ -2138,6 +2239,8 @@ pub async fn handle_gemini(
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or(uri.path());
+    ctx.endpoint = endpoint.to_string();
+    payload_capture::PayloadCaptureContext::from_request(&state, &ctx).record_request(&body_bytes);
 
     let is_stream = body
         .get("stream")
