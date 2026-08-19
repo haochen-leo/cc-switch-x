@@ -2974,7 +2974,7 @@ mod tests {
         let messages = result_messages(&result);
         let text = messages[0]["content"].as_str().unwrap();
 
-        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["role"], "assistant");
         assert!(text.starts_with("<conversation-checkpoint>"));
         assert!(text.contains("historical context"));
         assert!(text.contains("The user has sent a new message: continue."));

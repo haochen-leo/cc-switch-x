@@ -2,7 +2,8 @@
 //!
 //! Codex local compaction stores the generated handoff summary as an ordinary
 //! user message. Third-party upstreams then see the summary as fresh user input.
-//! This normalizer keeps the content but wraps it as a conversation checkpoint.
+//! This normalizer keeps the content but restores it to an assistant summary
+//! turn, matching how clients such as OpenCode carry compacted summaries.
 
 use serde_json::Value;
 
@@ -44,24 +45,46 @@ fn normalize_item(item: &mut Value) -> usize {
             .get_mut("text")
             .map(normalize_text_value)
             .unwrap_or(false) as usize,
-        None | Some("message") => object
-            .get_mut("content")
-            .map(normalize_content)
-            .unwrap_or(0),
+        None | Some("message") => {
+            let normalized = object
+                .get_mut("content")
+                .map(normalize_content_as_assistant_output)
+                .unwrap_or(0);
+            if normalized > 0 {
+                object.insert("role".to_string(), Value::String("assistant".to_string()));
+            }
+            normalized
+        }
         _ => 0,
     }
 }
 
-fn normalize_content(content: &mut Value) -> usize {
+fn normalize_content_as_assistant_output(content: &mut Value) -> usize {
     match content {
-        Value::String(text) => normalize_text(text) as usize,
+        Value::String(text) => {
+            let Some(normalized) = normalized_handoff_text(text) else {
+                return 0;
+            };
+            *content = Value::Array(vec![serde_json::json!({
+                "type": "output_text",
+                "text": normalized,
+            })]);
+            1
+        }
         Value::Array(parts) => parts
             .iter_mut()
             .filter(|part| is_text_part(part))
             .map(|part| {
-                part.get_mut("text")
+                let normalized = part
+                    .get_mut("text")
                     .map(normalize_text_value)
-                    .unwrap_or(false) as usize
+                    .unwrap_or(false);
+                if normalized {
+                    if let Some(object) = part.as_object_mut() {
+                        object.insert("type".to_string(), Value::String("output_text".to_string()));
+                    }
+                }
+                normalized as usize
             })
             .sum(),
         _ => 0,
@@ -140,6 +163,8 @@ mod tests {
 
         assert_eq!(normalize_codex_local_compaction_handoff(&mut body), 1);
         let text = body["input"][0]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["input"][0]["role"], "assistant");
+        assert_eq!(body["input"][0]["content"][0]["type"], "output_text");
         assert!(text.starts_with("<conversation-checkpoint>"));
         assert!(text.contains("historical context"));
         assert!(text.contains("The user has sent a new message: continue the task."));

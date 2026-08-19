@@ -1649,11 +1649,11 @@ mod tests {
         });
 
         let result = responses_request_to_anthropic(input, 4096).unwrap();
-        let text = result["messages"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap();
+        let messages = result["messages"].as_array().unwrap();
+        let text = messages[1]["content"][0]["text"].as_str().unwrap();
 
-        assert_eq!(result["messages"][0]["role"], "user");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
         assert!(text.starts_with("<conversation-checkpoint>"));
         assert!(text.contains("historical context"));
         assert!(text.contains("The user has sent a new message: continue."));
