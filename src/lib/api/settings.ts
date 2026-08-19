@@ -339,6 +339,11 @@ export interface OptimizerConfig {
 export interface LogConfig {
   enabled: boolean;
   level: "error" | "warn" | "info" | "debug" | "trace";
+  capturePayloads: boolean;
+  /** 单个正文日志文件的最大大小（MB） */
+  captureMaxSizeMb: number;
+  /** 保留的正文日志归档数量 */
+  captureArchives: number;
 }
 
 export interface BackupEntry {

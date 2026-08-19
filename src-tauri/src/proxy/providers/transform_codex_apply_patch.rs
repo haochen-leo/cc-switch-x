@@ -329,6 +329,7 @@ mod tests {
             json!({ "patch": patch }).to_string(),
             json!({ "data": patch }).to_string(),
             json!({ "cmd": patch }).to_string(),
+            json!({ "input": json!({ "patch": patch }).to_string() }).to_string(),
             json!({ "data": json!({ "patch": patch }).to_string() }).to_string(),
             json!({ "command": ["apply_patch", patch] }).to_string(),
         ];

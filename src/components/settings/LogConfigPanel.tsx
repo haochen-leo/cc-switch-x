@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { settingsApi, type LogConfig } from "@/lib/api/settings";
 
 const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
@@ -19,6 +20,9 @@ export function LogConfigPanel() {
   const [config, setConfig] = useState<LogConfig>({
     enabled: true,
     level: "info",
+    capturePayloads: false,
+    captureMaxSizeMb: 50,
+    captureArchives: 10,
   });
   const [isLoading, setIsLoading] = useState(true);
 
@@ -84,6 +88,70 @@ export function LogConfigPanel() {
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <Label>{t("settings.advanced.logConfig.capturePayloads")}</Label>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.advanced.logConfig.capturePayloadsDescription")}
+          </p>
+        </div>
+        <Switch
+          checked={config.capturePayloads}
+          disabled={!config.enabled}
+          onCheckedChange={(checked) =>
+            handleChange({ capturePayloads: checked })
+          }
+        />
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <Label>{t("settings.advanced.logConfig.captureMaxSizeMb")}</Label>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.advanced.logConfig.captureMaxSizeMbDescription")}
+          </p>
+        </div>
+        <Input
+          type="number"
+          min={1}
+          className="w-[120px]"
+          value={config.captureMaxSizeMb}
+          disabled={!config.enabled || !config.capturePayloads}
+          onChange={(e) =>
+            setConfig({ ...config, captureMaxSizeMb: Number(e.target.value) })
+          }
+          onBlur={(e) => {
+            const n = Math.floor(Number(e.target.value));
+            const value = n >= 1 ? n : 50;
+            handleChange({ captureMaxSizeMb: value });
+          }}
+        />
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <Label>{t("settings.advanced.logConfig.captureArchives")}</Label>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.advanced.logConfig.captureArchivesDescription")}
+          </p>
+        </div>
+        <Input
+          type="number"
+          min={0}
+          className="w-[120px]"
+          value={config.captureArchives}
+          disabled={!config.enabled || !config.capturePayloads}
+          onChange={(e) =>
+            setConfig({ ...config, captureArchives: Number(e.target.value) })
+          }
+          onBlur={(e) => {
+            const n = Math.floor(Number(e.target.value));
+            const value = n >= 0 ? n : 10;
+            handleChange({ captureArchives: value });
+          }}
+        />
       </div>
 
       {/* 日志级别说明 */}
