@@ -654,7 +654,7 @@ pub fn responses_to_chat_completions_with_reasoning(
     reasoning_config: Option<&CodexChatReasoningConfig>,
 ) -> Result<Value, ProxyError> {
     let mut body = body;
-    super::transform_codex_compaction::normalize_codex_local_compaction_handoff(&mut body);
+    super::transform_codex_compaction::normalize_codex_user_role_context_messages(&mut body);
 
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);

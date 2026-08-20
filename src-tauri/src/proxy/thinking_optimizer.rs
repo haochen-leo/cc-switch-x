@@ -137,6 +137,7 @@ mod tests {
             enabled: true,
             thinking_optimizer: true,
             cache_injection: true,
+            codex_user_role_context_normalization: true,
         }
     }
 
@@ -145,6 +146,7 @@ mod tests {
             enabled: true,
             thinking_optimizer: false,
             cache_injection: true,
+            codex_user_role_context_normalization: true,
         }
     }
 
