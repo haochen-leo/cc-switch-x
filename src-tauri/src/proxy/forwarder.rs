@@ -1226,17 +1226,17 @@ impl RequestForwarder {
             super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
         }
 
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_official_auth_passthrough
-        {
+        if should_normalize_codex_user_role_context_messages(
+            app_type,
+            codex_official_auth_passthrough,
+            &self.optimizer_config,
+        ) {
             let normalized =
-                super::providers::transform_codex_compaction::normalize_codex_local_compaction_handoff(
+                super::providers::transform_codex_compaction::normalize_codex_user_role_context_messages(
                     &mut mapped_body,
                 );
             if normalized > 0 {
-                log::debug!(
-                    "[Codex] Normalized {normalized} local compaction handoff message(s) as conversation checkpoint"
-                );
+                log::debug!("[Codex] Normalized {normalized} user-role context message(s)");
             }
         }
 
@@ -3172,7 +3172,18 @@ fn codex_anthropic_cache_config(config: &OptimizerConfig) -> OptimizerConfig {
         enabled: true,
         thinking_optimizer: false,
         cache_injection: config.cache_injection,
+        codex_user_role_context_normalization: config.codex_user_role_context_normalization,
     }
+}
+
+fn should_normalize_codex_user_role_context_messages(
+    app_type: &AppType,
+    codex_official_auth_passthrough: bool,
+    optimizer_config: &OptimizerConfig,
+) -> bool {
+    matches!(app_type, AppType::Codex | AppType::GrokBuild)
+        && !codex_official_auth_passthrough
+        && optimizer_config.codex_user_role_context_normalization
 }
 
 /// A streaming request may receive a whole JSON document even when the gateway
@@ -4798,6 +4809,35 @@ mod tests {
         });
         assert!(disabled.enabled);
         assert!(!disabled.cache_injection);
+    }
+
+    #[test]
+    fn codex_user_role_context_normalization_is_default_on_but_honors_sub_switch() {
+        assert!(should_normalize_codex_user_role_context_messages(
+            &AppType::Codex,
+            false,
+            &OptimizerConfig::default(),
+        ));
+        assert!(should_normalize_codex_user_role_context_messages(
+            &AppType::GrokBuild,
+            false,
+            &OptimizerConfig::default(),
+        ));
+        assert!(!should_normalize_codex_user_role_context_messages(
+            &AppType::Codex,
+            true,
+            &OptimizerConfig::default(),
+        ));
+
+        let disabled = OptimizerConfig {
+            codex_user_role_context_normalization: false,
+            ..OptimizerConfig::default()
+        };
+        assert!(!should_normalize_codex_user_role_context_messages(
+            &AppType::Codex,
+            false,
+            &disabled,
+        ));
     }
 
     #[test]

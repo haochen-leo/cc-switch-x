@@ -262,6 +262,7 @@ impl Default for RectifierConfig {
 ///
 /// - thinking_optimizer 作用于 Claude 兼容请求
 /// - cache_injection 仅对 Bedrock provider 生效（CLAUDE_CODE_USE_BEDROCK = "1"）
+/// - codex_user_role_context_normalization 作用于 Codex/GrokBuild 非官方上游
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerConfig {
@@ -274,6 +275,9 @@ pub struct OptimizerConfig {
     /// Cache 注入子开关（总开关开启后默认生效）
     #[serde(default = "default_true")]
     pub cache_injection: bool,
+    /// Codex user-role context 归一化（独立默认开启）
+    #[serde(default = "default_true")]
+    pub codex_user_role_context_normalization: bool,
 }
 
 impl Default for OptimizerConfig {
@@ -282,6 +286,7 @@ impl Default for OptimizerConfig {
             enabled: false,
             thinking_optimizer: true,
             cache_injection: true,
+            codex_user_role_context_normalization: true,
         }
     }
 }
@@ -494,6 +499,31 @@ mod tests {
         assert!(config.enabled);
         assert!(config.request_thinking_signature);
         assert!(config.request_thinking_budget);
+    }
+
+    #[test]
+    fn test_optimizer_config_codex_user_role_context_normalization_default_enabled() {
+        let config: OptimizerConfig = serde_json::from_str(
+            r#"{"enabled":false,"thinkingOptimizer":true,"cacheInjection":true}"#,
+        )
+        .unwrap();
+
+        assert!(config.codex_user_role_context_normalization);
+    }
+
+    #[test]
+    fn test_optimizer_config_codex_user_role_context_normalization_can_be_disabled() {
+        let config: OptimizerConfig = serde_json::from_str(
+            r#"{
+                "enabled": false,
+                "thinkingOptimizer": true,
+                "cacheInjection": true,
+                "codexUserRoleContextNormalization": false
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!config.codex_user_role_context_normalization);
     }
 
     #[test]
