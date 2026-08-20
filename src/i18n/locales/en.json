@@ -399,7 +399,9 @@
         "thinkingOptimizer": "Thinking Optimization",
         "thinkingOptimizerDescription": "Automatically enable Adaptive Thinking for Opus/Sonnet, and inject Extended Thinking for legacy models",
         "cacheInjection": "Cache Injection",
-        "cacheInjectionDescription": "Automatically inject standard 5-minute cache breakpoints at key positions to reduce duplicate token billing"
+        "cacheInjectionDescription": "Automatically inject standard 5-minute cache breakpoints at key positions to reduce duplicate token billing",
+        "codexUserRoleContextNormalization": "Codex User-Role Context Fix",
+        "codexUserRoleContextNormalizationDescription": "Moves marked Codex runtime context from user messages to assistant output so upstreams do not treat it as a new user request"
       },
       "logConfig": {
         "title": "Application Diagnostic Logs",
