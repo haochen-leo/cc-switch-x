@@ -1,15 +1,20 @@
-//! Codex local compaction handoff normalization.
+//! Codex user-role context normalization.
 //!
 //! Codex local compaction stores the generated handoff summary as an ordinary
 //! user message. Third-party upstreams then see the summary as fresh user input.
-//! This normalizer keeps the content but restores it to an assistant summary
-//! turn, matching how clients such as OpenCode carry compacted summaries.
+//! Codex also stores marked runtime context such as subagent notifications as
+//! user messages. This normalizer keeps the content but restores marked context
+//! to assistant output so upstream models do not treat it as fresh user intent.
 
 use serde_json::Value;
 
 pub(crate) const CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX: &str = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:";
+const CODEX_SUBAGENT_NOTIFICATION_OPEN_TAG: &str = "<subagent_notification>";
+const CODEX_SUBAGENT_NOTIFICATION_CLOSE_TAG: &str = "</subagent_notification>";
+const CODEX_TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
+const CODEX_TURN_ABORTED_CLOSE_TAG: &str = "</turn_aborted>";
 
-pub(crate) fn normalize_codex_local_compaction_handoff(body: &mut Value) -> usize {
+pub(crate) fn normalize_codex_user_role_context_messages(body: &mut Value) -> usize {
     let Some(input) = body.get_mut("input") else {
         return 0;
     };
@@ -62,7 +67,7 @@ fn normalize_item(item: &mut Value) -> usize {
 fn normalize_content_as_assistant_output(content: &mut Value) -> usize {
     match content {
         Value::String(text) => {
-            let Some(normalized) = normalized_handoff_text(text) else {
+            let Some(normalized) = normalized_context_text(text) else {
                 return 0;
             };
             *content = Value::Array(vec![serde_json::json!({
@@ -102,7 +107,7 @@ fn normalize_text_value(value: &mut Value) -> bool {
     let Some(text) = value.as_str() else {
         return false;
     };
-    let Some(normalized) = normalized_handoff_text(text) else {
+    let Some(normalized) = normalized_context_text(text) else {
         return false;
     };
     *value = Value::String(normalized);
@@ -110,17 +115,17 @@ fn normalize_text_value(value: &mut Value) -> bool {
 }
 
 fn normalize_text(text: &mut String) -> bool {
-    let Some(normalized) = normalized_handoff_text(text) else {
+    let Some(normalized) = normalized_context_text(text) else {
         return false;
     };
     *text = normalized;
     true
 }
 
-fn normalized_handoff_text(text: &str) -> Option<String> {
+fn normalized_context_text(text: &str) -> Option<String> {
     let trimmed = text.trim_start();
     if !trimmed.starts_with(CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX) {
-        return None;
+        return normalized_runtime_context_text(text);
     }
 
     let summary = trimmed[CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX.len()..].trim();
@@ -136,6 +141,26 @@ The following content is a summary and serialized record of earlier conversation
 </summary>\n\
 </conversation-checkpoint>"
     ))
+}
+
+fn normalized_runtime_context_text(text: &str) -> Option<String> {
+    let trimmed = text.trim_start();
+    if has_marked_context(
+        trimmed,
+        CODEX_SUBAGENT_NOTIFICATION_OPEN_TAG,
+        CODEX_SUBAGENT_NOTIFICATION_CLOSE_TAG,
+    ) || has_marked_context(
+        trimmed,
+        CODEX_TURN_ABORTED_OPEN_TAG,
+        CODEX_TURN_ABORTED_CLOSE_TAG,
+    ) {
+        return Some(text.to_string());
+    }
+    None
+}
+
+fn has_marked_context(text: &str, open_tag: &str, close_tag: &str) -> bool {
+    text.starts_with(open_tag) && text.trim_end().ends_with(close_tag)
 }
 
 #[cfg(test)]
@@ -161,7 +186,7 @@ mod tests {
             }]
         });
 
-        assert_eq!(normalize_codex_local_compaction_handoff(&mut body), 1);
+        assert_eq!(normalize_codex_user_role_context_messages(&mut body), 1);
         let text = body["input"][0]["content"][0]["text"].as_str().unwrap();
         assert_eq!(body["input"][0]["role"], "assistant");
         assert_eq!(body["input"][0]["content"][0]["type"], "output_text");
@@ -169,6 +194,52 @@ mod tests {
         assert!(text.contains("historical context"));
         assert!(text.contains("The user has sent a new message: continue the task."));
         assert!(!text.contains(CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX));
+    }
+
+    #[test]
+    fn normalizes_subagent_notification_as_assistant_output() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<subagent_notification>\n{\"agent_path\":\"/root/worker\",\"status\":\"running\"}\n</subagent_notification>"
+                }]
+            }]
+        });
+
+        assert_eq!(normalize_codex_user_role_context_messages(&mut body), 1);
+        assert_eq!(body["input"][0]["role"], "assistant");
+        assert_eq!(body["input"][0]["content"][0]["type"], "output_text");
+        assert!(body["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("<subagent_notification>"));
+    }
+
+    #[test]
+    fn normalizes_turn_aborted_as_assistant_output() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<turn_aborted>\nThe previous turn was interrupted.\n</turn_aborted>"
+                }]
+            }]
+        });
+
+        assert_eq!(normalize_codex_user_role_context_messages(&mut body), 1);
+        assert_eq!(body["input"][0]["role"], "assistant");
+        assert_eq!(body["input"][0]["content"][0]["type"], "output_text");
+        assert!(body["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("<turn_aborted>"));
     }
 
     #[test]
@@ -182,7 +253,7 @@ mod tests {
         });
         let original = body.clone();
 
-        assert_eq!(normalize_codex_local_compaction_handoff(&mut body), 0);
+        assert_eq!(normalize_codex_user_role_context_messages(&mut body), 0);
         assert_eq!(body, original);
     }
 
@@ -197,7 +268,7 @@ mod tests {
         });
         let original = body.clone();
 
-        assert_eq!(normalize_codex_local_compaction_handoff(&mut body), 0);
+        assert_eq!(normalize_codex_user_role_context_messages(&mut body), 0);
         assert_eq!(body, original);
     }
 }

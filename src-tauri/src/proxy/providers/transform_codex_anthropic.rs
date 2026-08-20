@@ -228,7 +228,7 @@ pub fn responses_request_to_anthropic(
     default_max_tokens: u64,
 ) -> Result<Value, ProxyError> {
     let mut body = body;
-    super::transform_codex_compaction::normalize_codex_local_compaction_handoff(&mut body);
+    super::transform_codex_compaction::normalize_codex_user_role_context_messages(&mut body);
 
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);
