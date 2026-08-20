@@ -334,6 +334,7 @@ export interface OptimizerConfig {
   enabled: boolean;
   thinkingOptimizer: boolean;
   cacheInjection: boolean;
+  codexUserRoleContextNormalization: boolean;
 }
 
 export interface LogConfig {

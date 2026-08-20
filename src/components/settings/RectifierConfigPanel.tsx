@@ -23,6 +23,7 @@ export function RectifierConfigPanel() {
     enabled: false,
     thinkingOptimizer: true,
     cacheInjection: true,
+    codexUserRoleContextNormalization: true,
   });
   const [isLoading, setIsLoading] = useState(true);
 
@@ -184,6 +185,29 @@ export function RectifierConfigPanel() {
           </div>
 
           <div className="space-y-4 pl-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label>
+                  {t(
+                    "settings.advanced.optimizer.codexUserRoleContextNormalization",
+                  )}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "settings.advanced.optimizer.codexUserRoleContextNormalizationDescription",
+                  )}
+                </p>
+              </div>
+              <Switch
+                checked={optimizerConfig.codexUserRoleContextNormalization}
+                onCheckedChange={(checked) =>
+                  handleOptimizerChange({
+                    codexUserRoleContextNormalization: checked,
+                  })
+                }
+              />
+            </div>
+
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
                 <Label>
