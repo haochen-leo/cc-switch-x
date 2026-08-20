@@ -399,7 +399,9 @@
         "thinkingOptimizer": "Thinking 优化",
         "thinkingOptimizerDescription": "自动为 Opus/Sonnet 启用 Adaptive Thinking，为旧模型注入 Extended Thinking",
         "cacheInjection": "Cache 注入",
-        "cacheInjectionDescription": "自动在请求关键位置注入标准 5 分钟 Cache 断点，减少重复 token 计费"
+        "cacheInjectionDescription": "自动在请求关键位置注入标准 5 分钟 Cache 断点，减少重复 token 计费",
+        "codexUserRoleContextNormalization": "Codex 用户角色上下文修正",
+        "codexUserRoleContextNormalizationDescription": "将 Codex 带标记的运行时上下文从 user 消息修正为 assistant 输出，避免上游当成新的用户请求"
       },
       "logConfig": {
         "title": "应用诊断日志",
