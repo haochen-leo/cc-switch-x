@@ -67,23 +67,57 @@ export function RectifierConfigPanel() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="space-y-0.5">
-          <Label>{t("settings.advanced.rectifier.enabled")}</Label>
-          <p className="text-xs text-muted-foreground">
-            {t("settings.advanced.rectifier.enabledDescription")}
-          </p>
-        </div>
-        <Switch
-          checked={config.enabled}
-          onCheckedChange={(checked) => handleChange({ enabled: checked })}
-        />
-      </div>
-
       <div className="space-y-4">
         <h4 className="text-sm font-medium text-muted-foreground">
-          {t("settings.advanced.rectifier.requestGroup")}
+          {t("settings.advanced.rectifier.codexGroup")}
         </h4>
+        <div className="flex items-center justify-between pl-4">
+          <div className="space-y-0.5">
+            <Label>
+              {t(
+                "settings.advanced.rectifier.codexUserRoleContextNormalization",
+              )}
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                "settings.advanced.rectifier.codexUserRoleContextNormalizationDescription",
+              )}
+            </p>
+          </div>
+          <Switch
+            checked={optimizerConfig.codexUserRoleContextNormalization}
+            onCheckedChange={(checked) =>
+              handleOptimizerChange({
+                codexUserRoleContextNormalization: checked,
+              })
+            }
+          />
+        </div>
+      </div>
+
+      <div className="border-t pt-6 mt-6 space-y-4">
+        <div className="space-y-1">
+          <h4 className="text-sm font-medium text-muted-foreground">
+            {t("settings.advanced.rectifier.anthropicGroup")}
+          </h4>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.advanced.rectifier.anthropicGroupDescription")}
+          </p>
+        </div>
+
+        <div className="flex items-center justify-between pl-4">
+          <div className="space-y-0.5">
+            <Label>{t("settings.advanced.rectifier.enabled")}</Label>
+            <p className="text-xs text-muted-foreground">
+              {t("settings.advanced.rectifier.enabledDescription")}
+            </p>
+          </div>
+          <Switch
+            checked={config.enabled}
+            onCheckedChange={(checked) => handleChange({ enabled: checked })}
+          />
+        </div>
+
         <div className="flex items-center justify-between pl-4">
           <div className="space-y-0.5">
             <Label>{t("settings.advanced.rectifier.thinkingSignature")}</Label>
@@ -185,29 +219,6 @@ export function RectifierConfigPanel() {
           </div>
 
           <div className="space-y-4 pl-4">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label>
-                  {t(
-                    "settings.advanced.optimizer.codexUserRoleContextNormalization",
-                  )}
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  {t(
-                    "settings.advanced.optimizer.codexUserRoleContextNormalizationDescription",
-                  )}
-                </p>
-              </div>
-              <Switch
-                checked={optimizerConfig.codexUserRoleContextNormalization}
-                onCheckedChange={(checked) =>
-                  handleOptimizerChange({
-                    codexUserRoleContextNormalization: checked,
-                  })
-                }
-              />
-            </div>
-
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
                 <Label>

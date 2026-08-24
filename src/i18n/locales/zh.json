@@ -381,6 +381,9 @@
         "enabledDescription": "总开关，关闭后所有整流功能将被禁用",
         "requestGroup": "请求整流",
         "responseGroup": "响应整流",
+        "codexGroup": "Codex 请求整流",
+        "anthropicGroup": "Claude / Anthropic 请求整流",
+        "anthropicGroupDescription": "修复 Claude / Anthropic 兼容请求中的 thinking、tool use 和图片输入问题",
         "thinkingSignature": "Thinking 签名整流",
         "thinkingSignatureDescription": "当 Anthropic 类型供应商返回 thinking 签名不兼容或非法请求等错误时，自动移除不兼容的 thinking 相关块并对同一供应商重试一次",
         "thinkingBudget": "Thinking Budget 整流",
@@ -390,7 +393,9 @@
         "mediaFallback": "不支持图片降级",
         "mediaFallbackDescription": "当供应商不支持图片输入时（已声明纯文本能力，或上游返回不支持图片的错误），自动将图片块替换为 [Unsupported Image] 标记，使对话不中断",
         "mediaHeuristic": "纯文本模型预判",
-        "mediaHeuristicDescription": "发送前根据内置的已确认纯文本模型注册表剥离图片。关闭仅停用代理的注册表预判；已声明纯文本模型的处理和上游报错兜底仍保留，且不会改变 Codex 模型目录的能力声明"
+        "mediaHeuristicDescription": "发送前根据内置的已确认纯文本模型注册表剥离图片。关闭仅停用代理的注册表预判；已声明纯文本模型的处理和上游报错兜底仍保留，且不会改变 Codex 模型目录的能力声明",
+        "codexUserRoleContextNormalization": "Codex 用户角色上下文修正",
+        "codexUserRoleContextNormalizationDescription": "将 Codex 带标记的运行时上下文从 user 消息修正为 assistant 输出，避免上游当成新的用户请求"
       },
       "optimizer": {
         "title": "Bedrock 请求优化器",
@@ -399,9 +404,7 @@
         "thinkingOptimizer": "Thinking 优化",
         "thinkingOptimizerDescription": "自动为 Opus/Sonnet 启用 Adaptive Thinking，为旧模型注入 Extended Thinking",
         "cacheInjection": "Cache 注入",
-        "cacheInjectionDescription": "自动在请求关键位置注入标准 5 分钟 Cache 断点，减少重复 token 计费",
-        "codexUserRoleContextNormalization": "Codex 用户角色上下文修正",
-        "codexUserRoleContextNormalizationDescription": "将 Codex 带标记的运行时上下文从 user 消息修正为 assistant 输出，避免上游当成新的用户请求"
+        "cacheInjectionDescription": "自动在请求关键位置注入标准 5 分钟 Cache 断点，减少重复 token 计费"
       },
       "logConfig": {
         "title": "应用诊断日志",

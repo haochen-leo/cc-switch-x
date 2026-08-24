@@ -381,6 +381,9 @@
         "enabledDescription": "マスタースイッチ、オフにするとすべての整流機能が無効になります",
         "requestGroup": "リクエスト整流",
         "responseGroup": "レスポンス整流",
+        "codexGroup": "Codex リクエスト整流",
+        "anthropicGroup": "Claude / Anthropic リクエスト整流",
+        "anthropicGroupDescription": "Claude / Anthropic 互換リクエストの thinking、tool use、画像入力の問題を修正します",
         "thinkingSignature": "Thinking 署名整流",
         "thinkingSignatureDescription": "Anthropic タイプのプロバイダーが thinking 署名の非互換性や不正なリクエストエラーを返した場合、互換性のない thinking 関連ブロックを自動削除し、同じプロバイダーで 1 回リトライします",
         "thinkingBudget": "Thinking Budget 整流",
@@ -390,7 +393,9 @@
         "mediaFallback": "非対応画像フォールバック",
         "mediaFallbackDescription": "プロバイダーが画像入力に対応していない場合（テキストのみの能力が宣言されている、または上流が画像非対応エラーを返した場合）、画像ブロックを [Unsupported Image] マーカーに自動置換し、会話を中断させません",
         "mediaHeuristic": "テキスト専用モデルの事前判定",
-        "mediaHeuristicDescription": "送信前に、内蔵の確認済みテキスト専用モデル登録に基づいて画像を除去します。オフにしても無効になるのはプロキシの登録ベース事前処理だけで、宣言済みテキスト専用モデルの処理と上流エラー時のフォールバックは残り、Codex モデルカタログの能力宣言は変わりません"
+        "mediaHeuristicDescription": "送信前に、内蔵の確認済みテキスト専用モデル登録に基づいて画像を除去します。オフにしても無効になるのはプロキシの登録ベース事前処理だけで、宣言済みテキスト専用モデルの処理と上流エラー時のフォールバックは残り、Codex モデルカタログの能力宣言は変わりません",
+        "codexUserRoleContextNormalization": "Codex ユーザーロール文脈修正",
+        "codexUserRoleContextNormalizationDescription": "マーク付きの Codex 実行時コンテキストを user メッセージから assistant 出力へ移し、上流が新しいユーザー要求として扱わないようにします"
       },
       "optimizer": {
         "title": "Bedrock リクエストオプティマイザー",
@@ -399,9 +404,7 @@
         "thinkingOptimizer": "Thinking 最適化",
         "thinkingOptimizerDescription": "Opus/Sonnet に Adaptive Thinking を自動的に有効化し、レガシーモデルに Extended Thinking を注入",
         "cacheInjection": "Cache 注入",
-        "cacheInjectionDescription": "リクエストの重要な位置に標準の 5 分間 Cache ブレークポイントを自動注入し、重複トークンの課金を削減",
-        "codexUserRoleContextNormalization": "Codex ユーザーロール文脈修正",
-        "codexUserRoleContextNormalizationDescription": "マーク付きの Codex 実行時コンテキストを user メッセージから assistant 出力へ移し、上流が新しいユーザー要求として扱わないようにします"
+        "cacheInjectionDescription": "リクエストの重要な位置に標準の 5 分間 Cache ブレークポイントを自動注入し、重複トークンの課金を削減"
       },
       "logConfig": {
         "title": "アプリ診断ログ",
