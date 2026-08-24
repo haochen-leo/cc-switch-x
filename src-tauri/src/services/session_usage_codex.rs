@@ -18,6 +18,7 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
+use crate::services::codex_aggregation::aggregate_route_model_map;
 use crate::services::session_usage::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
@@ -501,6 +502,25 @@ fn get_codex_sync_state(db: &Database, file_path: &Path) -> Result<(i64, i64), A
 /// 2. 剥离 provider 前缀：`openai/gpt-5.4` → `gpt-5.4`
 /// 3. 剥离 ISO 日期后缀：`gpt-5.4-2026-03-05` → `gpt-5.4`
 /// 4. 剥离紧凑日期后缀：`gpt-5.4-20260305` → `gpt-5.4`
+/// 从会话原始模型串还原上游模型。
+///
+/// 聚合 slug 顺序随版本变化（`provider/model` 与 `model/provider` 并存），
+/// 先双向查聚合路由表，未命中再回退 [`normalize_codex_model`]
+///（保留 `openai/gpt-5.4` 等官方前缀剥离行为）。
+fn resolve_codex_session_model(raw: &str, routes: &HashMap<String, String>) -> String {
+    let lowered = raw.trim().to_ascii_lowercase();
+    if let Some(model) = routes.get(&lowered) {
+        return normalize_codex_model(model);
+    }
+    if let Some(pos) = lowered.rfind('/') {
+        let reversed = format!("{}/{}", &lowered[pos + 1..], &lowered[..pos]);
+        if let Some(model) = routes.get(&reversed) {
+            return normalize_codex_model(model);
+        }
+    }
+    normalize_codex_model(raw)
+}
+
 fn normalize_codex_model(raw: &str) -> String {
     // Step 1: 小写
     let mut name = raw.to_lowercase();
@@ -593,6 +613,7 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     let codex_dir = get_codex_config_dir();
     let files = collect_codex_session_files(&codex_dir);
     let rollout_index = build_rollout_index(&files);
+    let route_models = aggregate_route_model_map(db);
 
     let mut result = SessionSyncResult {
         imported: 0,
@@ -604,7 +625,7 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     };
 
     for file_path in &files {
-        match sync_single_codex_file(db, file_path, &rollout_index) {
+        match sync_single_codex_file(db, file_path, &rollout_index, &route_models) {
             Ok(file_result) => {
                 result.imported = result.imported.saturating_add(file_result.imported);
                 result.skipped = result.skipped.saturating_add(file_result.skipped);
@@ -696,6 +717,7 @@ fn collect_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: u32, max
 fn parse_codex_file(
     file_path: &Path,
     root_thread_id: Option<String>,
+    route_models: &HashMap<String, String>,
 ) -> Result<ParsedCodexFile, AppError> {
     let file =
         fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
@@ -783,7 +805,7 @@ fn parse_codex_file(
                         .or_else(|| payload.get("info").and_then(|info| info.get("model")))
                         .and_then(serde_json::Value::as_str)
                     {
-                        current_model = normalize_codex_model(model);
+                        current_model = resolve_codex_session_model(model, route_models);
                     }
                 }
             }
@@ -807,7 +829,7 @@ fn parse_codex_file(
                     .or_else(|| payload.get("model"))
                     .and_then(serde_json::Value::as_str)
                 {
-                    current_model = normalize_codex_model(model);
+                    current_model = resolve_codex_session_model(model, route_models);
                 }
 
                 let (cumulative, is_total) = if let Some(total) = info.get("total_token_usage") {
@@ -1033,6 +1055,7 @@ fn sync_single_codex_file(
     db: &Database,
     file_path: &Path,
     rollout_index: &RolloutIndex,
+    route_models: &HashMap<String, String>,
 ) -> Result<CodexFileSyncResult, AppError> {
     let file_path_str = file_path.to_string_lossy().to_string();
 
@@ -1077,7 +1100,7 @@ fn sync_single_codex_file(
         }
     }
 
-    let parsed = parse_codex_file(file_path, thread_id_from_filename(file_path))?;
+    let parsed = parse_codex_file(file_path, thread_id_from_filename(file_path), route_models)?;
     if !parsed.has_billable_tokens {
         update_sync_state(db, &file_path_str, file_modified, parsed.line_offset)?;
         return Ok(CodexFileSyncResult::default());
@@ -1441,7 +1464,7 @@ mod tests {
             .iter()
             .map(|path| path.to_path_buf())
             .collect::<Vec<_>>();
-        sync_single_codex_file(db, file, &build_rollout_index(&files))
+        sync_single_codex_file(db, file, &build_rollout_index(&files), &HashMap::new())
     }
 
     #[test]
@@ -2248,6 +2271,32 @@ mod tests {
     }
 
     // ── 模型名归一化测试 ──
+
+    #[test]
+    fn test_resolve_codex_session_model_via_routes() {
+        let mut routes = HashMap::new();
+        routes.insert(
+            "qwen3.8-max/dashscope".to_string(),
+            "qwen3.8-max".to_string(),
+        );
+
+        // 新序 slug 直接命中
+        assert_eq!(
+            resolve_codex_session_model("qwen3.8-max/dashscope", &routes),
+            "qwen3.8-max"
+        );
+        // 旧序 slug 反向命中
+        assert_eq!(
+            resolve_codex_session_model("dashscope/qwen3.8-max", &routes),
+            "qwen3.8-max"
+        );
+        // 未命中回退 normalize，保留官方前缀剥离
+        assert_eq!(
+            resolve_codex_session_model("openai/gpt-5.4", &routes),
+            "gpt-5.4"
+        );
+        assert_eq!(resolve_codex_session_model("glm-5.2", &routes), "glm-5.2");
+    }
 
     #[test]
     fn test_normalize_codex_model_lowercase() {
