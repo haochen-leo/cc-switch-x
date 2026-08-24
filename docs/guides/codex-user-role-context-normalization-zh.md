@@ -136,6 +136,7 @@ local compaction handoff 额外包成 checkpoint，明确告诉模型这是历�
 
 前端开关：
 
+- UI 位置：设置 -> 代理 -> 整流器 -> Codex 请求整流 -> Codex 用户角色上下文修正
 - `src/components/settings/RectifierConfigPanel.tsx`
 - `src/lib/api/settings.ts`
 - `src/i18n/locales/zh.json`
