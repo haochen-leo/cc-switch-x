@@ -129,6 +129,8 @@ impl Database {
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
             max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+            retry_429_enabled INTEGER NOT NULL DEFAULT 1, retry_429_max_retries INTEGER NOT NULL DEFAULT 2,
+            retry_429_initial_delay_ms INTEGER NOT NULL DEFAULT 2000,
             streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
             circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
             circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
@@ -511,6 +513,11 @@ impl Database {
                         Self::migrate_v15_to_v16(conn)?;
                         Self::set_user_version(conn, 16)?;
                     }
+                    16 => {
+                        log::info!("迁移数据库从 v16 到 v17（补充 429 限流重试配置列）");
+                        Self::migrate_v16_to_v17(conn)?;
+                        Self::set_user_version(conn, 17)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -660,6 +667,24 @@ impl Database {
                 "proxy_config",
                 "non_streaming_timeout",
                 "INTEGER NOT NULL DEFAULT 600",
+            )?;
+            Self::add_column_if_missing(
+                conn,
+                "proxy_config",
+                "retry_429_enabled",
+                "INTEGER NOT NULL DEFAULT 1",
+            )?;
+            Self::add_column_if_missing(
+                conn,
+                "proxy_config",
+                "retry_429_max_retries",
+                "INTEGER NOT NULL DEFAULT 2",
+            )?;
+            Self::add_column_if_missing(
+                conn,
+                "proxy_config",
+                "retry_429_initial_delay_ms",
+                "INTEGER NOT NULL DEFAULT 2000",
             )?;
         }
 
@@ -847,6 +872,8 @@ impl Database {
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
             max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+            retry_429_enabled INTEGER NOT NULL DEFAULT 1, retry_429_max_retries INTEGER NOT NULL DEFAULT 2,
+            retry_429_initial_delay_ms INTEGER NOT NULL DEFAULT 2000,
             streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
             circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
             circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
@@ -1412,6 +1439,9 @@ impl Database {
                 enabled INTEGER NOT NULL DEFAULT 0,
                 auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
                 max_retries INTEGER NOT NULL DEFAULT 3,
+                retry_429_enabled INTEGER NOT NULL DEFAULT 1,
+                retry_429_max_retries INTEGER NOT NULL DEFAULT 2,
+                retry_429_initial_delay_ms INTEGER NOT NULL DEFAULT 2000,
                 streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
                 streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
                 non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
@@ -1439,6 +1469,9 @@ impl Database {
             ("enabled", "0"),
             ("auto_failover_enabled", "0"),
             ("max_retries", "3"),
+            ("retry_429_enabled", "1"),
+            ("retry_429_max_retries", "2"),
+            ("retry_429_initial_delay_ms", "2000"),
             ("streaming_first_byte_timeout", "60"),
             ("streaming_idle_timeout", "120"),
             ("non_streaming_timeout", "600"),
@@ -1470,6 +1503,7 @@ impl Database {
             "INSERT INTO proxy_config_v14 (
                 app_type, proxy_enabled, listen_address, listen_port, enable_logging,
                 enabled, auto_failover_enabled, max_retries,
+                retry_429_enabled, retry_429_max_retries, retry_429_initial_delay_ms,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests,
@@ -1521,6 +1555,33 @@ impl Database {
     fn migrate_v15_to_v16(conn: &Connection) -> Result<(), AppError> {
         let codex_dir = crate::codex_config::get_codex_config_dir();
         crate::services::session_usage_codex::reset_codex_usage_on_conn(conn, &codex_dir)
+    }
+
+    /// v16 -> v17：补齐 429 限流重试配置列（老库已在 v16，v1_to_v2 不会再跑）
+    fn migrate_v16_to_v17(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "proxy_config")? {
+            return Ok(());
+        }
+
+        Self::add_column_if_missing(
+            conn,
+            "proxy_config",
+            "retry_429_enabled",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        Self::add_column_if_missing(
+            conn,
+            "proxy_config",
+            "retry_429_max_retries",
+            "INTEGER NOT NULL DEFAULT 2",
+        )?;
+        Self::add_column_if_missing(
+            conn,
+            "proxy_config",
+            "retry_429_initial_delay_ms",
+            "INTEGER NOT NULL DEFAULT 2000",
+        )?;
+        Ok(())
     }
 
     /// 插入默认模型定价数据
@@ -3080,7 +3141,7 @@ mod tests {
 
         Database::apply_schema_migrations_on_conn(&conn)?;
 
-        assert_eq!(Database::get_user_version(&conn)?, 16);
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
         let counts: (i64, i64, i64, i64) = conn.query_row(
             "SELECT
                 (SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'codex_session'),
@@ -3091,6 +3152,44 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         assert_eq!(counts, (0, 1, 0, 1));
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v16_to_v17_adds_retry_429_columns() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute(
+            "CREATE TABLE proxy_config (
+                app_type TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3
+            )",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO proxy_config (app_type, max_retries) VALUES ('codex', 3)",
+            [],
+        )?;
+        Database::set_user_version(&conn, 16)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        for column in [
+            "retry_429_enabled",
+            "retry_429_max_retries",
+            "retry_429_initial_delay_ms",
+        ] {
+            assert!(Database::has_column(&conn, "proxy_config", column)?);
+        }
+        let defaults: (i64, i64, i64) = conn.query_row(
+            "SELECT retry_429_enabled, retry_429_max_retries, retry_429_initial_delay_ms
+             FROM proxy_config WHERE app_type = 'codex'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(defaults, (1, 2, 2000));
         Ok(())
     }
 }
