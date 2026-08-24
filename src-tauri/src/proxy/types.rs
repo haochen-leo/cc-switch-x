@@ -177,6 +177,15 @@ pub struct AppProxyConfig {
     pub auto_failover_enabled: bool,
     /// 最大重试次数
     pub max_retries: u32,
+    /// 是否对上游 HTTP 429 做同 Provider 等待重试
+    #[serde(default = "default_true")]
+    pub retry_429_enabled: bool,
+    /// HTTP 429 同 Provider 最大重试次数
+    #[serde(default = "default_retry_429_max_retries")]
+    pub retry_429_max_retries: u32,
+    /// HTTP 429 指数退避初始等待时间（毫秒）
+    #[serde(default = "default_retry_429_initial_delay_ms")]
+    pub retry_429_initial_delay_ms: u64,
     /// 流式首字超时（秒）
     pub streaming_first_byte_timeout: u32,
     /// 流式静默超时（秒）
@@ -193,6 +202,14 @@ pub struct AppProxyConfig {
     pub circuit_error_rate_threshold: f64,
     /// 计算错误率的最小请求数
     pub circuit_min_requests: u32,
+}
+
+fn default_retry_429_max_retries() -> u32 {
+    2
+}
+
+fn default_retry_429_initial_delay_ms() -> u64 {
+    2_000
 }
 
 /// 整流器配置

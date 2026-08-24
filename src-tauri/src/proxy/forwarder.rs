@@ -154,6 +154,12 @@ pub struct RequestForwarder {
     /// `max_attempts = max_retries + 1`，所以 max_retries=0 表示仅尝试一家、
     /// max_retries=3（默认）表示最多 4 家。loop 同时受 providers.len() 自然限制。
     max_attempts: usize,
+    /// 上游 HTTP 429 是否在同一个 provider 上等待后重试。
+    retry_429_enabled: bool,
+    /// 上游 HTTP 429 同 provider 最大重试次数。
+    retry_429_max_retries: u32,
+    /// 上游 HTTP 429 指数退避初始等待时间（毫秒）。
+    retry_429_initial_delay_ms: u64,
 }
 
 impl RequestForwarder {
@@ -247,6 +253,9 @@ impl RequestForwarder {
         optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
         max_retries: u32,
+        retry_429_enabled: bool,
+        retry_429_max_retries: u32,
+        retry_429_initial_delay_ms: u64,
     ) -> Self {
         // max_retries 是「失败后重试次数」语义，attempt 上限 = retries + 1。
         // saturating_add 防止 u32::MAX + 1 溢出。
@@ -274,6 +283,64 @@ impl RequestForwarder {
                 streaming_first_byte_timeout,
             ),
             max_attempts,
+            retry_429_enabled,
+            retry_429_max_retries,
+            retry_429_initial_delay_ms,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn forward_with_429_retry(
+        &self,
+        app_type: &AppType,
+        method: &http::Method,
+        provider: &Provider,
+        endpoint: &str,
+        provider_body: &Value,
+        headers: &axum::http::HeaderMap,
+        extensions: &Extensions,
+        adapter: &dyn ProviderAdapter,
+        is_routed_target: bool,
+        app_type_str: &str,
+    ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
+        let mut rate_limit_retries = 0u32;
+        loop {
+            let result = self
+                .forward(
+                    app_type,
+                    method,
+                    provider,
+                    endpoint,
+                    provider_body,
+                    headers,
+                    extensions,
+                    adapter,
+                    is_routed_target,
+                )
+                .await;
+
+            let Err(error) = result else {
+                return result;
+            };
+
+            if !self.retry_429_enabled
+                || !is_upstream_429(&error)
+                || rate_limit_retries >= self.retry_429_max_retries
+            {
+                return Err(error);
+            }
+
+            rate_limit_retries = rate_limit_retries.saturating_add(1);
+            let delay_ms =
+                retry_429_delay_ms(&error, rate_limit_retries, self.retry_429_initial_delay_ms);
+            log::warn!(
+                "[{app_type_str}] [RATE-429] Provider {} returned HTTP 429; retrying same provider after {}ms ({}/{})",
+                provider.name,
+                delay_ms,
+                rate_limit_retries,
+                self.retry_429_max_retries
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         }
     }
 
@@ -532,9 +599,9 @@ impl RequestForwarder {
                 status.current_provider_id = Some(provider.id.clone());
             }
 
-            // 转发请求（每个 Provider 只尝试一次，重试由客户端控制）
+            // 转发请求；HTTP 429 可在同 Provider 上按配置等待后重试，再进入故障转移。
             match self
-                .forward(
+                .forward_with_429_retry(
                     app_type,
                     &method,
                     provider,
@@ -544,6 +611,7 @@ impl RequestForwarder {
                     &extensions,
                     adapter.as_ref(),
                     is_routed_target,
+                    app_type_str,
                 )
                 .await
             {
@@ -2431,6 +2499,7 @@ impl RequestForwarder {
             Ok((response, resolved_claude_api_format, outbound_model))
         } else {
             let status_code = status.as_u16();
+            let retry_after_ms = parse_retry_after_ms(response.headers());
             // 错误响应同样可能被上游压缩（content-encoding）。reqwest 未启用任何
             // 自动解压 feature，这里拿到的是原始字节；不解压的话，压缩过的错误体会
             // 在 from_utf8 处变成非 UTF-8 而被丢弃，隐藏掉上游的限流/鉴权等详情。
@@ -2449,6 +2518,7 @@ impl RequestForwarder {
             Err(ProxyError::UpstreamError {
                 status: status_code,
                 body: body_text,
+                retry_after_ms,
             })
         }
     }
@@ -2892,6 +2962,47 @@ fn extract_error_message(error: &ProxyError) -> Option<String> {
     }
 }
 
+fn is_upstream_429(error: &ProxyError) -> bool {
+    matches!(error, ProxyError::UpstreamError { status: 429, .. })
+}
+
+fn retry_429_delay_ms(error: &ProxyError, retry_number: u32, initial_delay_ms: u64) -> u64 {
+    if let ProxyError::UpstreamError {
+        retry_after_ms: Some(retry_after_ms),
+        ..
+    } = error
+    {
+        return *retry_after_ms;
+    }
+
+    let mut delay = initial_delay_ms.max(1);
+    for _ in 1..retry_number {
+        delay = delay.saturating_mul(2);
+    }
+    delay
+}
+
+fn parse_retry_after_ms(headers: &http::HeaderMap) -> Option<u64> {
+    let raw = headers
+        .get(http::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Some(seconds.saturating_mul(1_000));
+    }
+
+    let retry_at = chrono::DateTime::parse_from_rfc2822(raw)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    let now = chrono::Utc::now();
+    if retry_at <= now {
+        return Some(0);
+    }
+    Some((retry_at - now).num_milliseconds().max(0) as u64)
+}
+
 /// 检测 Provider 是否为 Bedrock（通过 CLAUDE_CODE_USE_BEDROCK 环境变量判断）
 fn is_bedrock_provider(provider: &Provider) -> bool {
     provider
@@ -2949,7 +3060,7 @@ fn build_terminal_failure_log(
 
 fn summarize_proxy_error(error: &ProxyError) -> String {
     match error {
-        ProxyError::UpstreamError { status, body } => {
+        ProxyError::UpstreamError { status, body, .. } => {
             let body_summary = body
                 .as_deref()
                 .map(summarize_upstream_body)
@@ -3860,6 +3971,9 @@ mod tests {
             non_streaming_timeout,
             streaming_first_byte_timeout,
             max_attempts: 1,
+            retry_429_enabled: true,
+            retry_429_max_retries: 2,
+            retry_429_initial_delay_ms: 2_000,
         }
     }
 
@@ -4085,6 +4199,7 @@ mod tests {
         let error = ProxyError::UpstreamError {
             status: 429,
             body: Some(r#"{"error":{"message":"rate limit exceeded"}}"#.to_string()),
+            retry_after_ms: None,
         };
 
         let (code, message) = build_retryable_failure_log("PackyCode-response", 1, 1, &error);
@@ -4095,6 +4210,30 @@ mod tests {
         // 上游错误消息保留(截断)，用于诊断失败原因。
         assert!(message.contains("rate limit exceeded"));
         assert!(!message.contains("切换下一个"));
+    }
+
+    #[test]
+    fn retry_429_delay_prefers_retry_after() {
+        let error = ProxyError::UpstreamError {
+            status: 429,
+            body: None,
+            retry_after_ms: Some(7_000),
+        };
+
+        assert_eq!(retry_429_delay_ms(&error, 3, 2_000), 7_000);
+    }
+
+    #[test]
+    fn retry_429_delay_grows_without_configured_upper_bound() {
+        let error = ProxyError::UpstreamError {
+            status: 429,
+            body: None,
+            retry_after_ms: None,
+        };
+
+        assert_eq!(retry_429_delay_ms(&error, 1, 2_000), 2_000);
+        assert_eq!(retry_429_delay_ms(&error, 2, 2_000), 4_000);
+        assert_eq!(retry_429_delay_ms(&error, 6, 2_000), 64_000);
     }
 
     #[test]
@@ -4865,10 +5004,12 @@ mod tests {
             ProxyError::UpstreamError {
                 status: 401,
                 body: None,
+                retry_after_ms: None,
             },
             ProxyError::UpstreamError {
                 status: 403,
                 body: None,
+                retry_after_ms: None,
             },
         ] {
             assert_eq!(
@@ -4897,6 +5038,7 @@ mod tests {
                 &ProxyError::UpstreamError {
                     status: 401,
                     body: None,
+                    retry_after_ms: None,
                 },
                 &provider,
             ),
@@ -5300,6 +5442,7 @@ mod tests {
             body: Some(
                 r#"{"error":{"message":"This model does not support image input"}}"#.to_string(),
             ),
+            retry_after_ms: None,
         }
     }
     #[test]
@@ -5391,6 +5534,7 @@ mod tests {
                 r#"{"error":{"message":"Failed to deserialize the JSON body into the target type: messages[11]: unknown variant image_url, expected text"}}"#
                     .to_string(),
             ),
+            retry_after_ms: None,
         };
 
         assert!(fwd.media_retry_should_trigger("Codex", false, &body, &error));
@@ -5434,6 +5578,7 @@ mod tests {
         let context_error = ProxyError::UpstreamError {
             status: 400,
             body: Some(r#"{"error":{"message":"maximum context length exceeded"}}"#.to_string()),
+            retry_after_ms: None,
         };
 
         assert!(!fwd.media_retry_should_trigger("Codex", false, &body, &context_error));
