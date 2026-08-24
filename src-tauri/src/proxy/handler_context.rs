@@ -255,6 +255,9 @@ impl RequestContext {
             self.optimizer_config.clone(),
             self.copilot_optimizer_config.clone(),
             max_retries,
+            self.app_config.retry_429_enabled,
+            self.app_config.retry_429_max_retries,
+            self.app_config.retry_429_initial_delay_ms,
         )
     }
 
