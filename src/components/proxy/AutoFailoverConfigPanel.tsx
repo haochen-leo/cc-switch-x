@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Save, Loader2, Info } from "lucide-react";
 import { toast } from "sonner";
@@ -25,6 +26,9 @@ export function AutoFailoverConfigPanel({
   const [formData, setFormData] = useState({
     autoFailoverEnabled: false,
     maxRetries: "3",
+    retry429Enabled: true,
+    retry429MaxRetries: "2",
+    retry429InitialDelayMs: "2000",
     streamingFirstByteTimeout: "60",
     streamingIdleTimeout: "120",
     nonStreamingTimeout: "600",
@@ -40,6 +44,9 @@ export function AutoFailoverConfigPanel({
       setFormData({
         autoFailoverEnabled: config.autoFailoverEnabled,
         maxRetries: String(config.maxRetries),
+        retry429Enabled: config.retry429Enabled,
+        retry429MaxRetries: String(config.retry429MaxRetries),
+        retry429InitialDelayMs: String(config.retry429InitialDelayMs),
         streamingFirstByteTimeout: String(config.streamingFirstByteTimeout),
         streamingIdleTimeout: String(config.streamingIdleTimeout),
         nonStreamingTimeout: String(config.nonStreamingTimeout),
@@ -67,6 +74,8 @@ export function AutoFailoverConfigPanel({
     // 定义各字段的有效范围
     const ranges = {
       maxRetries: { min: 0, max: 10 },
+      retry429MaxRetries: { min: 0 },
+      retry429InitialDelayMs: { min: 1 },
       streamingFirstByteTimeout: { min: 1, max: 120 },
       streamingIdleTimeout: { min: 0, max: 600 },
       nonStreamingTimeout: { min: 60, max: 1200 },
@@ -80,6 +89,8 @@ export function AutoFailoverConfigPanel({
     // 解析原始值
     const raw = {
       maxRetries: parseNum(formData.maxRetries),
+      retry429MaxRetries: parseNum(formData.retry429MaxRetries),
+      retry429InitialDelayMs: parseNum(formData.retry429InitialDelayMs),
       streamingFirstByteTimeout: parseNum(formData.streamingFirstByteTimeout),
       streamingIdleTimeout: parseNum(formData.streamingIdleTimeout),
       nonStreamingTimeout: parseNum(formData.nonStreamingTimeout),
@@ -94,11 +105,13 @@ export function AutoFailoverConfigPanel({
     const errors: string[] = [];
     const checkRange = (
       value: number,
-      range: { min: number; max: number },
+      range: { min: number; max?: number },
       label: string,
     ) => {
-      if (isNaN(value) || value < range.min || value > range.max) {
-        errors.push(`${label}: ${range.min}-${range.max}`);
+      if (isNaN(value) || value < range.min || (range.max !== undefined && value > range.max)) {
+        errors.push(
+          range.max === undefined ? `${label}: >=${range.min}` : `${label}: ${range.min}-${range.max}`,
+        );
       }
     };
 
@@ -106,6 +119,16 @@ export function AutoFailoverConfigPanel({
       raw.maxRetries,
       ranges.maxRetries,
       t("proxy.autoFailover.maxRetries", "最大重试次数"),
+    );
+    checkRange(
+      raw.retry429MaxRetries,
+      ranges.retry429MaxRetries,
+      t("proxy.autoFailover.retry429MaxRetries", "429 最大重试次数"),
+    );
+    checkRange(
+      raw.retry429InitialDelayMs,
+      ranges.retry429InitialDelayMs,
+      t("proxy.autoFailover.retry429InitialDelayMs", "429 初始等待时间"),
     );
     checkRange(
       raw.streamingFirstByteTimeout,
@@ -164,6 +187,9 @@ export function AutoFailoverConfigPanel({
         enabled: config.enabled,
         autoFailoverEnabled: formData.autoFailoverEnabled,
         maxRetries: raw.maxRetries,
+        retry429Enabled: formData.retry429Enabled,
+        retry429MaxRetries: raw.retry429MaxRetries,
+        retry429InitialDelayMs: raw.retry429InitialDelayMs,
         streamingFirstByteTimeout: raw.streamingFirstByteTimeout,
         streamingIdleTimeout: raw.streamingIdleTimeout,
         nonStreamingTimeout: raw.nonStreamingTimeout,
@@ -189,6 +215,9 @@ export function AutoFailoverConfigPanel({
       setFormData({
         autoFailoverEnabled: config.autoFailoverEnabled,
         maxRetries: String(config.maxRetries),
+        retry429Enabled: config.retry429Enabled,
+        retry429MaxRetries: String(config.retry429MaxRetries),
+        retry429InitialDelayMs: String(config.retry429InitialDelayMs),
         streamingFirstByteTimeout: String(config.streamingFirstByteTimeout),
         streamingIdleTimeout: String(config.streamingIdleTimeout),
         nonStreamingTimeout: String(config.nonStreamingTimeout),
@@ -258,6 +287,81 @@ export function AutoFailoverConfigPanel({
                 {t(
                   "proxy.autoFailover.maxRetriesHint",
                   "请求失败时的重试次数（0-10）",
+                )}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 rounded-md border border-white/10 px-3 py-2">
+              <div className="space-y-1">
+                <Label htmlFor={`retry429Enabled-${appType}`}>
+                  {t("proxy.autoFailover.retry429Enabled", "429 原地重试")}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "proxy.autoFailover.retry429EnabledHint",
+                    "上游返回 429 时，先等待后重试同一 Provider，再进入故障转移",
+                  )}
+                </p>
+              </div>
+              <Switch
+                id={`retry429Enabled-${appType}`}
+                checked={formData.retry429Enabled}
+                onCheckedChange={(checked) =>
+                  setFormData({ ...formData, retry429Enabled: checked })
+                }
+                disabled={isDisabled}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor={`retry429MaxRetries-${appType}`}>
+                {t("proxy.autoFailover.retry429MaxRetries", "429 最大重试次数")}
+              </Label>
+              <Input
+                id={`retry429MaxRetries-${appType}`}
+                type="number"
+                min="0"
+                value={formData.retry429MaxRetries}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    retry429MaxRetries: e.target.value,
+                  })
+                }
+                disabled={isDisabled}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  "proxy.autoFailover.retry429MaxRetriesHint",
+                  "同一 Provider 收到 429 后最多重试多少次，不设上限",
+                )}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor={`retry429InitialDelayMs-${appType}`}>
+                {t(
+                  "proxy.autoFailover.retry429InitialDelayMs",
+                  "429 初始等待时间（毫秒）",
+                )}
+              </Label>
+              <Input
+                id={`retry429InitialDelayMs-${appType}`}
+                type="number"
+                min="1"
+                value={formData.retry429InitialDelayMs}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    retry429InitialDelayMs: e.target.value,
+                  })
+                }
+                disabled={isDisabled}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  "proxy.autoFailover.retry429InitialDelayMsHint",
+                  "没有 Retry-After 时按该值起步并逐次翻倍",
                 )}
               </p>
             </div>
