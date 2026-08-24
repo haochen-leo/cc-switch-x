@@ -381,6 +381,9 @@
         "enabledDescription": "Master switch, all rectification features will be disabled when turned off",
         "requestGroup": "Request Rectification",
         "responseGroup": "Response Rectification",
+        "codexGroup": "Codex Request Rectification",
+        "anthropicGroup": "Claude / Anthropic Request Rectification",
+        "anthropicGroupDescription": "Fixes thinking, tool use, and image input issues in Claude / Anthropic-compatible requests",
         "thinkingSignature": "Thinking Signature Rectification",
         "thinkingSignatureDescription": "When an Anthropic-type provider returns thinking signature incompatibility or illegal request errors, automatically removes incompatible thinking-related blocks and retries once with the same provider",
         "thinkingBudget": "Thinking Budget Rectification",
@@ -390,7 +393,9 @@
         "mediaFallback": "Unsupported Image Fallback",
         "mediaFallbackDescription": "When a provider does not support image input (it declares text-only capability, or the upstream returns an unsupported-image error), automatically replaces image blocks with an [Unsupported Image] marker so the conversation is not interrupted",
         "mediaHeuristic": "Text-Only Model Preflight",
-        "mediaHeuristicDescription": "Before sending, strips images for models in the built-in confirmed text-only registry. Turning this off only disables the proxy's registry-based preflight; declared text-only handling and upstream-error fallback remain, and Codex model-catalog capability declarations are unchanged"
+        "mediaHeuristicDescription": "Before sending, strips images for models in the built-in confirmed text-only registry. Turning this off only disables the proxy's registry-based preflight; declared text-only handling and upstream-error fallback remain, and Codex model-catalog capability declarations are unchanged",
+        "codexUserRoleContextNormalization": "Codex User-Role Context Fix",
+        "codexUserRoleContextNormalizationDescription": "Moves marked Codex runtime context from user messages to assistant output so upstreams do not treat it as a new user request"
       },
       "optimizer": {
         "title": "Bedrock Request Optimizer",
@@ -399,9 +404,7 @@
         "thinkingOptimizer": "Thinking Optimization",
         "thinkingOptimizerDescription": "Automatically enable Adaptive Thinking for Opus/Sonnet, and inject Extended Thinking for legacy models",
         "cacheInjection": "Cache Injection",
-        "cacheInjectionDescription": "Automatically inject standard 5-minute cache breakpoints at key positions to reduce duplicate token billing",
-        "codexUserRoleContextNormalization": "Codex User-Role Context Fix",
-        "codexUserRoleContextNormalizationDescription": "Moves marked Codex runtime context from user messages to assistant output so upstreams do not treat it as a new user request"
+        "cacheInjectionDescription": "Automatically inject standard 5-minute cache breakpoints at key positions to reduce duplicate token billing"
       },
       "logConfig": {
         "title": "Application Diagnostic Logs",
