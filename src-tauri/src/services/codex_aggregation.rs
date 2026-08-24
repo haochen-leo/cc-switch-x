@@ -4,7 +4,7 @@ use crate::provider::{Provider, ProviderMeta};
 use futures::future::join_all;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 pub const CODEX_AGGREGATE_PROVIDER_ID: &str = "codex-multi-provider";
@@ -704,6 +704,40 @@ fn model_entry_is_explicitly_unavailable(entry: &Value) -> bool {
                     "hide" | "hidden" | "disabled" | "unavailable" | "unsupported" | "denied"
                 )
             })
+}
+
+/// 聚合路由表 "slug → 上游模型" 映射（键统一小写）。
+///
+/// 供会话日志解析回填模型使用：路由表键的顺序随版本变化
+///（`provider/model` 与 `model/provider` 并存），调用方需双向查找。
+pub fn aggregate_route_model_map(db: &Database) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let Ok(providers) = db.get_all_providers(AppType::Codex.as_str()) else {
+        return map;
+    };
+    for provider in providers.into_values() {
+        if !provider.is_codex_aggregate() {
+            continue;
+        }
+        let Some(routes) = provider
+            .settings_config
+            .get("codexAggregateRoutes")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for (slug, route) in routes {
+            if let Some(model) = route
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+            {
+                map.insert(slug.to_ascii_lowercase(), model.to_string());
+            }
+        }
+    }
+    map
 }
 
 pub fn aggregate_provider_stats(provider: &Provider) -> (usize, usize) {
