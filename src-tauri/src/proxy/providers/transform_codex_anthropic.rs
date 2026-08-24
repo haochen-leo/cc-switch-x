@@ -28,21 +28,6 @@ use std::collections::{BTreeMap, HashSet};
 pub(crate) const ANTHROPIC_THINKING_ENCRYPTED_PREFIX: &str = "ccswitch-anthropic-thinking-v1:";
 const TOOL_SEARCH_PROXY_NAME: &str = "tool_search";
 
-/// Maps Codex's reasoning.effort to the token budget for Anthropic thinking.
-///
-/// Returning `None` indicates an unrecognized effort value—in that case extended
-/// thinking should not be enabled (to avoid accidentally swallowing
-/// temperature/top_p), keeping normal sampling.
-pub(crate) fn effort_to_thinking_budget(effort: &str) -> Option<u64> {
-    match effort.trim().to_ascii_lowercase().as_str() {
-        "minimal" | "low" => Some(2048),
-        "medium" => Some(8192),
-        "high" => Some(16384),
-        "xhigh" | "max" => Some(24576),
-        _ => None,
-    }
-}
-
 fn codex_effort_to_anthropic(effort: &str) -> Option<&'static str> {
     match effort.trim().to_ascii_lowercase().as_str() {
         "minimal" | "low" => Some("low"),
@@ -311,15 +296,10 @@ pub fn responses_request_to_anthropic(
         .filter(|v| *v > 0)
         .unwrap_or(default_max_tokens);
     let mut thinking_enabled = false;
-    let mut thinking_budget = reasoning_effort
-        .and_then(effort_to_thinking_budget)
-        .unwrap_or(0);
+    let requested_effort = reasoning_effort.and_then(codex_effort_to_anthropic);
     let explicitly_disabled = reasoning_explicitly_disabled(reasoning_effort);
     let adaptive_should_think = adaptive_model
-        && (adaptive_by_default
-            || reasoning_effort
-                .and_then(codex_effort_to_anthropic)
-                .is_some());
+        && (adaptive_by_default || requested_effort.is_some());
 
     if !thinking_history_is_valid {
         if cannot_disable_thinking {
@@ -334,7 +314,7 @@ pub fn responses_request_to_anthropic(
     } else if adaptive_should_think && (!explicitly_disabled || cannot_disable_thinking) {
         thinking_enabled = true;
         result["thinking"] = json!({ "type": "adaptive" });
-        if let Some(effort) = reasoning_effort.and_then(codex_effort_to_anthropic) {
+        if let Some(effort) = requested_effort {
             result["output_config"] = json!({ "effort": effort });
         } else if explicitly_disabled && cannot_disable_thinking {
             // Fable/Mythos cannot turn thinking off. `low` is the closest safe
@@ -343,27 +323,15 @@ pub fn responses_request_to_anthropic(
         }
     } else if explicitly_disabled {
         result["thinking"] = json!({ "type": "disabled" });
-    } else if thinking_budget > 0 {
+    } else if let Some(effort) = requested_effort {
         thinking_enabled = true;
-        // Anthropic requires max_tokens > budget_tokens and budget >= 1024. Reserve
-        // headroom for the visible answer: cap the thinking budget at half of max_tokens
-        // so a large derived budget (e.g. 24576 for xhigh) can't consume nearly all of a
-        // modest max_tokens and leave ~1 output token (an effectively empty completion).
-        // Do not raise the caller's max_tokens (it may exceed the model's output ceiling
-        // and 400). If the remaining budget is below Anthropic's 1024 floor, disable
-        // thinking and restore normal sampling.
-        let ceiling = max_tokens / 2;
-        thinking_budget = thinking_budget.min(ceiling);
-        if thinking_budget < 1024 {
-            thinking_enabled = false;
-        }
+        result["output_config"] = json!({ "effort": effort });
     }
     result["max_tokens"] = json!(max_tokens);
 
     if thinking_enabled && !adaptive_model {
         result["thinking"] = json!({
-            "type": "enabled",
-            "budget_tokens": thinking_budget
+            "type": "enabled"
         });
     }
 
@@ -2125,11 +2093,9 @@ mod tests {
     }
 
     #[test]
-    fn test_request_effort_to_thinking_and_drops_temperature() {
+    fn test_request_effort_to_output_config_and_drops_temperature() {
         let input = json!({
             "model": "c",
-            // Well above 2× the high-effort budget so the output-headroom cap
-            // (max_tokens/2) does not clamp it — this test covers effort mapping.
             "max_output_tokens": 40000,
             "temperature": 0.7,
             "top_p": 0.9,
@@ -2138,7 +2104,8 @@ mod tests {
         });
         let result = responses_request_to_anthropic(input, 4096).unwrap();
         assert_eq!(result["thinking"]["type"], "enabled");
-        assert_eq!(result["thinking"]["budget_tokens"], 16384);
+        assert!(result["thinking"].get("budget_tokens").is_none());
+        assert_eq!(result["output_config"]["effort"], "high");
         assert!(result.get("temperature").is_none());
         assert!(result.get("top_p").is_none());
     }
@@ -2330,10 +2297,7 @@ mod tests {
     }
 
     #[test]
-    fn test_request_small_max_tokens_disables_thinking() {
-        // The chosen effort budget is clamped below max_tokens; after clamping it is
-        // < 1024 → disable thinking, fall back to sampling, and do not raise the
-        // caller's max_tokens (to avoid exceeding the model's output ceiling and 400).
+    fn test_request_small_max_tokens_keeps_effort_thinking() {
         let input = json!({
             "model": "c",
             "max_output_tokens": 1000,
@@ -2342,34 +2306,30 @@ mod tests {
             "input": [{ "role": "user", "content": "hi" }]
         });
         let result = responses_request_to_anthropic(input, 4096).unwrap();
-        assert!(result.get("thinking").is_none());
+        assert_eq!(result["thinking"]["type"], "enabled");
+        assert!(result["thinking"].get("budget_tokens").is_none());
+        assert_eq!(result["output_config"]["effort"], "high");
         assert_eq!(result["max_tokens"], 1000);
-        assert_eq!(result["temperature"], 0.7);
+        assert!(result.get("temperature").is_none());
     }
 
     #[test]
-    fn test_request_thinking_budget_clamped_below_max_tokens() {
-        // The chosen effort budget exceeds half of max_tokens, so it is capped at
-        // max_tokens/2 (reserving the other half for the visible answer) while staying
-        // >= 1024, so thinking stays enabled.
+    fn test_request_effort_does_not_emit_thinking_budget() {
         let input = json!({
             "model": "c",
             "max_output_tokens": 5000,
-            "reasoning": { "effort": "high" }, // budget 16384
+            "reasoning": { "effort": "max" },
             "input": [{ "role": "user", "content": "hi" }]
         });
         let result = responses_request_to_anthropic(input, 4096).unwrap();
         assert_eq!(result["thinking"]["type"], "enabled");
-        assert_eq!(result["thinking"]["budget_tokens"], 2500);
+        assert!(result["thinking"].get("budget_tokens").is_none());
+        assert_eq!(result["output_config"]["effort"], "max");
         assert_eq!(result["max_tokens"], 5000);
     }
 
     #[test]
-    fn test_request_default_max_tokens_leaves_output_headroom() {
-        // Regression: on the no-max_output_tokens fallback path, a large derived thinking
-        // budget must not consume nearly all of the default max_tokens. With default 8192
-        // and high effort (16384), the budget is capped at 8192/2 = 4096, leaving 4096 for
-        // the visible answer (previously it clamped to 8191, leaving ~1 output token).
+    fn test_request_default_max_tokens_with_effort_mode() {
         let input = json!({
             "model": "c",
             "reasoning": { "effort": "high" },
@@ -2377,14 +2337,9 @@ mod tests {
         });
         let result = responses_request_to_anthropic(input, 8192).unwrap();
         assert_eq!(result["thinking"]["type"], "enabled");
-        assert_eq!(result["thinking"]["budget_tokens"], 4096);
+        assert!(result["thinking"].get("budget_tokens").is_none());
+        assert_eq!(result["output_config"]["effort"], "high");
         assert_eq!(result["max_tokens"], 8192);
-        assert!(
-            result["max_tokens"].as_u64().unwrap()
-                - result["thinking"]["budget_tokens"].as_u64().unwrap()
-                >= 4096,
-            "at least half of max_tokens must remain for the visible answer"
-        );
     }
 
     #[test]
