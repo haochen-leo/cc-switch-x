@@ -28,6 +28,23 @@ use std::collections::{BTreeMap, HashSet};
 pub(crate) const ANTHROPIC_THINKING_ENCRYPTED_PREFIX: &str = "ccswitch-anthropic-thinking-v1:";
 const TOOL_SEARCH_PROXY_NAME: &str = "tool_search";
 
+/// Whether the Anthropic-compatible upstream enforces signed thinking blocks in
+/// replayed tool history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnthropicThinkingPolicy {
+    /// Real Anthropic surfaces (api.anthropic.com, Bedrock, Vertex) verify
+    /// thinking signatures: replaying unsigned thinking history with thinking
+    /// enabled is a 400. Replayed unsigned blocks are stripped before send, and
+    /// thinking is disabled for a trailing tool turn that lacks a signed block.
+    #[default]
+    Strict,
+    /// Third-party Anthropic-compatible endpoints (dashscope/kimi, ...) neither
+    /// sign nor verify thinking blocks. The requested thinking effort is honored
+    /// on every turn regardless of replay history, and unsigned thinking blocks
+    /// round-trip untouched.
+    Lenient,
+}
+
 fn codex_effort_to_anthropic(effort: &str) -> Option<&'static str> {
     match effort.trim().to_ascii_lowercase().as_str() {
         "minimal" | "low" => Some("low"),
@@ -48,16 +65,30 @@ fn reasoning_explicitly_disabled(effort: Option<&str>) -> bool {
     )
 }
 
-/// Preserve an Anthropic signed thinking/redacted-thinking block inside the opaque
+/// Preserve an Anthropic thinking/redacted-thinking block inside the opaque
 /// Responses `reasoning.encrypted_content` field so Codex replays it on the next
 /// tool-result request. The prefix keeps unrelated providers' ciphertext isolated.
+///
+/// Third-party Anthropic-compatible endpoints (kimi via dashscope, ...) emit
+/// thinking blocks with a missing or empty signature — the upstream neither
+/// signs nor verifies them. Those blocks are bridged too (the empty signature
+/// is itself the unsigned marker); a strict upstream strips replayed unsigned
+/// blocks on the next request instead of 400ing (see
+/// `responses_request_to_anthropic_with_policy`).
 pub(crate) fn encode_anthropic_thinking_block(block: &Value) -> Option<String> {
     match block.get("type").and_then(|value| value.as_str()) {
-        Some("thinking")
-            if block
-                .get("signature")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty()) => {}
+        Some("thinking") => {
+            if !block.get("thinking").is_some_and(Value::is_string) {
+                return None;
+            }
+            if let Some(signature) = block.get("signature") {
+                if !signature.is_string() {
+                    return None;
+                }
+            }
+        }
+        // redacted_thinking only ever originates from real Anthropic, which
+        // always attaches non-empty data — keep the strict requirement.
         Some("redacted_thinking")
             if block
                 .get("data")
@@ -76,8 +107,9 @@ pub(crate) fn decode_anthropic_thinking_block(encrypted_content: &str) -> Option
     let encoded = encrypted_content.strip_prefix(ANTHROPIC_THINKING_ENCRYPTED_PREFIX)?;
     let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
     let block: Value = serde_json::from_slice(&bytes).ok()?;
-    // Reuse the encoder's validation so legacy/malformed bridge envelopes cannot
-    // replay an unsigned thinking block into an Anthropic tool turn.
+    // Reuse the encoder's validation so legacy/malformed bridge envelopes (e.g.
+    // non-string signature, missing thinking text) cannot replay into an
+    // Anthropic tool turn.
     encode_anthropic_thinking_block(&block).map(|_| block)
 }
 
@@ -208,9 +240,25 @@ fn responses_system_text(item: &Value) -> Vec<String> {
     }
 }
 
+/// Test-only convenience wrapper: exercises the strict (real-Anthropic) policy.
+/// Production goes through `responses_request_to_anthropic_with_policy` with a
+/// provider-derived policy.
+#[cfg(test)]
 pub fn responses_request_to_anthropic(
     body: Value,
     default_max_tokens: u64,
+) -> Result<Value, ProxyError> {
+    responses_request_to_anthropic_with_policy(
+        body,
+        default_max_tokens,
+        AnthropicThinkingPolicy::Strict,
+    )
+}
+
+pub fn responses_request_to_anthropic_with_policy(
+    body: Value,
+    default_max_tokens: u64,
+    thinking_policy: AnthropicThinkingPolicy,
 ) -> Result<Value, ProxyError> {
     let mut body = body;
     super::transform_codex_compaction::normalize_codex_user_role_context_messages(&mut body);
@@ -264,6 +312,13 @@ pub fn responses_request_to_anthropic(
     // assistant/function_call, or input may be entirely reasoning and thus empty after being dropped).
     // Drop incomplete tool turns first (they would otherwise 400), then guarantee a leading user.
     drop_incomplete_tool_turns(&mut messages);
+    if thinking_policy == AnthropicThinkingPolicy::Strict {
+        // Replayed thinking blocks that carry no upstream signature (produced by
+        // a lenient endpoint such as kimi before a provider switch) 400 on real
+        // Anthropic surfaces; strip them so the gate below simply disables
+        // thinking for the affected turn instead.
+        strip_unsigned_thinking_blocks(&mut messages);
+    }
     drop_empty_messages(&mut messages);
     ensure_leading_user_message(&mut messages);
     if messages.is_empty() {
@@ -278,7 +333,14 @@ pub fn responses_request_to_anthropic(
             "cannot convert Codex request: empty messages".to_string(),
         ));
     }
-    let thinking_history_is_valid = trailing_turn_supports_thinking(&messages);
+    // Lenient upstreams neither sign nor verify thinking blocks (probed: they
+    // accept thinking enabled alongside tool history that has no thinking
+    // blocks), so the replay-history gate would only ever drop the requested
+    // thinking for them. The gate stays in force for strict upstreams.
+    let thinking_history_is_valid = match thinking_policy {
+        AnthropicThinkingPolicy::Lenient => true,
+        AnthropicThinkingPolicy::Strict => trailing_turn_supports_thinking(&messages),
+    };
     result["messages"] = json!(messages);
 
     let reasoning_effort = body
@@ -298,8 +360,8 @@ pub fn responses_request_to_anthropic(
     let mut thinking_enabled = false;
     let requested_effort = reasoning_effort.and_then(codex_effort_to_anthropic);
     let explicitly_disabled = reasoning_explicitly_disabled(reasoning_effort);
-    let adaptive_should_think = adaptive_model
-        && (adaptive_by_default || requested_effort.is_some());
+    let adaptive_should_think =
+        adaptive_model && (adaptive_by_default || requested_effort.is_some());
 
     if !thinking_history_is_valid {
         if cannot_disable_thinking {
@@ -974,6 +1036,29 @@ fn message_has_content(message: &Value) -> bool {
         .and_then(Value::as_array)
         .map(|content| !content.is_empty())
         .unwrap_or(true)
+}
+
+/// Removes replayed thinking blocks that carry no upstream signature. Strict
+/// Anthropic upstreams reject unsigned thinking in tool history with a 400;
+/// lenient endpoints keep these blocks untouched (they neither sign nor verify).
+fn strip_unsigned_thinking_blocks(messages: &mut Vec<Value>) {
+    for message in messages.iter_mut() {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        content.retain(|block| {
+            if block.get("type").and_then(Value::as_str) != Some("thinking") {
+                return true;
+            }
+            block
+                .get("signature")
+                .and_then(Value::as_str)
+                .is_some_and(|signature| !signature.is_empty())
+        });
+    }
 }
 
 /// A fresh user prompt can start a new thinking turn. A tool-result continuation
@@ -2195,6 +2280,106 @@ mod tests {
     }
 
     #[test]
+    fn test_lenient_policy_honors_effort_on_unsigned_tool_turn() {
+        // kimi-style replay: the tool-result turn's paired assistant turn has no
+        // thinking block (the endpoint neither signed nor returned one). Strict
+        // policy silently drops thinking for such turns; lenient policy honors
+        // the requested effort on every turn.
+        let input = json!({
+            "model": "kimi-k3",
+            "max_output_tokens": 8192,
+            "reasoning": { "effort": "high" },
+            "input": [
+                { "role": "user", "content": "call the tool" },
+                { "type": "function_call", "call_id": "c1", "name": "Read", "arguments": "{}" },
+                { "type": "function_call_output", "call_id": "c1", "output": "ok" }
+            ]
+        });
+
+        let strict = responses_request_to_anthropic(input.clone(), 8192).unwrap();
+        assert!(strict.get("thinking").is_none());
+        assert!(strict.get("output_config").is_none());
+
+        let lenient = responses_request_to_anthropic_with_policy(
+            input,
+            8192,
+            AnthropicThinkingPolicy::Lenient,
+        )
+        .unwrap();
+        assert_eq!(lenient["thinking"]["type"], "enabled");
+        assert_eq!(lenient["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn test_unsigned_thinking_block_round_trips_through_encrypted_content() {
+        let block = json!({
+            "type": "thinking",
+            "thinking": "reasoning without a signature",
+            "signature": ""
+        });
+        let encoded = encode_anthropic_thinking_block(&block)
+            .expect("unsigned thinking block must still encode");
+        let decoded = decode_anthropic_thinking_block(&encoded).expect("must decode back");
+        assert_eq!(decoded, block);
+    }
+
+    #[test]
+    fn test_strict_policy_strips_unsigned_replayed_thinking_blocks() {
+        // A thinking block captured from a lenient endpoint (empty signature) is
+        // replayed by Codex after a provider switch to a strict upstream: the
+        // block must be stripped and thinking must stay off for that tool turn
+        // instead of 400ing on the unsigned history.
+        let unsigned = json!({
+            "type": "thinking",
+            "thinking": "kimi reasoning",
+            "signature": ""
+        });
+        let encrypted = encode_anthropic_thinking_block(&unsigned).unwrap();
+        let input = json!({
+            "model": "kimi-k3",
+            "max_output_tokens": 8192,
+            "reasoning": { "effort": "high" },
+            "input": [
+                { "role": "user", "content": "call the tool" },
+                { "type": "reasoning", "encrypted_content": encrypted },
+                { "type": "function_call", "call_id": "c1", "name": "Read", "arguments": "{}" },
+                { "type": "function_call_output", "call_id": "c1", "output": "ok" }
+            ]
+        });
+
+        let strict = responses_request_to_anthropic(input.clone(), 8192).unwrap();
+        assert!(strict.get("thinking").is_none());
+        let messages = strict["messages"].as_array().unwrap();
+        let paired_assistant = &messages[messages.len() - 2];
+        assert!(
+            !paired_assistant["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|block| block["type"] == "thinking"),
+            "strict policy must strip the unsigned replayed thinking block"
+        );
+
+        let lenient = responses_request_to_anthropic_with_policy(
+            input,
+            8192,
+            AnthropicThinkingPolicy::Lenient,
+        )
+        .unwrap();
+        assert_eq!(lenient["thinking"]["type"], "enabled");
+        let messages = lenient["messages"].as_array().unwrap();
+        let paired_assistant = &messages[messages.len() - 2];
+        let thinking_block = paired_assistant["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|block| block["type"] == "thinking")
+            .expect("lenient policy keeps the replayed thinking block");
+        assert_eq!(thinking_block["thinking"], "kimi reasoning");
+        assert_eq!(thinking_block["signature"], "");
+    }
+
+    #[test]
     fn test_thinking_requires_all_parallel_tool_results_to_match_paired_turn() {
         let paired = json!([
             {"role": "assistant", "content": [
@@ -2459,7 +2644,12 @@ mod tests {
     }
 
     #[test]
-    fn test_unsigned_thinking_is_not_replayed_as_encrypted_reasoning() {
+    fn test_unsigned_thinking_is_replayed_as_encrypted_reasoning() {
+        // Third-party Anthropic-compatible endpoints (kimi via dashscope, ...)
+        // emit thinking blocks with a missing or empty signature. They must
+        // still be bridged into an encrypted reasoning item so Codex can replay
+        // them; a strict upstream strips such replayed blocks on the next
+        // request instead of 400ing.
         let input = json!({
             "id":"msg_unsigned",
             "content":[
@@ -2470,8 +2660,13 @@ mod tests {
         });
 
         let result = anthropic_response_to_responses(input).unwrap();
-        assert_eq!(result["output"].as_array().unwrap().len(), 1);
-        assert_eq!(result["output"][0]["type"], "message");
+        let output = result["output"].as_array().unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0]["type"], "reasoning");
+        let encrypted = output[0]["encrypted_content"].as_str().unwrap();
+        let block = decode_anthropic_thinking_block(encrypted).unwrap();
+        assert_eq!(block["thinking"], "unsigned");
+        assert_eq!(output[1]["type"], "message");
     }
 
     #[test]

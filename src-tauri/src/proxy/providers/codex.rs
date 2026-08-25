@@ -215,6 +215,66 @@ pub fn should_convert_codex_responses_to_anthropic(provider: &Provider, endpoint
     ) && codex_provider_uses_anthropic(provider)
 }
 
+/// Codex → Anthropic path: whether the upstream enforces Anthropic's signed
+/// thinking-history rules.
+///
+/// Real Anthropic surfaces (api.anthropic.com, Bedrock, Vertex) verify thinking
+/// signatures, so replayed unsigned history must be stripped and thinking
+/// disabled for tool turns that lack a signed block. Third-party
+/// Anthropic-compatible endpoints (dashscope/kimi, moonshot, ...) neither sign
+/// nor verify thinking blocks, so they get the lenient policy that honors the
+/// requested thinking effort on every turn. Meta `anthropicThinkingPolicy`
+/// ("strict" | "lenient") overrides the host-based classification.
+pub fn codex_anthropic_thinking_policy(
+    provider: &Provider,
+) -> super::transform_codex_anthropic::AnthropicThinkingPolicy {
+    use super::transform_codex_anthropic::AnthropicThinkingPolicy;
+
+    if let Some(policy) = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.anthropic_thinking_policy.as_deref())
+    {
+        match policy.trim().to_ascii_lowercase().as_str() {
+            "strict" => return AnthropicThinkingPolicy::Strict,
+            "lenient" => return AnthropicThinkingPolicy::Lenient,
+            _ => {}
+        }
+    }
+
+    let base_url = provider
+        .settings_config
+        .get("base_url")
+        .or_else(|| provider.settings_config.get("baseURL"))
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string)
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("config")
+                .and_then(|v| v.as_str())
+                .and_then(extract_codex_base_url_from_toml)
+        });
+    let host = base_url
+        .as_deref()
+        .and_then(|value| url::Url::parse(value).ok())
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    let verifies_signatures = host == "api.anthropic.com"
+        || host.ends_with(".amazonaws.com")
+        || host == "aiplatform.googleapis.com"
+        || host.ends_with(".aiplatform.googleapis.com");
+    if verifies_signatures {
+        AnthropicThinkingPolicy::Strict
+    } else {
+        // Third-party Anthropic-compatible endpoints (the common case for this
+        // path) neither sign nor verify thinking blocks; for them the strict
+        // gate would silently drop thinking, which is a worse failure mode than
+        // a loud 400 on a misclassified signature-verifying relay.
+        AnthropicThinkingPolicy::Lenient
+    }
+}
+
 /// Whether a native-Responses Codex upstream needs Codex `namespace`/plugin
 /// tool declarations flattened before forwarding.
 ///
@@ -846,6 +906,51 @@ mod tests {
             icon_color: None,
             in_failover_queue: false,
         }
+    }
+
+    #[test]
+    fn anthropic_thinking_policy_classifies_by_upstream_host() {
+        use super::super::transform_codex_anthropic::AnthropicThinkingPolicy;
+
+        // Third-party Anthropic-compatible endpoint (kimi via dashscope) → lenient.
+        let third_party = create_provider(json!({
+            "config": "[model_providers.custom]\nbase_url = \"https://dashscope.aliyuncs.com/apps/anthropic\"\n"
+        }));
+        assert_eq!(
+            codex_anthropic_thinking_policy(&third_party),
+            AnthropicThinkingPolicy::Lenient
+        );
+
+        // Official Anthropic → strict.
+        let official = create_provider(json!({
+            "base_url": "https://api.anthropic.com"
+        }));
+        assert_eq!(
+            codex_anthropic_thinking_policy(&official),
+            AnthropicThinkingPolicy::Strict
+        );
+
+        // Bedrock / Vertex surfaces also verify signatures → strict.
+        let bedrock = create_provider(json!({
+            "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com"
+        }));
+        assert_eq!(
+            codex_anthropic_thinking_policy(&bedrock),
+            AnthropicThinkingPolicy::Strict
+        );
+
+        // Meta override wins over host classification.
+        let mut overridden = create_provider(json!({
+            "base_url": "https://dashscope.aliyuncs.com/apps/anthropic"
+        }));
+        overridden.meta = Some(crate::provider::ProviderMeta {
+            anthropic_thinking_policy: Some("strict".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(
+            codex_anthropic_thinking_policy(&overridden),
+            AnthropicThinkingPolicy::Strict
+        );
     }
 
     #[test]
