@@ -286,6 +286,9 @@ pub fn responses_request_to_anthropic_with_policy(
     }
     if let Some(items) = body.get("input").and_then(Value::as_array) {
         for item in items {
+            if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
+                continue;
+            }
             if matches!(
                 item.get("role").and_then(Value::as_str),
                 Some("system" | "developer")
@@ -560,6 +563,9 @@ fn convert_input_to_messages(
         }
 
         match item_type {
+            Some("additional_tools") => {
+                continue;
+            }
             Some("function_call") => {
                 let call_id = item
                     .get("call_id")
@@ -1855,6 +1861,60 @@ mod tests {
     }
 
     #[test]
+    fn test_request_additional_tools_keeps_tools_and_tool_choice() {
+        let input = json!({
+            "model": "claude",
+            "max_output_tokens": 100,
+            "tool_choice": "auto",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "content": "must not leak into system",
+                    "tools": [
+                        { "type": "custom", "name": "exec", "description": "Run code." },
+                        {
+                            "type": "function",
+                            "name": "wait",
+                            "description": "Wait for a command.",
+                            "parameters": { "type": "object", "properties": {} }
+                        }
+                    ]
+                },
+                {
+                    "type": "additional_tools",
+                    "content": "must not leak into messages",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "request_user_input",
+                            "description": "Ask user.",
+                            "parameters": { "type": "object", "properties": {} }
+                        }
+                    ]
+                },
+                { "type": "message", "role": "user", "content": "hi" }
+            ]
+        });
+
+        let result = responses_request_to_anthropic(input, 4096).unwrap();
+        let names: Vec<&str> = result["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect();
+
+        assert_eq!(result["tool_choice"], json!({ "type": "auto" }));
+        assert!(names.contains(&"exec"));
+        assert!(names.contains(&"wait"));
+        assert!(names.contains(&"request_user_input"));
+        assert!(result.get("system").is_none());
+        assert_eq!(result["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(result["messages"][0]["role"], "user");
+    }
+
+    #[test]
     fn test_request_function_call_renests_into_assistant_tool_use() {
         let input = json!({
             "model": "c",
@@ -2624,6 +2684,36 @@ mod tests {
         assert_eq!(result["output"][0]["call_id"], "call_1");
         assert_eq!(result["output"][0]["name"], "get_weather");
         assert_eq!(result["output"][0]["arguments"], "{\"city\":\"Tokyo\"}");
+    }
+
+    #[test]
+    fn test_response_tool_use_restores_custom_from_additional_tools() {
+        let context = build_codex_tool_context_from_request(&json!({
+            "input": [{
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [{ "type": "custom", "name": "exec" }]
+            }]
+        }));
+        let result = anthropic_response_to_responses_with_context(
+            json!({
+                "id": "msg_custom",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "call_exec",
+                    "name": "exec",
+                    "input": { "input": "pwd" }
+                }],
+                "stop_reason": "tool_use"
+            }),
+            &context,
+        )
+        .unwrap();
+
+        assert_eq!(result["output"][0]["type"], "custom_tool_call");
+        assert_eq!(result["output"][0]["id"], "ctc_call_exec");
+        assert_eq!(result["output"][0]["name"], "exec");
+        assert_eq!(result["output"][0]["input"], "pwd");
     }
 
     #[test]
