@@ -586,6 +586,16 @@ pub struct ProviderMeta {
     /// Codex Responses -> Chat Completions reasoning capability metadata.
     #[serde(rename = "codexChatReasoning", skip_serializing_if = "Option::is_none")]
     pub codex_chat_reasoning: Option<CodexChatReasoningConfig>,
+    /// Codex → Anthropic path: whether the upstream enforces signed thinking
+    /// history. "strict" keeps Anthropic's signature rules (default for
+    /// api.anthropic.com / Bedrock / Vertex); "lenient" always honors the
+    /// requested thinking effort (default for third-party Anthropic-compatible
+    /// endpoints, which neither sign nor verify thinking blocks).
+    #[serde(
+        rename = "anthropicThinkingPolicy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub anthropic_thinking_policy: Option<String>,
     /// Codex → Anthropic path: whether to emulate the Claude Code client
     /// (User-Agent / anthropic-beta / x-app + injecting the Claude Code system
     /// prompt first line). Disabled by default; only an explicit `true` enables it.
