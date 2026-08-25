@@ -17,9 +17,9 @@
 //! [`super::codex::provider_needs_responses_namespace_flatten`]), so no other
 //! provider is ever touched.
 //!
-//! Run this *after* namespace flattening: by then Codex's `namespace` tools are
-//! already lifted to top-level `function` tools, so the tool-type whitelist
-//! below keeps them instead of dropping them.
+//! Run this *after* pre-lifting `additional_tools` and namespace flattening: by
+//! then Codex's `namespace` tools are already lifted to top-level `function`
+//! tools, so the tool-type whitelist below keeps them instead of dropping them.
 
 use std::collections::HashSet;
 
@@ -148,7 +148,7 @@ fn is_additional_tools_item(item: &Value) -> bool {
 /// Promote any `additional_tools` carrier items from `input` into top-level
 /// `tools`, preserving top-level order and appending carrier tools in order,
 /// de-duplicated. The carrier items themselves are removed from `input`.
-fn promote_additional_tools(body: &mut Value) -> bool {
+pub(crate) fn promote_additional_tools(body: &mut Value) -> bool {
     // Clone `input` up front so the later mutable write-back to `body` doesn't
     // collide with the read borrow. Only pays the clone on the rare carrier path.
     let input_items: Vec<Value> = match body.get("input").and_then(Value::as_array) {
@@ -346,6 +346,7 @@ fn should_drop_tool_choice(body: &Value, tools: &[Value]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::transform_codex_responses_namespace::flatten_request_namespaces;
     use super::*;
     use serde_json::json;
 
@@ -436,6 +437,40 @@ mod tests {
             .map(|t| t.get("name").and_then(Value::as_str).unwrap())
             .collect();
         assert_eq!(names, vec!["kept", "extra"]);
+    }
+
+    #[test]
+    fn pre_promote_allows_carrier_namespace_to_survive_xai_sanitize() {
+        let mut body = json!({
+            "model": "grok-4.5",
+            "prompt_cache_retention": "24h",
+            "input": [
+                {"type": "message", "role": "user", "content": "hi"},
+                {"type": "additional_tools", "tools": [{
+                    "type": "namespace",
+                    "name": "mcp_files",
+                    "tools": [{
+                        "type": "function",
+                        "name": "read",
+                        "parameters": {"type": "object", "properties": {}}
+                    }]
+                }]}
+            ]
+        });
+
+        assert!(promote_additional_tools(&mut body));
+        assert!(flatten_request_namespaces(&mut body).unwrap());
+        assert!(sanitize_xai_responses_request(&mut body));
+
+        let tools = body.get("tools").unwrap().as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["name"], "mcp_files__read");
+        assert!(body.get("prompt_cache_retention").is_none());
+        let input = body.get("input").unwrap().as_array().unwrap();
+        assert!(input
+            .iter()
+            .all(|item| { item.get("type").and_then(Value::as_str) != Some("additional_tools") }));
     }
 
     #[test]

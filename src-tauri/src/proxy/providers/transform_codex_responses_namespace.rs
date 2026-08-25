@@ -49,9 +49,16 @@ pub(crate) struct NamespacedName {
 /// flatten; derives names exactly as [`flatten_request_namespaces`] does.
 pub(crate) fn namespace_restore_map(request_body: &Value) -> HashMap<String, NamespacedName> {
     let mut map = HashMap::new();
-    let Some(tools) = request_body.get("tools").and_then(Value::as_array) else {
-        return map;
-    };
+    if let Some(tools) = request_body.get("tools").and_then(Value::as_array) {
+        collect_namespace_restore_tools(tools, &mut map);
+    }
+    if let Some(input) = request_body.get("input") {
+        collect_additional_tools_namespace_restore(input, &mut map);
+    }
+    map
+}
+
+fn collect_namespace_restore_tools(tools: &[Value], map: &mut HashMap<String, NamespacedName>) {
     for tool in tools {
         if tool.get("type").and_then(Value::as_str) != Some("namespace") {
             continue;
@@ -81,7 +88,30 @@ pub(crate) fn namespace_restore_map(request_body: &Value) -> HashMap<String, Nam
             });
         }
     }
-    map
+}
+
+fn collect_additional_tools_namespace_restore(
+    value: &Value,
+    map: &mut HashMap<String, NamespacedName>,
+) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_additional_tools_namespace_restore(item, map);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("type").and_then(Value::as_str) == Some("additional_tools") {
+                if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
+                    collect_namespace_restore_tools(tools, map);
+                }
+            }
+            for child in obj.values() {
+                collect_additional_tools_namespace_restore(child, map);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Flatten Codex `namespace` tool declarations in a native Responses request
@@ -527,6 +557,31 @@ mod tests {
         assert_eq!(entry.name, "read");
         // Plain top-level tools are not in the restore map.
         assert!(!map.contains_key("plain_tool"));
+    }
+
+    #[test]
+    fn restore_map_reads_namespace_tools_from_additional_tools() {
+        let body = json!({
+            "model": "grok-4.5",
+            "input": [
+                { "type": "message", "role": "user", "content": "hi" },
+                {
+                    "type": "additional_tools",
+                    "tools": [{
+                        "type": "namespace",
+                        "name": "mcp__files__",
+                        "tools": [
+                            { "type": "function", "name": "read", "parameters": {} }
+                        ]
+                    }]
+                }
+            ]
+        });
+
+        let map = namespace_restore_map(&body);
+        let entry = map.get("mcp__files____read").unwrap();
+        assert_eq!(entry.namespace, "mcp__files__");
+        assert_eq!(entry.name, "read");
     }
 
     #[test]
