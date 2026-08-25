@@ -45,10 +45,19 @@ use super::{
 };
 use crate::app_config::AppType;
 use crate::database::PRICING_SOURCE_REQUEST;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::State,
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
+    response::IntoResponse,
+    Json,
+};
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+
+const CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
+const CODEX_PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
+const CODEX_OFFICIAL_RAW_RELAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 // ============================================================================
 // 健康检查和状态查询（简单端点）
@@ -104,6 +113,404 @@ pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
         json!({"models": []})
     };
     Ok(Json(catalog))
+}
+
+#[derive(Clone, Copy)]
+enum CodexOfficialRawRelayBase {
+    CodexBackend,
+    ChatGptBackend,
+}
+
+impl CodexOfficialRawRelayBase {
+    fn base_url(self) -> &'static str {
+        match self {
+            Self::CodexBackend => super::providers::CHATGPT_CODEX_BASE_URL,
+            Self::ChatGptBackend => CHATGPT_BACKEND_BASE_URL,
+        }
+    }
+}
+
+pub async fn handle_codex_image_generations(
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_codex_official_raw_relay(
+        request,
+        CodexOfficialRawRelayBase::CodexBackend,
+        "images/generations",
+    )
+    .await
+}
+
+pub async fn handle_codex_image_edits(
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_codex_official_raw_relay(
+        request,
+        CodexOfficialRawRelayBase::CodexBackend,
+        "images/edits",
+    )
+    .await
+}
+
+pub async fn handle_codex_alpha_search(
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_codex_official_raw_relay(
+        request,
+        CodexOfficialRawRelayBase::CodexBackend,
+        "alpha/search",
+    )
+    .await
+}
+
+pub async fn handle_codex_memories_trace_summarize(
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_codex_official_raw_relay(
+        request,
+        CodexOfficialRawRelayBase::CodexBackend,
+        "memories/trace_summarize",
+    )
+    .await
+}
+
+pub async fn handle_codex_realtime_calls(
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_codex_official_raw_relay(
+        request,
+        CodexOfficialRawRelayBase::CodexBackend,
+        "realtime/calls",
+    )
+    .await
+}
+
+pub async fn handle_codex_files(
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    let upstream_path = codex_files_upstream_path(request.uri())?;
+    handle_codex_official_raw_relay(
+        request,
+        CodexOfficialRawRelayBase::ChatGptBackend,
+        &upstream_path,
+    )
+    .await
+}
+
+pub async fn handle_codex_realtime_websocket_unsupported(
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    codex_raw_relay_error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "unsupported_endpoint",
+        format!(
+            "cc-switch 未实现 Codex realtime WebSocket 反向代理: {} {}。当前接管配置会把 realtime WebSocket 指向官方 https://api.openai.com/v1。",
+            request.method(),
+            request.uri().path()
+        ),
+    )
+}
+
+async fn handle_codex_official_raw_relay(
+    request: axum::extract::Request,
+    base: CodexOfficialRawRelayBase,
+    upstream_path: &str,
+) -> Result<axum::response::Response, ProxyError> {
+    let (parts, req_body) = request.into_parts();
+    let method = parts.method.clone();
+    let query = parts.uri.query().map(str::to_string);
+    let incoming_headers = parts.headers;
+    let extensions = parts.extensions;
+
+    validate_codex_raw_relay_authorization(&incoming_headers)?;
+
+    let body_bytes = req_body
+        .collect()
+        .await
+        .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
+        .to_bytes();
+    let upstream_url =
+        codex_raw_relay_upstream_url(base.base_url(), upstream_path, query.as_deref());
+    let upstream_uri: Uri = upstream_url.parse().map_err(|e| {
+        ProxyError::ForwardFailed(format!(
+            "Invalid Codex upstream URL for {upstream_path}: {e}"
+        ))
+    })?;
+    let upstream_headers = codex_raw_relay_headers(&incoming_headers, &upstream_uri)?;
+    let response = send_codex_raw_relay_request(
+        method,
+        upstream_url,
+        upstream_headers,
+        extensions,
+        body_bytes,
+    )
+    .await?;
+
+    build_codex_raw_relay_response(response)
+}
+
+fn validate_codex_raw_relay_authorization(headers: &HeaderMap) -> Result<(), ProxyError> {
+    let authorization = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    match authorization {
+        None | Some("") => Err(ProxyError::AuthError(
+            "Codex 官方登录不可用，请先在 Codex 中完成 ChatGPT 登录".to_string(),
+        )),
+        Some(value) if value.contains(CODEX_PROXY_AUTH_PLACEHOLDER) => Err(ProxyError::AuthError(
+            "检测到 Codex 代理占位凭证，请重启 Codex 或新建会话以加载官方登录配置".to_string(),
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
+fn codex_raw_relay_upstream_url(
+    base_url: &str,
+    upstream_path: &str,
+    query: Option<&str>,
+) -> String {
+    let mut url = format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        upstream_path.trim_start_matches('/')
+    );
+    if let Some(query) = query.filter(|query| !query.is_empty()) {
+        url.push('?');
+        url.push_str(query);
+    }
+    url
+}
+
+fn codex_raw_relay_headers(
+    headers: &HeaderMap,
+    upstream_uri: &Uri,
+) -> Result<HeaderMap, ProxyError> {
+    let upstream_host = upstream_uri
+        .authority()
+        .map(|authority| authority.as_str())
+        .ok_or_else(|| ProxyError::ForwardFailed("Codex upstream URL missing authority".into()))?;
+    let upstream_host = HeaderValue::from_str(upstream_host)
+        .map_err(|e| ProxyError::ForwardFailed(format!("Invalid Codex upstream host: {e}")))?;
+
+    let connection_listed_headers = request_connection_listed_headers(headers);
+    let mut upstream_headers = HeaderMap::new();
+    let mut saw_host = false;
+
+    for (name, value) in headers {
+        if name == axum::http::header::HOST {
+            upstream_headers.append(axum::http::header::HOST, upstream_host.clone());
+            saw_host = true;
+            continue;
+        }
+        if is_codex_raw_relay_blocked_request_header(name, &connection_listed_headers) {
+            continue;
+        }
+        upstream_headers.append(name.clone(), value.clone());
+    }
+
+    if !saw_host {
+        upstream_headers.insert(axum::http::header::HOST, upstream_host);
+    }
+
+    Ok(upstream_headers)
+}
+
+fn request_connection_listed_headers(headers: &HeaderMap) -> Vec<HeaderName> {
+    headers
+        .get_all(axum::http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .filter_map(|name| HeaderName::from_bytes(name.as_bytes()).ok())
+        .collect()
+}
+
+fn is_codex_raw_relay_blocked_request_header(
+    name: &HeaderName,
+    connection_listed_headers: &[HeaderName],
+) -> bool {
+    if connection_listed_headers
+        .iter()
+        .any(|listed| listed == name)
+    {
+        return true;
+    }
+
+    matches!(
+        name.as_str(),
+        "connection"
+            | "content-length"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "proxy-connection"
+            | "te"
+            | "trailer"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
+            | "x-forwarded-host"
+            | "x-forwarded-port"
+            | "x-forwarded-proto"
+            | "forwarded"
+            | "cf-connecting-ip"
+            | "cf-ipcountry"
+            | "cf-ray"
+            | "cf-visitor"
+            | "true-client-ip"
+            | "fastly-client-ip"
+            | "x-azure-clientip"
+            | "x-azure-fdid"
+            | "x-azure-ref"
+            | "akamai-origin-hop"
+            | "x-akamai-config-log-detail"
+            | "x-request-id"
+            | "x-correlation-id"
+            | "x-trace-id"
+            | "x-amzn-trace-id"
+            | "x-b3-traceid"
+            | "x-b3-spanid"
+            | "x-b3-parentspanid"
+            | "x-b3-sampled"
+            | "traceparent"
+            | "tracestate"
+    )
+}
+
+async fn send_codex_raw_relay_request(
+    method: Method,
+    upstream_url: String,
+    headers: HeaderMap,
+    extensions: axum::http::Extensions,
+    body_bytes: Bytes,
+) -> Result<super::hyper_client::ProxyResponse, ProxyError> {
+    let proxy_url = super::http_client::get_current_proxy_url();
+    if codex_raw_relay_needs_reqwest(proxy_url.as_deref(), &extensions) {
+        let client = super::http_client::get();
+        let attach_body = !matches!(method, Method::GET | Method::HEAD);
+        let mut request = client
+            .request(method, &upstream_url)
+            .timeout(CODEX_OFFICIAL_RAW_RELAY_TIMEOUT);
+        for (name, value) in &headers {
+            request = request.header(name, value);
+        }
+        if attach_body {
+            request = request.body(body_bytes);
+        }
+        let response = tokio::time::timeout(CODEX_OFFICIAL_RAW_RELAY_TIMEOUT, request.send())
+            .await
+            .map_err(|_| {
+                ProxyError::Timeout(format!(
+                    "Codex 官方端点请求超时: {}s",
+                    CODEX_OFFICIAL_RAW_RELAY_TIMEOUT.as_secs()
+                ))
+            })?
+            .map_err(|e| ProxyError::ForwardFailed(format!("Codex 官方端点请求失败: {e}")))?;
+        return Ok(super::hyper_client::ProxyResponse::Reqwest(response));
+    }
+
+    let upstream_uri: Uri = upstream_url
+        .parse()
+        .map_err(|e| ProxyError::ForwardFailed(format!("Invalid Codex upstream URL: {e}")))?;
+    super::hyper_client::send_request(
+        upstream_uri,
+        "Codex official auxiliary endpoint",
+        method,
+        headers,
+        extensions,
+        body_bytes.to_vec(),
+        CODEX_OFFICIAL_RAW_RELAY_TIMEOUT,
+        proxy_url.as_deref(),
+    )
+    .await
+}
+
+fn codex_raw_relay_needs_reqwest(
+    proxy_url: Option<&str>,
+    extensions: &axum::http::Extensions,
+) -> bool {
+    let is_socks_proxy = proxy_url
+        .and_then(|proxy_url| url::Url::parse(proxy_url).ok())
+        .map(|url| matches!(url.scheme(), "socks5" | "socks5h"))
+        .unwrap_or(false);
+    let has_original_header_cases = extensions
+        .get::<super::hyper_client::OriginalHeaderCases>()
+        .map(|cases| !cases.cases.is_empty())
+        .unwrap_or(false);
+
+    is_socks_proxy || (proxy_url.is_some() && !has_original_header_cases)
+}
+
+fn build_codex_raw_relay_response(
+    response: super::hyper_client::ProxyResponse,
+) -> Result<axum::response::Response, ProxyError> {
+    let status = response.status();
+    let mut headers = response.headers().clone();
+    strip_hop_by_hop_response_headers(&mut headers);
+
+    let mut builder = axum::response::Response::builder().status(status);
+    for (key, value) in &headers {
+        builder = builder.header(key, value);
+    }
+
+    builder
+        .body(axum::body::Body::from_stream(response.bytes_stream()))
+        .map_err(|e| ProxyError::Internal(format!("Failed to build Codex raw relay response: {e}")))
+}
+
+fn codex_files_upstream_path(uri: &Uri) -> Result<String, ProxyError> {
+    let canonical_path = canonical_codex_aux_path(uri.path());
+    let segments = canonical_path.split('/').collect::<Vec<_>>();
+
+    match segments.as_slice() {
+        ["files"] => Ok("files".to_string()),
+        ["files", file_id, "uploaded"] if !file_id.is_empty() => {
+            Ok(format!("files/{file_id}/uploaded"))
+        }
+        _ => Err(ProxyError::InvalidRequest(format!(
+            "Unsupported Codex files endpoint: {}",
+            uri.path()
+        ))),
+    }
+}
+
+fn canonical_codex_aux_path(path: &str) -> &str {
+    path.strip_prefix("/v1/v1/")
+        .or_else(|| path.strip_prefix("/codex/v1/"))
+        .or_else(|| path.strip_prefix("/v1/"))
+        .or_else(|| path.strip_prefix('/'))
+        .unwrap_or(path)
+}
+
+fn codex_raw_relay_error_response(
+    status: StatusCode,
+    code: &str,
+    message: String,
+) -> Result<axum::response::Response, ProxyError> {
+    let body = json!({
+        "error": {
+            "message": message,
+            "type": "proxy_error",
+            "code": code,
+            "param": Value::Null,
+        }
+    });
+    let body = serde_json::to_vec(&body).map_err(|e| {
+        log::error!("[CodexRawRelay] 序列化错误体失败: {e}");
+        ProxyError::Internal(format!("Failed to serialize Codex raw relay error: {e}"))
+    })?;
+
+    axum::response::Response::builder()
+        .status(status)
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        )
+        .body(axum::body::Body::from(body))
+        .map_err(|e| ProxyError::Internal(format!("Failed to build Codex raw relay error: {e}")))
 }
 
 // ============================================================================
