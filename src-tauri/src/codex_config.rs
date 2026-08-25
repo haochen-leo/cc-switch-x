@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::{
@@ -33,13 +33,13 @@ const CODEX_DESKTOP_ENABLED_REASONING_EFFORTS: &str = "enabled-reasoning-efforts
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-// Generating a ProxyChat catalog only needs one stable Codex model template per
+// Generating a ProxyChat catalog needs the Codex model template set once per
 // process. Without this cache every provider switch/takeover can start the
 // Codex CLI again, which is especially expensive for npm-installed `codex.cmd`
 // on Windows. Tests deliberately bypass the global cache because they isolate
 // CODEX_HOME and seed different model templates.
 #[cfg(not(test))]
-static CODEX_MODEL_CATALOG_TEMPLATE_CACHE: OnceCell<Value> = OnceCell::new();
+static CODEX_MODEL_CATALOG_TEMPLATE_CACHE: OnceCell<CodexModelCatalogTemplates> = OnceCell::new();
 
 /// Top-level `config.toml` key that controls Codex's built-in web-search tool.
 pub(crate) const CODEX_WEB_SEARCH_FIELD: &str = "web_search";
@@ -121,6 +121,7 @@ fn codex_native_gateway_rejects_web_search(config_text: &str) -> bool {
     false
 }
 const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
+const CODEX_MODEL_CATALOG_DEFAULT_TEMPLATE_SLUG: &str = "gpt-5.6-sol";
 
 /// Which Codex tool surface the generated model catalog should target.
 ///
@@ -491,6 +492,19 @@ fn codex_catalog_model_entry(
     entry_obj.insert("availability_nux".to_string(), Value::Null);
     entry_obj.insert("upgrade".to_string(), Value::Null);
 
+    // `use_responses_lite` only works against the official OpenAI backend: on, Codex
+    // sends the `x-openai-internal-codex-responses-lite` header and moves
+    // tools/instructions into an `additional_tools` input item. OpenAI rejects the
+    // header for non-whitelisted models and third-party Responses gateways do not
+    // understand the item type, so force it off whatever the cloned template says.
+    entry_obj.insert("use_responses_lite".to_string(), json!(false));
+    // Same class of official-only protocol flags carried by cloned descriptors:
+    // `tool_mode` would switch the tool surface to code-mode (hiding direct tools)
+    // and `multi_agent_version` would pin the subagent protocol, both regardless of
+    // user config. Drop them so behavior falls back to the user's feature flags.
+    entry_obj.remove("tool_mode");
+    entry_obj.remove("multi_agent_version");
+
     // Image support is a model capability, not a tool-profile capability.
     // Trust hidden preset metadata first, then the confirmed text-only registry;
     // every unknown model fails open so GPT/relay aliases are never declared
@@ -640,20 +654,54 @@ fn codex_catalog_model_specs(settings: &Value, config_text: &str) -> Vec<CodexCa
     specs
 }
 
-fn find_codex_model_template(catalog: &Value) -> Option<Value> {
-    catalog
-        .get("models")
-        .and_then(|models| models.as_array())
-        .and_then(|models| {
-            models.iter().find(|model| {
-                model.get("slug").and_then(|slug| slug.as_str())
-                    == Some(CODEX_MODEL_CATALOG_TEMPLATE_SLUG)
-            })
-        })
-        .cloned()
+#[derive(Debug, Clone)]
+struct CodexModelCatalogTemplates {
+    default_template: Value,
+    by_slug: HashMap<String, Value>,
 }
 
-fn load_codex_model_template_from_cache() -> Result<Option<Value>, AppError> {
+impl CodexModelCatalogTemplates {
+    fn template_for_model(&self, model: &str) -> Value {
+        self.by_slug
+            .get(model)
+            .cloned()
+            .unwrap_or_else(|| self.default_template.clone())
+    }
+}
+
+fn codex_model_catalog_templates_from_catalog(
+    catalog: &Value,
+) -> Option<CodexModelCatalogTemplates> {
+    let models = catalog.get("models").and_then(|models| models.as_array())?;
+    let mut by_slug = HashMap::new();
+
+    for model in models {
+        let Some(slug) = model
+            .get("slug")
+            .and_then(|slug| slug.as_str())
+            .map(str::trim)
+            .filter(|slug| !slug.is_empty())
+        else {
+            continue;
+        };
+
+        let mut template = model.clone();
+        fill_template_fields_from_static(&mut template);
+        by_slug.insert(slug.to_string(), template);
+    }
+
+    let default_template = by_slug
+        .get(CODEX_MODEL_CATALOG_DEFAULT_TEMPLATE_SLUG)
+        .or_else(|| by_slug.get(CODEX_MODEL_CATALOG_TEMPLATE_SLUG))
+        .cloned()?;
+
+    Some(CodexModelCatalogTemplates {
+        default_template,
+        by_slug,
+    })
+}
+
+fn load_codex_model_templates_from_cache() -> Result<Option<CodexModelCatalogTemplates>, AppError> {
     let path = get_codex_config_dir().join("models_cache.json");
     if !path.exists() {
         return Ok(None);
@@ -661,7 +709,7 @@ fn load_codex_model_template_from_cache() -> Result<Option<Value>, AppError> {
 
     let text = fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
     let catalog: Value = serde_json::from_str(&text).map_err(|e| AppError::json(&path, e))?;
-    Ok(find_codex_model_template(&catalog))
+    Ok(codex_model_catalog_templates_from_catalog(&catalog))
 }
 
 /// Fixed candidates for locating the `codex` CLI when it is not on the process
@@ -842,7 +890,8 @@ fn codex_bundled_models_command(candidate: &Path) -> Command {
     command
 }
 
-fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
+fn load_codex_model_templates_from_bundled() -> Result<Option<CodexModelCatalogTemplates>, AppError>
+{
     for candidate in codex_cli_candidates() {
         let candidate_label = candidate.to_string_lossy();
         let output = match codex_bundled_models_command(&candidate).output() {
@@ -868,12 +917,25 @@ fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
                 continue;
             }
         };
-        if let Some(template) = find_codex_model_template(&catalog) {
-            return Ok(Some(template));
+        if let Some(templates) = codex_model_catalog_templates_from_catalog(&catalog) {
+            return Ok(Some(templates));
         }
     }
 
     Ok(None)
+}
+
+fn load_codex_model_templates_static() -> Option<CodexModelCatalogTemplates> {
+    let template = load_codex_model_template_static()?;
+    let mut by_slug = HashMap::new();
+    by_slug.insert(
+        CODEX_MODEL_CATALOG_TEMPLATE_SLUG.to_string(),
+        template.clone(),
+    );
+    Some(CodexModelCatalogTemplates {
+        default_template: template,
+        by_slug,
+    })
 }
 
 fn load_codex_model_template_static() -> Option<Value> {
@@ -981,39 +1043,38 @@ fn merge_supported_reasoning_levels_from_static(
     }
 }
 
-fn load_codex_model_catalog_template_uncached() -> Result<Value, AppError> {
+fn load_codex_model_catalog_template_uncached() -> Result<CodexModelCatalogTemplates, AppError> {
     // ① models_cache.json (created by Codex when it connects to OpenAI)
-    if let Some(mut template) = load_codex_model_template_from_cache()? {
-        fill_template_fields_from_static(&mut template);
-        return Ok(template);
+    if let Some(templates) = load_codex_model_templates_from_cache()? {
+        return Ok(templates);
     }
     // ② codex CLI (PATH + platform-specific common paths)
-    if let Some(mut template) = load_codex_model_template_from_bundled()? {
-        fill_template_fields_from_static(&mut template);
-        return Ok(template);
+    if let Some(templates) = load_codex_model_templates_from_bundled()? {
+        return Ok(templates);
     }
     // ③ Static fallback bundled at compile time
-    if let Some(template) = load_codex_model_template_static() {
-        return Ok(template);
+    if let Some(templates) = load_codex_model_templates_static() {
+        return Ok(templates);
     }
 
     Err(AppError::Message(format!(
-        "Codex model catalog template `{CODEX_MODEL_CATALOG_TEMPLATE_SLUG}` not found. Please start Codex once so models_cache.json is available, or ensure the `codex` CLI is on PATH."
+        "Codex model catalog template `{CODEX_MODEL_CATALOG_DEFAULT_TEMPLATE_SLUG}` or `{CODEX_MODEL_CATALOG_TEMPLATE_SLUG}` not found. Please start Codex once so models_cache.json is available, or ensure the `codex` CLI is on PATH."
     )))
 }
 
-fn get_or_load_codex_model_catalog_template<F>(
-    cache: &OnceCell<Value>,
+fn get_or_load_codex_model_catalog_template<T, F>(
+    cache: &OnceCell<T>,
     loader: F,
-) -> Result<Value, AppError>
+) -> Result<T, AppError>
 where
-    F: FnOnce() -> Result<Value, AppError>,
+    T: Clone,
+    F: FnOnce() -> Result<T, AppError>,
 {
     cache.get_or_try_init(loader).cloned()
 }
 
 #[cfg(not(test))]
-fn load_codex_model_catalog_template() -> Result<Value, AppError> {
+fn load_codex_model_catalog_template() -> Result<CodexModelCatalogTemplates, AppError> {
     get_or_load_codex_model_catalog_template(
         &CODEX_MODEL_CATALOG_TEMPLATE_CACHE,
         load_codex_model_catalog_template_uncached,
@@ -1021,7 +1082,7 @@ fn load_codex_model_catalog_template() -> Result<Value, AppError> {
 }
 
 #[cfg(test)]
-fn load_codex_model_catalog_template() -> Result<Value, AppError> {
+fn load_codex_model_catalog_template() -> Result<CodexModelCatalogTemplates, AppError> {
     load_codex_model_catalog_template_uncached()
 }
 
@@ -1039,6 +1100,23 @@ fn codex_model_catalog_from_specs(
     json!({ "models": entries })
 }
 
+fn codex_model_catalog_from_specs_with_templates(
+    specs: &[CodexCatalogModelSpec],
+    templates: &CodexModelCatalogTemplates,
+    profile: CodexCatalogToolProfile,
+) -> Value {
+    let entries: Vec<Value> = specs
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            let template = templates.template_for_model(&spec.model);
+            codex_catalog_model_entry(&template, spec, index, profile)
+        })
+        .collect();
+
+    json!({ "models": entries })
+}
+
 fn codex_model_catalog_from_settings(
     settings: &Value,
     config_text: &str,
@@ -1050,17 +1128,23 @@ fn codex_model_catalog_from_settings(
     }
 
     // Native providers use the bundled clean template (no freeform apply_patch,
-    // no cache dependency); proxy-chat providers keep cloning Codex's gpt-5.5
-    // entry so the proxy can rewrite custom<->function tools as before.
-    let template = match profile {
+    // no cache dependency). ProxyChat keeps Codex's tool-capable model template,
+    // using an exact official template when present and the current conservative
+    // default for third-party aliases.
+    match profile {
         CodexCatalogToolProfile::NativeResponses | CodexCatalogToolProfile::Anthropic => {
-            load_codex_native_responses_template()
+            let template = load_codex_native_responses_template();
+            Ok(Some(codex_model_catalog_from_specs(
+                &specs, &template, profile,
+            )))
         }
-        CodexCatalogToolProfile::ProxyChat => load_codex_model_catalog_template()?,
-    };
-    Ok(Some(codex_model_catalog_from_specs(
-        &specs, &template, profile,
-    )))
+        CodexCatalogToolProfile::ProxyChat => {
+            let templates = load_codex_model_catalog_template()?;
+            Ok(Some(codex_model_catalog_from_specs_with_templates(
+                &specs, &templates, profile,
+            )))
+        }
+    }
 }
 
 fn set_codex_model_catalog_json_field(
@@ -3333,7 +3417,7 @@ base_url = "https://production.api/v1"
         assert_eq!(
             models[0].get("model_messages"),
             template.get("model_messages"),
-            "custom catalog entries should keep the gpt-5.5 agent template"
+            "single-template helper should preserve the supplied agent template"
         );
         assert_eq!(
             models[0].get("additional_speed_tiers"),
@@ -3346,6 +3430,108 @@ base_url = "https://production.api/v1"
                 .is_some_and(|value| value.is_null()),
             "generated third-party entries should not inherit GPT-5.5 launch messaging"
         );
+    }
+
+    #[test]
+    fn proxy_chat_catalog_uses_exact_template_and_56_default() {
+        let gpt55_template = json!({
+            "slug": "gpt-5.5",
+            "base_instructions": "gpt-5.5 base instructions",
+            "model_messages": {
+                "instructions_template": "Unless the user explicitly asks for a plan, execute.",
+                "instructions_variables": {
+                    "personality_default": "",
+                    "personality_friendly": "",
+                    "personality_pragmatic": ""
+                }
+            },
+            "apply_patch_tool_type": "freeform"
+        });
+        let gpt56_template = json!({
+            "slug": "gpt-5.6-sol",
+            "base_instructions": "gpt-5.6 base instructions",
+            "model_messages": {
+                "instructions_template": "Diagnose: determine the cause before changing files.",
+                "instructions_variables": {}
+            },
+            "apply_patch_tool_type": "freeform",
+            "use_responses_lite": true,
+            "tool_mode": "code_mode_only",
+            "multi_agent_version": "v2"
+        });
+        let templates = codex_model_catalog_templates_from_catalog(&json!({
+            "models": [gpt55_template, gpt56_template]
+        }))
+        .expect("catalog with gpt-5.6-sol must yield templates");
+        let specs = vec![
+            CodexCatalogModelSpec {
+                model: "gpt-5.6-sol".to_string(),
+                display_name: "GPT-5.6 Sol".to_string(),
+                context_window: 128_000,
+                supports_parallel_tool_calls: None,
+                input_modalities: None,
+                base_instructions: None,
+            },
+            CodexCatalogModelSpec {
+                model: "kimi-k3/dashscope-chat".to_string(),
+                display_name: "Kimi K3".to_string(),
+                context_window: 262_144,
+                supports_parallel_tool_calls: None,
+                input_modalities: None,
+                base_instructions: None,
+            },
+            CodexCatalogModelSpec {
+                model: "gpt-5.5".to_string(),
+                display_name: "GPT-5.5".to_string(),
+                context_window: 272_000,
+                supports_parallel_tool_calls: None,
+                input_modalities: None,
+                base_instructions: None,
+            },
+        ];
+
+        let catalog = codex_model_catalog_from_specs_with_templates(
+            &specs,
+            &templates,
+            CodexCatalogToolProfile::ProxyChat,
+        );
+        let models = catalog["models"].as_array().expect("models array");
+        let instructions = |slug: &str| {
+            models
+                .iter()
+                .find(|entry| entry["slug"] == slug)
+                .and_then(|entry| entry["model_messages"]["instructions_template"].as_str())
+                .expect("instructions_template")
+        };
+
+        assert!(instructions("gpt-5.6-sol").contains("Diagnose: determine the cause"));
+        assert!(!instructions("gpt-5.6-sol").contains("Unless the user explicitly asks"));
+        assert!(instructions("kimi-k3/dashscope-chat").contains("Diagnose: determine the cause"));
+        assert!(!instructions("kimi-k3/dashscope-chat").contains("Unless the user explicitly asks"));
+        assert!(instructions("gpt-5.5").contains("Unless the user explicitly asks"));
+        assert_eq!(
+            models[1]
+                .get("apply_patch_tool_type")
+                .and_then(|value| value.as_str()),
+            Some("freeform"),
+            "third-party ProxyChat entries must keep the tool-capable template"
+        );
+        // The official 5.6 entry ships `use_responses_lite: true`; generated entries
+        // must force it off — non-official upstreams reject lite requests (header 400
+        // or unknown `additional_tools` input item).
+        for entry in models {
+            assert_eq!(
+                entry
+                    .get("use_responses_lite")
+                    .and_then(|value| value.as_bool()),
+                Some(false),
+                "every generated entry must disable responses lite"
+            );
+            assert!(
+                entry.get("tool_mode").is_none() && entry.get("multi_agent_version").is_none(),
+                "official-only tool-surface flags must not leak into generated entries"
+            );
+        }
     }
 
     #[test]
