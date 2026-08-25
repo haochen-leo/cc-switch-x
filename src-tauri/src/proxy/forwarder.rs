@@ -1653,7 +1653,23 @@ impl RequestForwarder {
         };
 
         // Native Responses passthrough to a strict third-party gateway (xAI):
-        // flatten Codex's private `namespace`/plugin tool declarations into
+        // lift per-turn tool carriers before namespace flattening so nested
+        // namespace tools are preserved as top-level function tools.
+        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
+            && !codex_responses_to_chat
+            && !codex_responses_to_anthropic
+            && super::providers::provider_needs_responses_namespace_flatten(provider)
+            && super::providers::transform_codex_responses_xai_sanitize::promote_additional_tools(
+                &mut request_body,
+            )
+        {
+            log::debug!(
+                "[Codex] Promoted additional_tools for native Responses upstream (provider={})",
+                provider.id
+            );
+        }
+
+        // Then flatten Codex's private `namespace`/plugin tool declarations into
         // top-level function tools so the upstream's strict serde parser does
         // not 422 on `unknown variant "namespace"`. The Chat/Anthropic paths
         // above already unwrap namespaces, so this only fires on the native
