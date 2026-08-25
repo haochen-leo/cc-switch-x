@@ -1123,6 +1123,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restores_custom_tool_from_additional_tools_stream_events() {
+        let request = json!({
+            "model": "gpt-5.4",
+            "input": [{
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [{ "type": "custom", "name": "exec" }]
+            }]
+        });
+        let context =
+            super::super::transform_codex_chat::build_codex_tool_context_from_request(&request);
+        let output = collect_with_context(
+            vec![
+                "data: {\"id\":\"chatcmpl_custom_additional\",\"model\":\"gpt-5.4\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_exec\",\"type\":\"function\",\"function\":{\"name\":\"exec\"}}]}}]}\n\n",
+                "data: {\"id\":\"chatcmpl_custom_additional\",\"model\":\"gpt-5.4\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"input\\\":\\\"pwd\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                "data: [DONE]\n\n",
+            ],
+            context,
+        )
+        .await;
+
+        assert!(output.contains("event: response.custom_tool_call_input.delta"));
+        assert!(output.contains("event: response.custom_tool_call_input.done"));
+        assert!(!output.contains("event: response.function_call_arguments.done"));
+        assert!(output.contains("\"id\":\"ctc_call_exec\""));
+        assert!(output.contains("\"type\":\"custom_tool_call\""));
+        assert!(output.contains("\"name\":\"exec\""));
+        assert!(output.contains("\"input\":\"pwd\""));
+    }
+
+    #[tokio::test]
     async fn canonicalizes_streamed_tool_call_arguments_on_done_events() {
         let output = collect(vec![
             "data: {\"id\":\"chatcmpl_args\",\"model\":\"gpt-5.4\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\"}}]}}]}\n\n",

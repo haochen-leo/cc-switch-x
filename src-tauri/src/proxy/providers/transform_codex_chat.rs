@@ -635,6 +635,7 @@ pub(crate) fn build_codex_tool_context_from_request(body: &Value) -> CodexToolCo
     }
 
     if let Some(input) = body.get("input") {
+        collect_additional_tools(input, &mut context);
         collect_tool_search_output_tools(input, &mut context);
     }
 
@@ -1027,6 +1028,11 @@ fn append_responses_item_as_chat_message(
         Some("tool_search_call") => {
             append_unique_pending_reasoning(pending_reasoning, responses_item_reasoning_text(item));
             pending_tool_calls.push(responses_tool_search_call_to_chat_tool_call(item));
+        }
+        Some("additional_tools") => {
+            // Per-turn tool carrier: build_codex_tool_context_from_request already
+            // consumed its tools. Do not turn role=developer carriers into empty
+            // system messages for Chat Completions upstreams.
         }
         Some("function_call_output") => {
             flush_pending_tool_calls(
@@ -1533,6 +1539,29 @@ fn responses_content_to_chat_content(_role: &str, content: &Value) -> Value {
 
 fn responses_input_file_to_chat_file(part: &Value) -> Option<Value> {
     chat_file_from_input_file(part)
+}
+
+fn collect_additional_tools(value: &Value, context: &mut CodexToolContext) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_additional_tools(item, context);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("type").and_then(|v| v.as_str()) == Some("additional_tools") {
+                if let Some(tools) = obj.get("tools").and_then(|v| v.as_array()) {
+                    for tool in tools {
+                        context.add_response_tool(tool);
+                    }
+                }
+            }
+            for value in obj.values() {
+                collect_additional_tools(value, context);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_tool_search_output_tools(value: &Value, context: &mut CodexToolContext) {
@@ -5370,5 +5399,105 @@ mod tests {
             "tools should be present from tool_search_output"
         );
         assert_eq!(result["tools"][0]["function"]["name"], "search_docs");
+    }
+
+    #[test]
+    fn responses_request_to_chat_additional_tools_provides_tools_and_skips_carrier() {
+        let input = json!({
+            "model": "gpt-5.4",
+            "tool_choice": "auto",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "content": "must not leak into system",
+                    "tools": [
+                        { "type": "custom", "name": "exec", "description": "Run code." },
+                        {
+                            "type": "function",
+                            "name": "wait",
+                            "description": "Wait for a command.",
+                            "parameters": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "type": "namespace",
+                            "name": "agents",
+                            "tools": [{
+                                "type": "function",
+                                "name": "delegate",
+                                "parameters": { "type": "object", "properties": {} }
+                            }]
+                        }
+                    ]
+                },
+                {
+                    "type": "additional_tools",
+                    "content": "must not leak into user messages",
+                    "tools": [{
+                        "type": "function",
+                        "name": "request_user_input",
+                        "parameters": { "type": "object", "properties": {} }
+                    }]
+                },
+                { "type": "message", "role": "user", "content": "hi" }
+            ]
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        let tool_names: Vec<&str> = result["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
+            .collect();
+
+        assert_eq!(result["tool_choice"], "auto");
+        assert!(tool_names.contains(&"exec"));
+        assert!(tool_names.contains(&"wait"));
+        assert!(tool_names.contains(&"agents__delegate"));
+        assert!(tool_names.contains(&"request_user_input"));
+        assert_eq!(result["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(result["messages"][0]["role"], "user");
+        assert_eq!(result["messages"][0]["content"], "hi");
+    }
+
+    #[test]
+    fn chat_response_to_responses_restores_custom_tool_from_additional_tools() {
+        let request = json!({
+            "model": "gpt-5.4",
+            "input": [{
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [{ "type": "custom", "name": "exec" }]
+            }]
+        });
+        let context = build_codex_tool_context_from_request(&request);
+        let chat = json!({
+            "id": "chatcmpl_custom_from_additional",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "gpt-5.4",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_exec",
+                        "type": "function",
+                        "function": {
+                            "name": "exec",
+                            "arguments": "{\"input\":\"pwd\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let result = chat_completion_to_response_with_context(chat, &context).unwrap();
+
+        assert_eq!(result["output"][0]["type"], "custom_tool_call");
+        assert_eq!(result["output"][0]["id"], "ctc_call_exec");
+        assert_eq!(result["output"][0]["name"], "exec");
+        assert_eq!(result["output"][0]["input"], "pwd");
     }
 }
