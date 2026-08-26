@@ -686,6 +686,11 @@ fn catalog_model_id(entry: &Value) -> Option<String> {
 
 fn is_official_codex_model_id(model_id: &str) -> bool {
     let id = model_id.trim().to_ascii_lowercase();
+    // 带 `/` 的是聚合目录的命名空间键（如 `gpt-5.6-luna/token-free`），可能经由
+    // models_cache.json 回流，不能被当成官方模型重新路由到 codex-official。
+    if id.contains('/') {
+        return false;
+    }
     if id.starts_with("gpt-") || id.starts_with("codex-") || id.starts_with("chatgpt-") {
         return true;
     }
@@ -797,6 +802,13 @@ mod tests {
         assert!(is_official_codex_model_id("o4-mini"));
         assert!(!is_official_codex_model_id("qwen3.8-max"));
         assert!(!is_official_codex_model_id("kimi-k2.7-code"));
+    }
+
+    #[test]
+    fn official_model_filter_rejects_namespaced_catalog_entries() {
+        assert!(!is_official_codex_model_id("gpt-5.6-luna/token-free"));
+        assert!(!is_official_codex_model_id("gpt-5.6-sol/token-free"));
+        assert!(!is_official_codex_model_id("gpt-5.5/Some Provider"));
     }
 
     #[test]
