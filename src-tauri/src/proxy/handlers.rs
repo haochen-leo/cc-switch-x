@@ -161,17 +161,6 @@ pub async fn handle_codex_image_edits(
     .await
 }
 
-pub async fn handle_codex_alpha_search(
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    handle_codex_official_raw_relay(
-        request,
-        CodexOfficialRawRelayBase::CodexBackend,
-        "alpha/search",
-    )
-    .await
-}
-
 pub async fn handle_codex_memories_trace_summarize(
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {

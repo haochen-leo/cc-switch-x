@@ -350,19 +350,6 @@ impl ProxyServer {
                 "/codex/v1/images/edits",
                 post(handlers::handle_codex_image_edits),
             )
-            .route("/alpha/search", post(handlers::handle_codex_alpha_search))
-            .route(
-                "/v1/alpha/search",
-                post(handlers::handle_codex_alpha_search),
-            )
-            .route(
-                "/v1/v1/alpha/search",
-                post(handlers::handle_codex_alpha_search),
-            )
-            .route(
-                "/codex/v1/alpha/search",
-                post(handlers::handle_codex_alpha_search),
-            )
             .route(
                 "/memories/trace_summarize",
                 post(handlers::handle_codex_memories_trace_summarize),
