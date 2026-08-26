@@ -15,13 +15,13 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { ToggleRow } from "@/components/ui/toggle-row";
-import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { toast } from "sonner";
 import { useFailoverQueue } from "@/lib/query/failover";
 import { useProvidersQuery } from "@/lib/query";
 import { ProviderHealthBadge } from "@/components/providers/ProviderHealthBadge";
 import { useProviderHealth } from "@/lib/query/failover";
 import {
+  useProxyStatusQuery,
   useProxyTakeoverStatus,
   useSetProxyTakeoverForApp,
   useGlobalProxyConfig,
@@ -31,6 +31,11 @@ import type { ProxyStatus } from "@/types/proxy";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "framer-motion";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import {
+  getAppLabel,
+  PROXY_APP_IDS,
+  type ProxyAppId,
+} from "@/config/appConfig";
 
 interface ProxyPanelProps {
   enableLocalProxy: boolean;
@@ -46,7 +51,8 @@ export function ProxyPanel({
   isProxyPending,
 }: ProxyPanelProps) {
   const { t } = useTranslation();
-  const { status, isRunning } = useProxyStatus();
+  const { data: status } = useProxyStatusQuery();
+  const isRunning = status?.running ?? false;
 
   // 获取应用接管状态
   const { data: takeoverStatus } = useProxyTakeoverStatus();
@@ -301,31 +307,26 @@ export function ProxyPanel({
                   })}
                 </p>
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  {(["claude", "codex", "gemini", "grokbuild"] as const).map(
-                    (appType) => {
-                      const isEnabled =
-                        takeoverStatus?.[
-                          appType as keyof typeof takeoverStatus
-                        ] ?? false;
-                      return (
-                        <div
-                          key={appType}
-                          className="flex items-center justify-between rounded-md border border-primary/20 bg-background/60 px-3 py-2"
-                        >
-                          <span className="text-sm font-medium capitalize">
-                            {appType === "grokbuild" ? "Grok Build" : appType}
-                          </span>
-                          <Switch
-                            checked={isEnabled}
-                            onCheckedChange={(checked) =>
-                              handleTakeoverChange(appType, checked)
-                            }
-                            disabled={setTakeoverForApp.isPending}
-                          />
-                        </div>
-                      );
-                    },
-                  )}
+                  {PROXY_APP_IDS.map((appType) => {
+                    const isEnabled = takeoverStatus?.[appType] ?? false;
+                    return (
+                      <div
+                        key={appType}
+                        className="flex items-center justify-between rounded-md border border-primary/20 bg-background/60 px-3 py-2"
+                      >
+                        <span className="text-sm font-medium">
+                          {getAppLabel(appType)}
+                        </span>
+                        <Switch
+                          checked={isEnabled}
+                          onCheckedChange={(checked) =>
+                            handleTakeoverChange(appType, checked)
+                          }
+                          disabled={setTakeoverForApp.isPending}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {t("proxy.takeover.hint", {
@@ -680,7 +681,7 @@ function StatCard({ icon, label, value, variant = "default" }: StatCardProps) {
 }
 
 interface ProviderQueueGroupProps {
-  appType: string;
+  appType: ProxyAppId;
   appLabel: string;
   targets: Array<{
     id: string;
@@ -732,7 +733,7 @@ interface ProviderQueueItemProps {
     name: string;
   };
   priority: number;
-  appType: string;
+  appType: ProxyAppId;
   isCurrent: boolean;
 }
 

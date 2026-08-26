@@ -4,7 +4,7 @@ use crate::provider::{Provider, ProviderMeta};
 use futures::future::join_all;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 
 pub const CODEX_AGGREGATE_PROVIDER_ID: &str = "codex-multi-provider";
@@ -429,12 +429,29 @@ async fn load_provider_models(provider: Provider) -> LoadedProviderModels {
         .meta
         .as_ref()
         .and_then(|meta| meta.custom_user_agent_header().ok().flatten());
+    let api_format = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.api_format.as_deref());
+    let request_headers = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.local_proxy_request_overrides.as_ref())
+        .map(|overrides| {
+            overrides
+                .headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>()
+        });
     match crate::services::model_fetch::fetch_models(
         &base_url,
         &api_key,
         is_full_url,
         None,
         user_agent,
+        api_format,
+        request_headers.as_ref(),
     )
     .await
     {
