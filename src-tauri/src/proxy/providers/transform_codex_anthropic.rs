@@ -132,6 +132,17 @@ pub(crate) fn responses_reasoning_item_from_anthropic_block(
     }))
 }
 
+/// Anthropic `tool_use.input` is always a JSON object. Compatible gateways can
+/// occasionally close a tool block with malformed or non-object JSON; coerce
+/// those arguments to an empty object so the Responses item remains replayable.
+pub(crate) fn canonicalize_anthropic_tool_arguments(name: &str, raw: &str) -> String {
+    let input = serde_json::from_str::<Value>(raw)
+        .ok()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    canonical_json_string(&sanitize_anthropic_tool_use_input(name, input))
+}
+
 /// Anthropic's stop_reason → Responses' (status, incomplete_details.reason)
 pub(crate) fn map_anthropic_stop_reason_to_status(
     stop_reason: Option<&str>,
@@ -241,8 +252,8 @@ fn responses_system_text(item: &Value) -> Vec<String> {
 }
 
 /// Test-only convenience wrapper: exercises the strict (real-Anthropic) policy.
-/// Production goes through `responses_request_to_anthropic_with_policy` with a
-/// provider-derived policy.
+/// Production uses `responses_request_to_anthropic_prepared` after the forwarder
+/// applies the provider-derived policy and normalization gate.
 #[cfg(test)]
 pub fn responses_request_to_anthropic(
     body: Value,
@@ -255,14 +266,24 @@ pub fn responses_request_to_anthropic(
     )
 }
 
+/// Test-only wrapper that preserves the bridge's historical default normalization.
+#[cfg(test)]
 pub fn responses_request_to_anthropic_with_policy(
+    mut body: Value,
+    default_max_tokens: u64,
+    thinking_policy: AnthropicThinkingPolicy,
+) -> Result<Value, ProxyError> {
+    super::transform_codex_compaction::normalize_codex_user_role_context_messages(&mut body);
+    responses_request_to_anthropic_prepared(body, default_max_tokens, thinking_policy)
+}
+
+/// Convert a request whose user-role context normalization decision has already
+/// been made by the forwarder. This keeps the optimizer sub-switch authoritative.
+pub(crate) fn responses_request_to_anthropic_prepared(
     body: Value,
     default_max_tokens: u64,
     thinking_policy: AnthropicThinkingPolicy,
 ) -> Result<Value, ProxyError> {
-    let mut body = body;
-    super::transform_codex_compaction::normalize_codex_user_role_context_messages(&mut body);
-
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);
     let model = body
@@ -1383,7 +1404,11 @@ pub(crate) fn anthropic_response_to_responses_with_context(
                     flush_text(&mut output, &mut text_parts);
                     let call_id = block.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                    let input = block.get("input").cloned().unwrap_or(json!({}));
+                    let input = block
+                        .get("input")
+                        .filter(|value| value.is_object())
+                        .cloned()
+                        .unwrap_or_else(|| json!({}));
                     let input = sanitize_anthropic_tool_use_input(name, input);
                     let item_id =
                         response_tool_call_item_id_from_chat_name(call_id, name, tool_context);
@@ -1559,8 +1584,10 @@ pub fn anthropic_sse_to_message_value(body: &str) -> Result<Value, ProxyError> {
                 if let Some(index) = value.get("index").and_then(|v| v.as_u64()) {
                     if let Some(accum) = json_accum.get(&index) {
                         if !accum.trim().is_empty() {
-                            let parsed: Value =
-                                serde_json::from_str(accum).unwrap_or_else(|_| json!({}));
+                            let parsed = serde_json::from_str::<Value>(accum)
+                                .ok()
+                                .filter(Value::is_object)
+                                .unwrap_or_else(|| json!({}));
                             if let Some(block) = blocks.get_mut(&index) {
                                 block["input"] = parsed;
                             }
@@ -1719,6 +1746,37 @@ mod tests {
         assert!(!text.contains(
             crate::proxy::providers::transform_codex_compaction::CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX
         ));
+    }
+
+    #[test]
+    fn test_prepared_request_preserves_codex_local_compaction_handoff() {
+        let handoff = codex_local_handoff_text("The user has sent a new message: continue.");
+        let input = json!({
+            "model": "claude-3-5-sonnet",
+            "max_output_tokens": 1024,
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": handoff
+                }]
+            }]
+        });
+
+        let result =
+            responses_request_to_anthropic_prepared(input, 4096, AnthropicThinkingPolicy::Strict)
+                .unwrap();
+        let messages = result["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert!(messages[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(
+                crate::proxy::providers::transform_codex_compaction::CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX
+            ));
     }
 
     #[test]
@@ -2644,6 +2702,46 @@ mod tests {
     // ==================== Response: Anthropic → Responses ====================
 
     #[test]
+    fn test_anthropic_tool_arguments_require_json_object() {
+        assert_eq!(
+            canonicalize_anthropic_tool_arguments("exec", r#"{ "b": 2, "a": 1 }"#),
+            r#"{"a":1,"b":2}"#
+        );
+        assert_eq!(
+            canonicalize_anthropic_tool_arguments("exec", "not-json"),
+            "{}"
+        );
+        assert_eq!(canonicalize_anthropic_tool_arguments("exec", "[]"), "{}");
+        assert_eq!(
+            canonicalize_anthropic_tool_arguments("exec", r#""text""#),
+            "{}"
+        );
+        assert_eq!(
+            canonicalize_anthropic_tool_arguments("Read", r#"{"file_path":"/tmp/x","pages":""}"#),
+            r#"{"file_path":"/tmp/x"}"#
+        );
+    }
+
+    #[test]
+    fn test_response_non_object_tool_input_falls_back_to_empty_object() {
+        for input in [json!("not-an-object"), json!(["also", "invalid"])] {
+            let response = anthropic_response_to_responses(json!({
+                "id": "msg_invalid_input",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "exec",
+                    "input": input
+                }],
+                "stop_reason": "tool_use"
+            }))
+            .unwrap();
+
+            assert_eq!(response["output"][0]["arguments"], "{}");
+        }
+    }
+
+    #[test]
     fn test_response_text_end_turn() {
         let input = json!({
             "id": "msg_1",
@@ -3197,6 +3295,21 @@ data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usa
         assert_eq!(msg["content"][0]["name"], "get_weather");
         assert_eq!(msg["content"][0]["input"]["city"], "Tokyo");
         assert_eq!(msg["stop_reason"], "tool_use");
+    }
+
+    #[test]
+    fn test_anthropic_sse_aggregation_invalid_tool_json_falls_back_to_empty_object() {
+        let sse = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"c\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"exec\",\"input\":{}}}\n\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"not-json\"}}\n\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n";
+
+        let message = anthropic_sse_to_message_value(sse).unwrap();
+        assert_eq!(message["content"][0]["input"], json!({}));
+
+        let response = anthropic_response_to_responses(message).unwrap();
+        assert_eq!(response["output"][0]["arguments"], "{}");
     }
 
     #[test]
