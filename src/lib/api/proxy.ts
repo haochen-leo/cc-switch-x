@@ -17,6 +17,11 @@ export const proxyApi = {
     return invoke("start_proxy_server");
   },
 
+  // 停止代理服务器（不恢复已接管配置）
+  async stopProxyServer(): Promise<void> {
+    return invoke("stop_proxy_server");
+  },
+
   // 停止代理服务器并恢复配置
   async stopProxyWithRestore(): Promise<void> {
     return invoke("stop_proxy_with_restore");
@@ -25,24 +30,6 @@ export const proxyApi = {
   // 获取代理服务器状态
   async getProxyStatus(): Promise<ProxyStatus> {
     return invoke("get_proxy_status");
-  },
-
-  // 检查代理服务器是否正在运行
-  async isProxyRunning(): Promise<boolean> {
-    return invoke("is_proxy_running");
-  },
-
-  // 检查是否处于接管模式
-  async isLiveTakeoverActive(): Promise<boolean> {
-    return invoke("is_live_takeover_active");
-  },
-
-  // 代理模式下切换供应商
-  async switchProxyProvider(
-    appType: string,
-    providerId: string,
-  ): Promise<void> {
-    return invoke("switch_proxy_provider", { appType, providerId });
   },
 
   // ========== 接管状态 API ==========
