@@ -8,8 +8,8 @@
 
 use super::codex_responses_sse as sse;
 use super::transform_codex_anthropic::{
-    build_responses_usage_from_anthropic, map_anthropic_stop_reason_to_status,
-    responses_reasoning_item_from_anthropic_block,
+    build_responses_usage_from_anthropic, canonicalize_anthropic_tool_arguments,
+    map_anthropic_stop_reason_to_status, responses_reasoning_item_from_anthropic_block,
 };
 #[cfg(test)]
 use super::transform_codex_anthropic::{
@@ -19,8 +19,6 @@ use super::transform_codex_chat::{
     response_tool_call_item_from_chat_name, response_tool_call_item_id_from_chat_name,
     CodexToolContext,
 };
-use super::transform_responses::sanitize_anthropic_tool_use_input_json;
-use crate::proxy::json_canonical::canonicalize_tool_arguments_str;
 use crate::proxy::sse::{strip_sse_field, take_sse_block};
 use bytes::Bytes;
 use futures::stream::{Stream, StreamExt};
@@ -368,10 +366,8 @@ impl AnthropicToResponsesState {
                 };
                 let arguments = if raw_input.trim().is_empty() {
                     "{}".to_string()
-                } else if name == "Read" {
-                    sanitize_anthropic_tool_use_input_json("Read", &raw_input)
                 } else {
-                    canonicalize_tool_arguments_str(&raw_input)
+                    canonicalize_anthropic_tool_arguments(&name, &raw_input)
                 };
                 let is_custom_tool = self.tool_context.is_custom_tool_chat_name(&name);
                 let item = response_tool_call_item_from_chat_name(
@@ -473,6 +469,14 @@ impl AnthropicToResponsesState {
             .filter(|(_, b)| !b.done)
             .map(|(index, _)| *index)
             .collect();
+        if open.iter().any(|index| {
+            self.blocks
+                .get(index)
+                .is_some_and(|block| block.kind == BlockKind::Tool)
+        }) {
+            self.stream_truncated = true;
+            self.stop_reason = Some("max_tokens".to_string());
+        }
         for index in open {
             events.extend(self.close_block(index));
         }
@@ -960,6 +964,50 @@ mod tests {
         assert!(merged.contains("\"status\":\"incomplete\""));
         assert!(!merged.contains("event: response.function_call_arguments.done"));
         assert!(merged.contains("\"reason\":\"max_output_tokens\""));
+    }
+
+    #[tokio::test]
+    async fn test_stop_reason_with_open_tool_block_and_invalid_json_not_completed() {
+        let input = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_open_tool\",\"model\":\"claude\"}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_open\",\"name\":\"exec\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"cmd\\\":\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n"
+        );
+
+        let merged = run(input).await;
+        assert!(merged.contains("\"status\":\"incomplete\""));
+        assert!(merged.contains("\"reason\":\"max_output_tokens\""));
+        assert!(!merged.contains("event: response.function_call_arguments.done"));
+        assert!(!merged.contains("\"status\":\"completed\""));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_tool_json_arguments_fallback_to_empty_object() {
+        let input = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_invalid_tool\",\"model\":\"claude\"}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_invalid\",\"name\":\"exec\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"not-json\"}}\n\n",
+            "event: content_block_stop\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let merged = run(input).await;
+        assert!(merged.contains("event: response.function_call_arguments.done"));
+        assert!(merged.contains("\"arguments\":\"{}\""));
+        assert!(merged.contains("\"status\":\"completed\""));
+        assert!(!merged.contains("\"arguments\":\"not-json\""));
     }
 
     #[tokio::test]

@@ -651,12 +651,19 @@ pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
 /// Convert an OpenAI Responses request into an OpenAI Chat Completions request,
 /// using provider-declared Codex Chat reasoning capabilities when available.
 pub fn responses_to_chat_completions_with_reasoning(
+    mut body: Value,
+    reasoning_config: Option<&CodexChatReasoningConfig>,
+) -> Result<Value, ProxyError> {
+    super::transform_codex_compaction::normalize_codex_user_role_context_messages(&mut body);
+    responses_to_chat_completions_prepared(body, reasoning_config)
+}
+
+/// Convert a request whose user-role context normalization decision has already
+/// been made by the forwarder. This keeps the optimizer sub-switch authoritative.
+pub(crate) fn responses_to_chat_completions_prepared(
     body: Value,
     reasoning_config: Option<&CodexChatReasoningConfig>,
 ) -> Result<Value, ProxyError> {
-    let mut body = body;
-    super::transform_codex_compaction::normalize_codex_user_role_context_messages(&mut body);
-
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);
 
@@ -3010,6 +3017,34 @@ mod tests {
         assert!(!text.contains(
             crate::proxy::providers::transform_codex_compaction::CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX
         ));
+    }
+
+    #[test]
+    fn prepared_request_preserves_codex_local_compaction_handoff() {
+        let handoff = codex_local_handoff_text("The user has sent a new message: continue.");
+        let input = json!({
+            "model": "kimi-k2.6",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": handoff
+                }]
+            }]
+        });
+
+        let result = responses_to_chat_completions_prepared(input, None).unwrap();
+        let messages = result_messages(&result);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert!(messages[0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with(
+                crate::proxy::providers::transform_codex_compaction::CODEX_LOCAL_COMPACTION_HANDOFF_PREFIX
+            ));
     }
 
     #[test]
