@@ -441,6 +441,7 @@ pub(crate) enum CodexToolKind {
     Namespace,
     Custom,
     ToolSearch,
+    WebSearch,
 }
 
 #[derive(Debug, Clone)]
@@ -456,11 +457,18 @@ pub(crate) struct CodexToolContext {
     seen_chat_names: HashSet<String>,
     chat_name_to_spec: HashMap<String, CodexToolSpec>,
     namespace_name_to_chat_name: HashMap<(String, String), String>,
+    /// Whether the original request contained a hosted {type: "web_search"} tool.
+    has_web_search: bool,
 }
 
 impl CodexToolContext {
     pub(crate) fn chat_tools(&self) -> &[Value] {
         &self.chat_tools
+    }
+
+    /// Whether the original request contained a hosted {type: "web_search"} tool.
+    pub(crate) fn has_web_search(&self) -> bool {
+        self.has_web_search
     }
 
     pub(crate) fn lookup_chat_name(&self, chat_name: &str) -> Option<&CodexToolSpec> {
@@ -586,6 +594,24 @@ impl CodexToolContext {
         self.add_chat_tool(TOOL_SEARCH_PROXY_NAME.to_string(), spec, chat_tool);
     }
 
+    /// Register the synthetic web_search function tool (replaces the hosted {type: "web_search"}).
+    /// The upstream model sees this as a regular function tool; the proxy intercepts
+    /// calls to it and executes the search via the OpenAI sidecar.
+    fn add_web_search_synthetic_tool(&mut self) {
+        self.has_web_search = true;
+        let chat_tool = super::web_search_sidecar::synthetic_web_search_tool();
+        let spec = CodexToolSpec {
+            kind: CodexToolKind::WebSearch,
+            name: super::web_search_sidecar::WEB_SEARCH_TOOL_NAME.to_string(),
+            namespace: None,
+        };
+        self.add_chat_tool(
+            super::web_search_sidecar::WEB_SEARCH_TOOL_NAME.to_string(),
+            spec,
+            chat_tool,
+        );
+    }
+
     fn add_namespace_tool(&mut self, namespace_tool: &Value) {
         let Some(namespace) = namespace_tool.get("name").and_then(|v| v.as_str()) else {
             return;
@@ -618,6 +644,7 @@ impl CodexToolContext {
                 Some("custom") => self.add_custom_tool(tool),
                 Some("tool_search") => self.add_tool_search_tool(),
                 Some("namespace") => self.add_namespace_tool(tool),
+                Some("web_search") => self.add_web_search_synthetic_tool(),
                 _ => {}
             },
             _ => {}
