@@ -1305,44 +1305,43 @@ async fn handle_responses_for_app(
     let web_search_config =
         super::providers::web_search_sidecar::extract_hosted_web_search(&body);
     let mut sidecar_context: Option<(
-        super::providers::web_search_sidecar::SidecarCredentials,
+        Vec<super::providers::web_search_sidecar::SidecarCredentials>,
         Value,
         Value, // original body clone for follow-up requests
     )> = None;
 
     let mut body = body;
     if let Some(hosted_config) = web_search_config {
-        // Only activate sidecar for Chat/Anthropic conversion paths (not native Responses)
+        // Only activate sidecar for the Chat conversion path. The follow-up
+        // loop is only wired for Chat upstreams; Anthropic upstreams would
+        // receive a synthetic tool nobody answers, so the hosted tool is
+        // stripped below whenever the sidecar does not activate.
         let providers = ctx.get_providers();
-        if let Some(first_provider) = providers.first() {
-            let is_chat_or_anthropic = super::providers::should_convert_codex_responses_to_chat(
-                first_provider,
-                &endpoint,
-            ) || super::providers::should_convert_codex_responses_to_anthropic(
-                first_provider,
-                &endpoint,
-            );
+        let is_chat = providers.first().is_some_and(|first_provider| {
+            super::providers::should_convert_codex_responses_to_chat(first_provider, &endpoint)
+        });
 
-            if is_chat_or_anthropic {
-                if let Some(creds) =
-                    super::providers::web_search_sidecar::resolve_sidecar_credentials(&state).await
-                {
-                    log::info!(
-                        "[WebSearchSidecar] Activating sidecar (base_url={})",
-                        creds.base_url
-                    );
-                    // Force non-streaming for simpler loop handling
-                    body["stream"] = json!(false);
-                    let body_clone = body.clone();
-                    sidecar_context = Some((creds, hosted_config, body_clone));
-                } else {
-                    // No sidecar credentials: strip web_search from tools so it is
-                    // silently dropped (user can configure MCP search instead)
-                    strip_web_search_tool_from_body(&mut body);
-                }
+        if is_chat {
+            let creds =
+                super::providers::web_search_sidecar::resolve_sidecar_credentials(&state).await;
+            if creds.is_empty() {
+                log::debug!("[WebSearchSidecar] No usable credentials; dropping web_search");
+            } else {
+                log::info!(
+                    "[WebSearchSidecar] Activating sidecar ({} candidate(s), first={})",
+                    creds.len(),
+                    creds[0].label
+                );
+                // Force non-streaming for simpler loop handling
+                body["stream"] = json!(false);
+                let body_clone = body.clone();
+                sidecar_context = Some((creds, hosted_config, body_clone));
             }
-        } else {
-            // No providers available: strip web_search
+        }
+
+        if sidecar_context.is_none() {
+            // No sidecar: strip web_search from tools so it is silently dropped
+            // (user can configure MCP search instead)
             strip_web_search_tool_from_body(&mut body);
         }
     }
@@ -2284,7 +2283,7 @@ async fn handle_codex_chat_with_web_search_sidecar(
     is_stream: bool,
     _connection_guard: Option<ActiveConnectionGuard>,
     tool_context: transform_codex_chat::CodexToolContext,
-    sidecar_creds: super::providers::web_search_sidecar::SidecarCredentials,
+    sidecar_creds: Vec<super::providers::web_search_sidecar::SidecarCredentials>,
     hosted_config: Value,
     original_responses_body: Value,
 ) -> Result<axum::response::Response, ProxyError> {
@@ -2316,6 +2315,12 @@ async fn handle_codex_chat_with_web_search_sidecar(
     if let Some(ref mut chat_body) = chat_body_opt {
         // Ensure stream is false for follow-up requests
         chat_body["stream"] = json!(false);
+
+        // The original body carries the aggregate alias (e.g. "kimi-k3/dashscope-chat");
+        // follow-up requests bypass the forwarder, so reuse the resolved upstream model.
+        if let Some(model) = &ctx.outbound_model {
+            chat_body["model"] = json!(model);
+        }
 
         // Sidecar loop
         let mut loop_count = 0;
