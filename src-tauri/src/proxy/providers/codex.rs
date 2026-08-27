@@ -267,18 +267,12 @@ pub fn codex_anthropic_thinking_policy(
 }
 
 /// Whether a native-Responses Codex upstream needs Codex `namespace`/plugin
-/// tool declarations flattened before forwarding.
+/// tool declarations flattened before forwarding, plus xAI schema sanitization.
 ///
 /// Codex 0.142+ emits ChatGPT-backend-private `{"type":"namespace",…}` tool
-/// shapes, and the client enables them for every custom provider: the
-/// `namespace_tools` provider capability defaults to `true` upstream and has
-/// no config.toml knob. Every third-party native gateway therefore receives
-/// these declarations — strict ones reject with
-/// `422 unknown variant "namespace"`, lenient ones silently drop the tools
-/// (the same invisible-tool failure class as `tool_search`). Only the
-/// official ChatGPT backend and OpenAI GPT relays understand the shape
-/// natively, so remaining providers get the flatten+restore pass; the
-/// Chat/Anthropic transform paths already unwrap namespaces on their own.
+/// shapes, and the client enables them for every custom provider. Every
+/// third-party native gateway therefore gets the generic namespace flattening
+/// pass unless it speaks OpenAI's private contract.
 pub fn provider_needs_responses_namespace_flatten(
     provider: &Provider,
     upstream_model: Option<&str>,
@@ -286,15 +280,29 @@ pub fn provider_needs_responses_namespace_flatten(
     !codex_native_responses_uses_openai_private_contract(provider, upstream_model)
 }
 
-/// Whether the native-Responses passthrough must additionally be scrubbed
-/// down to the strict field/tool whitelist that xAI's serde parser accepts
-/// (`promote_additional_tools` + `sanitize_xai_responses_request`).
-///
-/// This stays xAI-specific: other third-party gateways are fail-open for the
-/// OpenAI-backend-private fields (`prompt_cache_key`, `include`, …), and the
-/// tool_search bridge — not the scrubber — handles their discovery contract.
+/// Strict xAI request sanitization applies to managed xAI OAuth and API-key
+/// providers whose live upstream is first-party xAI Responses.
 pub fn provider_needs_xai_responses_sanitize(provider: &Provider) -> bool {
-    provider.is_xai_oauth()
+    provider.is_xai_oauth() || provider_is_xai_native_responses(provider)
+}
+
+fn provider_is_xai_native_responses(provider: &Provider) -> bool {
+    let config_text = provider
+        .settings_config
+        .get("config")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let Some(wire_api) = extract_codex_wire_api_from_toml(config_text) else {
+        return false;
+    };
+    if !wire_api.eq_ignore_ascii_case("responses") {
+        return false;
+    }
+    extract_codex_base_url_from_toml(config_text)
+        .and_then(|value| url::Url::parse(&value).ok())
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .as_deref()
+        == Some("api.x.ai")
 }
 
 /// Whether native Responses traffic needs Codex's freeform `apply_patch`
