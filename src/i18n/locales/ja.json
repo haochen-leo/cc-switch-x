@@ -291,6 +291,7 @@
     "windowControlFailed": "ウィンドウ操作に失敗しました: {{error}}",
     "officialBlockedByProxy": "ローカルルーティングモード中は公式プロバイダーに切り替えできません。ルーティング経由で公式 API にアクセスするとアカウントが停止される可能性があります。",
     "proxyOfficialWarning": "現在のプロバイダー {{name}} は公式です。ローカルルーティングを使用する前にサードパーティプロバイダーに切り替えてください。",
+    "proxyThirdPartyDirectWarning": "プロキシ接管をオフにしました。サードパーティプロバイダー {{name}} の直接接続では一部のツール（node_repl など）が使えない場合があります。",
     "proxyReasonClaudeDesktop": "Claude Desktop ローカルルーティングモードを使用中"
   },
   "confirm": {

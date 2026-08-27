@@ -122,6 +122,20 @@ pub async fn switch_provider(
     id: String,
 ) -> Result<SwitchResult, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    // Codex 第三方供应商强制代理接管：tool_search/namespace 兼容桥只在
+    // 本地代理管线内生效，直连会让延迟发现工具静默不可用。必须在
+    // spawn_blocking 之外执行——启动代理服务器需要 tokio reactor。
+    if matches!(app_type, AppType::Codex) {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        if let Ok(Some(provider)) = state.db.get_provider_by_id(&id, "codex") {
+            state
+                .proxy_service
+                .ensure_codex_third_party_takeover(&provider)
+                .await?;
+        }
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()

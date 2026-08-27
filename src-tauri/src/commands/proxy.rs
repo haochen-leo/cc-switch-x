@@ -61,10 +61,34 @@ pub async fn get_proxy_takeover_status(
 /// 为指定应用开启/关闭接管
 #[tauri::command]
 pub async fn set_proxy_takeover_for_app(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     app_type: String,
     enabled: bool,
 ) -> Result<(), String> {
+    // Codex 第三方供应商关闭接管 = 直连降级模式：catalog 保底铺平工具，
+    // 但 tool_search 延迟发现和 namespace 命名空间工具会不可用。按项目
+    // "降级但可用 → 警告放行"的惯例（同 proxy-official-warning），不硬拦，
+    // 发警告事件让前端 toast 提示。
+    if !enabled && app_type == crate::app_config::AppType::Codex.as_str() {
+        if let Ok(Some(current_id)) = crate::settings::get_effective_current_provider(
+            &state.db,
+            &crate::app_config::AppType::Codex,
+        ) {
+            if let Ok(Some(provider)) = state.db.get_provider_by_id(&current_id, "codex") {
+                if !crate::proxy::providers::is_codex_official_provider(&provider) {
+                    use tauri::Emitter;
+                    let _ = app_handle.emit(
+                        "proxy-third-party-direct-warning",
+                        serde_json::json!({
+                            "appType": app_type,
+                            "providerName": provider.name,
+                        }),
+                    );
+                }
+            }
+        }
+    }
     state
         .proxy_service
         .set_takeover_for_app(&app_type, enabled)
