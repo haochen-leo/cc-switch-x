@@ -14,7 +14,7 @@
 //! deterministic field removal or structural lift — no semantic rewriting — so
 //! the same input always yields the same output and the upstream prompt-cache
 //! prefix stays stable across requests. Gated on the xAI OAuth path only (see
-//! [`super::codex::provider_needs_responses_namespace_flatten`]), so no other
+//! [`super::codex::provider_needs_xai_responses_sanitize`]), so no other
 //! provider is ever touched.
 //!
 //! Run this *after* pre-lifting `additional_tools` and namespace flattening: by

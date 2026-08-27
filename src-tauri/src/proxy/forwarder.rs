@@ -1697,13 +1697,13 @@ impl RequestForwarder {
             mapped_body
         };
 
-        // Native Responses passthrough to a strict third-party gateway (xAI):
-        // lift per-turn tool carriers before namespace flattening so nested
+        // Native Responses passthrough to the strict xAI gateway: lift
+        // per-turn tool carriers before namespace flattening so nested
         // namespace tools are preserved as top-level function tools.
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_namespace_flatten(provider)
+            && super::providers::provider_needs_xai_responses_sanitize(provider)
             && super::providers::transform_codex_responses_xai_sanitize::promote_additional_tools(
                 &mut request_body,
             )
@@ -1715,11 +1715,12 @@ impl RequestForwarder {
         }
 
         // Then flatten Codex's private `namespace`/plugin tool declarations into
-        // top-level function tools so the upstream's strict serde parser does
-        // not 422 on `unknown variant "namespace"`. The Chat/Anthropic paths
-        // above already unwrap namespaces, so this only fires on the native
-        // passthrough. The response handler restores the flat names using a map
-        // re-derived from the same request tools.
+        // top-level function tools so a third-party native gateway neither
+        // 422s on `unknown variant "namespace"` (strict serde) nor silently
+        // drops them (lenient). The Chat/Anthropic paths above already unwrap
+        // namespaces, so this only fires on the native passthrough. The
+        // response handler restores the flat names using a map re-derived
+        // from the same request tools.
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
@@ -1734,17 +1735,18 @@ impl RequestForwarder {
             );
         }
 
-        // Same native-Responses path: scrub the OpenAI-backend-private fields
-        // and tool carriers (`external_web_access`, `prompt_cache_retention`,
-        // `additional_tools`, `tool_search`, …) that xAI's strict serde parser
-        // rejects with 400/422. Deterministic field removals only, gated on the
-        // xAI OAuth path, so the prompt-cache prefix stays stable and no other
-        // provider is affected. Runs after the flatten above so lifted
-        // `namespace` tools survive the tool-type whitelist.
+        // xAI-only on the same native-Responses path: scrub the
+        // OpenAI-backend-private fields and tool carriers
+        // (`external_web_access`, `prompt_cache_retention`, `additional_tools`,
+        // `tool_search`, …) that xAI's strict serde parser rejects with
+        // 400/422. Deterministic field removals only, gated on the xAI OAuth
+        // path, so the prompt-cache prefix stays stable and no other provider
+        // is affected. Runs after the flatten above so lifted `namespace`
+        // tools survive the tool-type whitelist.
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_namespace_flatten(provider)
+            && super::providers::provider_needs_xai_responses_sanitize(provider)
             && super::providers::transform_codex_responses_xai_sanitize::sanitize_xai_responses_request(
                 &mut request_body,
             )
