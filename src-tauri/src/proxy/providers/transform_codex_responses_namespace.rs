@@ -2,11 +2,13 @@
 //!
 //! Codex 0.142+ declares its plugin/MCP tools with a private Responses
 //! extension shape — `{"type":"namespace","name":"mcp__x__","tools":[…]}` plus
-//! `tool_search` — that the OpenAI ChatGPT backend understands but strict
-//! third-party gateways (e.g. xAI's `api.x.ai/v1/responses`) reject with
-//! `422 unknown variant "namespace"`. cc-switch's Chat/Anthropic transforms
-//! already unwrap these, but the *native* Responses passthrough sends them
-//! verbatim.
+//! `tool_search` — that only the OpenAI ChatGPT backend understands. Strict
+//! third-party gateways (e.g. xAI's `api.x.ai/v1/responses`) reject it with
+//! `422 unknown variant "namespace"`; lenient ones silently drop the
+//! declarations and the tools become invisible. cc-switch's Chat/Anthropic
+//! transforms already unwrap these, but the *native* Responses passthrough
+//! would send them verbatim, so every non-official native upstream is
+//! flattened (see [`super::codex::provider_needs_responses_namespace_flatten`]).
 //!
 //! This module implements the request-side flatten + response-side restore for
 //! that native path, mirroring the proven design of sub2api
