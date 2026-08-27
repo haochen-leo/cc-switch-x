@@ -10,6 +10,10 @@
 //! - When the upstream model calls it, the proxy intercepts and executes the search
 //!   via OpenAI's Responses API (the "sidecar")
 //! - Results are fed back as tool results and the upstream is re-requested
+//!
+//! Credential strategy: resolve an ordered candidate list and try each one until
+//! a search succeeds — native Responses API-key providers first (e.g. free
+//! gateways that support hosted web_search), then ChatGPT OAuth accounts.
 
 use crate::proxy::error::ProxyError;
 use crate::proxy::http_client;
@@ -24,20 +28,22 @@ pub const WEB_SEARCH_TOOL_NAME: &str = "web_search";
 /// Maximum number of search loop iterations per request.
 pub const MAX_SEARCH_LOOPS: usize = 3;
 
-/// Sidecar model for executing searches (lightweight to control cost).
-const SIDECAR_MODEL: &str = "gpt-4o-mini";
-
 /// Timeout for each sidecar search call.
 const SIDECAR_TIMEOUT_SECS: u64 = 60;
-
-/// OpenAI Responses API base URL for API key auth.
-const OPENAI_API_BASE_URL: &str = "https://api.openai.com";
 
 /// OpenAI OAuth token endpoint for refreshing access tokens.
 const OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 
 /// Codex CLI client ID for OAuth.
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+
+/// Headers the ChatGPT Codex backend expects from a first-party client
+/// (mirrors the CodexOAuth auth strategy in providers/claude.rs).
+const CODEX_OAUTH_ORIGINATOR: &str = "codex_cli_rs";
+const CODEX_OAUTH_CLIENT_VERSION: &str = "0.144.1";
+
+/// Last-resort model for the OAuth executor when no official catalog is readable.
+const OAUTH_FALLBACK_MODEL: &str = "gpt-5";
 
 /// Detected web search tool call from an upstream response.
 #[derive(Debug, Clone)]
@@ -46,13 +52,19 @@ pub struct WebSearchCall {
     pub query: String,
 }
 
-/// Sidecar credentials resolved from available providers.
+/// Sidecar credentials for one search executor candidate.
 #[derive(Debug, Clone)]
 pub struct SidecarCredentials {
     pub base_url: String,
     pub api_key: String,
-    /// Whether this is a CodexOAuth token (needs different headers).
+    /// Whether this is a CodexOAuth token (ChatGPT backend: different URL + headers).
     pub is_oauth: bool,
+    /// ChatGPT account id — required `chatgpt-account-id` header for the OAuth backend.
+    pub account_id: Option<String>,
+    /// Model to request on this executor (must support hosted web_search there).
+    pub model: String,
+    /// Human-readable label for logs.
+    pub label: String,
 }
 
 /// Extract the hosted `{type: "web_search"}` tool config from a Responses request body.
@@ -90,6 +102,7 @@ pub fn synthetic_web_search_tool() -> Value {
 }
 
 /// Build the Anthropic-format synthetic tool (for Anthropic upstream path).
+#[allow(dead_code)]
 pub fn synthetic_web_search_tool_anthropic() -> Value {
     json!({
         "name": WEB_SEARCH_TOOL_NAME,
@@ -107,84 +120,40 @@ pub fn synthetic_web_search_tool_anthropic() -> Value {
     })
 }
 
-/// Resolve sidecar credentials from available sources.
-/// Strategy: iterate through all configured Codex providers that use native
-/// Responses protocol, try each one until a search succeeds. Also checks
-/// CodexOAuth and OpenAI API keys as fallback.
+/// Resolve sidecar credential candidates, best-first:
+/// 1. Native Responses providers with an API key (free gateways — verified to
+///    execute hosted web_search server-side)
+/// 2. CodexOAuthManager default account (auto-refreshing ChatGPT login)
+/// 3. ChatGPT OAuth tokens stored on individual provider configs
+///
+/// Every candidate carries the model to request on that executor; callers try
+/// candidates in order until one succeeds.
 pub async fn resolve_sidecar_credentials(
     state: &crate::proxy::server::ProxyState,
-) -> Option<SidecarCredentials> {
-    // 1. Try CodexOAuthManager first (managed accounts with auto-refresh)
-    if let Some(app_handle) = &state.app_handle {
-        use crate::commands::CodexOAuthState;
-        let codex_state = app_handle.state::<CodexOAuthState>();
-        let codex_auth = codex_state.0.as_ref();
+) -> Vec<SidecarCredentials> {
+    let mut candidates = Vec::new();
 
-        if codex_auth.is_authenticated().await {
-            match codex_auth.get_valid_token().await {
-                Ok(token) => {
-                    log::debug!("[WebSearchSidecar] Using CodexOAuth token for sidecar");
-                    return Some(SidecarCredentials {
-                        base_url: CHATGPT_CODEX_BASE_URL.to_string(),
-                        api_key: token,
-                        is_oauth: true,
-                    });
-                }
-                Err(e) => {
-                    log::warn!("[WebSearchSidecar] CodexOAuth token unavailable: {e}");
-                }
-            }
-        }
-    }
-
-    // 2. Look through all configured providers for a usable Responses endpoint
+    // 1. Native Responses providers with an API key. Skip Chat/Anthropic
+    //    conversion providers (they cannot execute hosted search) and the
+    //    aggregate router (its config is synthesized, not a real upstream).
     if let Ok(providers) = state.db.get_all_providers("codex") {
         for (_id, provider) in providers.iter() {
-            // Check for ChatGPT OAuth tokens in the provider config
-            let oauth_token = provider
+            if provider.category.as_deref() == Some("router") {
+                continue;
+            }
+
+            // Skip OAuth-token providers here; they are handled in step 3.
+            let has_oauth_token = provider
                 .settings_config
                 .get("auth")
                 .and_then(|a| a.get("tokens"))
                 .and_then(|t| t.get("access_token"))
                 .and_then(|v| v.as_str())
-                .filter(|t| !t.is_empty() && t.starts_with("eyJ"));
-
-            if let Some(token) = oauth_token {
-                // Try refreshing the token
-                let refresh_token = provider
-                    .settings_config
-                    .get("auth")
-                    .and_then(|a| a.get("tokens"))
-                    .and_then(|t| t.get("refresh_token"))
-                    .and_then(|v| v.as_str())
-                    .filter(|t| !t.is_empty());
-
-                if let Some(rt) = refresh_token {
-                    match refresh_oauth_token(rt).await {
-                        Ok(new_token) => {
-                            log::debug!(
-                                "[WebSearchSidecar] Refreshed OAuth token from provider: {}",
-                                provider.name
-                            );
-                            return Some(SidecarCredentials {
-                                base_url: CHATGPT_CODEX_BASE_URL.to_string(),
-                                api_key: new_token,
-                                is_oauth: true,
-                            });
-                        }
-                        Err(e) => {
-                            log::debug!(
-                                "[WebSearchSidecar] Token refresh failed for {}: {e}",
-                                provider.name
-                            );
-                        }
-                    }
-                }
+                .is_some_and(|t| !t.is_empty() && t.starts_with("eyJ"));
+            if has_oauth_token {
                 continue;
             }
 
-            // Check for native Responses providers (not Chat/Anthropic conversion)
-            // These can potentially execute web_search server-side
             let api_format = provider
                 .meta
                 .as_ref()
@@ -197,7 +166,6 @@ pub async fn resolve_sidecar_credentials(
                         .and_then(|v| v.as_str())
                 });
 
-            // Skip providers that use Chat/Anthropic conversion (they can't do hosted search)
             let is_chat_or_anthropic = api_format.is_some_and(|f| {
                 matches!(
                     f.trim().to_ascii_lowercase().as_str(),
@@ -209,7 +177,6 @@ pub async fn resolve_sidecar_credentials(
                 continue;
             }
 
-            // Get the provider's base_url and API key
             let base_url = provider
                 .settings_config
                 .get("base_url")
@@ -229,38 +196,207 @@ pub async fn resolve_sidecar_credentials(
                 .get("auth")
                 .and_then(|a| a.get("OPENAI_API_KEY"))
                 .and_then(|v| v.as_str())
-                .filter(|k| !k.is_empty())
+                .filter(|k| !k.is_empty() && *k != "PROXY_MANAGED")
                 .or_else(|| {
                     provider
                         .settings_config
                         .get("apiKey")
                         .and_then(|v| v.as_str())
-                        .filter(|k| !k.is_empty())
+                        .filter(|k| !k.is_empty() && *k != "PROXY_MANAGED")
                 });
 
-            if let (Some(url), Some(key)) = (base_url, api_key) {
-                // This is a native Responses provider with an API key — use it
-                log::debug!(
-                    "[WebSearchSidecar] Using native Responses provider: {} ({})",
-                    provider.name,
-                    url
-                );
-                return Some(SidecarCredentials {
-                    base_url: url,
-                    api_key: key.to_string(),
-                    is_oauth: false,
-                });
+            // The search request needs a model that exists on this executor;
+            // take the provider's first catalog entry.
+            let model = provider
+                .settings_config
+                .pointer("/modelCatalog/models")
+                .and_then(Value::as_array)
+                .and_then(|models| models.first())
+                .and_then(first_catalog_model_id);
+
+            match (base_url, api_key, model) {
+                (Some(url), Some(key), Some(model)) => {
+                    log::debug!(
+                        "[WebSearchSidecar] Candidate: native Responses provider {} ({}, model={})",
+                        provider.name,
+                        url,
+                        model
+                    );
+                    candidates.push(SidecarCredentials {
+                        base_url: url,
+                        api_key: key.to_string(),
+                        is_oauth: false,
+                        account_id: None,
+                        model,
+                        label: format!("provider:{}", provider.name),
+                    });
+                }
+                (Some(_), Some(_), None) => {
+                    log::debug!(
+                        "[WebSearchSidecar] Skipping {}: no modelCatalog entry to pick a search model from",
+                        provider.name
+                    );
+                }
+                _ => {}
             }
         }
     }
 
-    log::debug!("[WebSearchSidecar] No usable credentials available for sidecar");
-    None
+    // Model for ChatGPT-backend executors: first bare official model from the
+    // local catalog cache (falls back to a conservative constant).
+    let oauth_model = crate::services::codex_aggregation::read_official_catalog_models()
+        .ok()
+        .and_then(|models| models.first().and_then(first_catalog_model_id))
+        .unwrap_or_else(|| OAUTH_FALLBACK_MODEL.to_string());
+
+    // 2. CodexOAuthManager (managed accounts with auto-refresh)
+    if let Some(app_handle) = &state.app_handle {
+        use crate::commands::CodexOAuthState;
+        let codex_state = app_handle.state::<CodexOAuthState>();
+        let codex_auth = codex_state.0.as_ref();
+
+        if codex_auth.is_authenticated().await {
+            match codex_auth.get_valid_token().await {
+                Ok(token) => {
+                    let account_id = codex_auth.default_account_id().await;
+                    log::debug!("[WebSearchSidecar] Candidate: CodexOAuth managed account");
+                    candidates.push(SidecarCredentials {
+                        base_url: CHATGPT_CODEX_BASE_URL.to_string(),
+                        api_key: token,
+                        is_oauth: true,
+                        account_id,
+                        model: oauth_model.clone(),
+                        label: "codex-oauth".to_string(),
+                    });
+                }
+                Err(e) => {
+                    log::warn!("[WebSearchSidecar] CodexOAuth token unavailable: {e}");
+                }
+            }
+        }
+    }
+
+    // 3. ChatGPT OAuth tokens stored on provider configs (refresh on use)
+    if let Ok(providers) = state.db.get_all_providers("codex") {
+        for (_id, provider) in providers.iter() {
+            if provider.category.as_deref() == Some("router") {
+                continue;
+            }
+
+            let tokens = provider
+                .settings_config
+                .get("auth")
+                .and_then(|a| a.get("tokens"));
+
+            let oauth_token = tokens
+                .and_then(|t| t.get("access_token"))
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.is_empty() && t.starts_with("eyJ"));
+
+            let Some(_stale_token) = oauth_token else {
+                continue;
+            };
+
+            let account_id = tokens
+                .and_then(|t| t.get("account_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+
+            let refresh_token = tokens
+                .and_then(|t| t.get("refresh_token"))
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.is_empty());
+
+            let token = match refresh_token {
+                Some(rt) => match refresh_oauth_token(rt).await {
+                    Ok(new_token) => new_token,
+                    Err(e) => {
+                        log::debug!(
+                            "[WebSearchSidecar] Token refresh failed for {}: {e}",
+                            provider.name
+                        );
+                        continue;
+                    }
+                },
+                None => continue,
+            };
+
+            log::debug!(
+                "[WebSearchSidecar] Candidate: provider-stored OAuth token ({})",
+                provider.name
+            );
+            candidates.push(SidecarCredentials {
+                base_url: CHATGPT_CODEX_BASE_URL.to_string(),
+                api_key: token,
+                is_oauth: true,
+                account_id,
+                model: oauth_model.clone(),
+                label: format!("provider-oauth:{}", provider.name),
+            });
+        }
+    }
+
+    if candidates.is_empty() {
+        log::debug!("[WebSearchSidecar] No usable credentials available for sidecar");
+    }
+    candidates
 }
 
-/// Execute a web search via OpenAI's Responses API.
-/// Returns the search result text.
+/// Extract a model id from a modelCatalog entry (`model`/`slug`/`id`/`name`,
+/// or a bare string entry).
+fn first_catalog_model_id(entry: &Value) -> Option<String> {
+    if let Some(model) = entry
+        .as_str()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        return Some(model.to_string());
+    }
+    ["model", "slug", "id", "name"]
+        .iter()
+        .find_map(|key| entry.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+}
+
+/// Execute a web search, trying each credential candidate in order until one
+/// returns a usable result. Returns the search result text.
 pub async fn execute_sidecar_search(
+    candidates: &[SidecarCredentials],
+    query: &str,
+    hosted_config: &Value,
+) -> Result<String, ProxyError> {
+    let mut last_error: Option<ProxyError> = None;
+
+    for creds in candidates {
+        match execute_sidecar_search_once(creds, query, hosted_config).await {
+            Ok(text) => {
+                log::info!(
+                    "[WebSearchSidecar] Search succeeded via {} (model={})",
+                    creds.label,
+                    creds.model
+                );
+                return Ok(text);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[WebSearchSidecar] Candidate {} failed: {e}",
+                    creds.label
+                );
+                last_error = Some(e);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| ProxyError::Internal(
+        "No sidecar credential candidates".to_string(),
+    )))
+}
+
+/// Execute a single web search attempt against one executor.
+async fn execute_sidecar_search_once(
     creds: &SidecarCredentials,
     query: &str,
     hosted_config: &Value,
@@ -278,28 +414,63 @@ pub async fn execute_sidecar_search(
         }
     }
 
-    let request_body = json!({
-        "model": SIDECAR_MODEL,
-        "input": format!("Search the web for: {}. Return a concise, factual answer with key details and sources.", query),
-        "tools": [web_search_tool],
-        "stream": false
-    });
+    let prompt = format!(
+        "Search the web for: {}. Return a concise, factual answer with key details and sources.",
+        query
+    );
+
+    // The ChatGPT Codex backend only accepts streaming, non-stored requests;
+    // API-key gateways accept plain non-streaming JSON.
+    let request_body = if creds.is_oauth {
+        json!({
+            "model": creds.model,
+            "instructions": "You are a web search assistant. Answer concisely with key facts and source links.",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}]
+            }],
+            "tools": [web_search_tool],
+            "store": false,
+            "stream": true
+        })
+    } else {
+        json!({
+            "model": creds.model,
+            "input": prompt,
+            "tools": [web_search_tool],
+            "stream": false
+        })
+    };
 
     let url = if creds.is_oauth {
-        format!("{}/v1/responses", creds.base_url)
+        // CHATGPT_CODEX_BASE_URL already points at the backend root
+        // (https://chatgpt.com/backend-api/codex) — its endpoint is /responses.
+        format!("{}/responses", creds.base_url.trim_end_matches('/'))
     } else {
-        format!("{}/v1/responses", creds.base_url)
+        let base = creds.base_url.trim_end_matches('/');
+        if base.ends_with("/v1") {
+            format!("{base}/responses")
+        } else {
+            format!("{base}/v1/responses")
+        }
     };
 
     let mut request = client
         .post(&url)
         .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", creds.api_key))
         .timeout(Duration::from_secs(SIDECAR_TIMEOUT_SECS));
 
     if creds.is_oauth {
-        request = request.header("Authorization", format!("Bearer {}", creds.api_key));
-    } else {
-        request = request.header("Authorization", format!("Bearer {}", creds.api_key));
+        request = request
+            .header("originator", CODEX_OAUTH_ORIGINATOR)
+            .header("version", CODEX_OAUTH_CLIENT_VERSION)
+            .header("OpenAI-Beta", "responses=experimental")
+            .header("session_id", uuid::Uuid::new_v4().to_string());
+        if let Some(account_id) = &creds.account_id {
+            request = request.header("chatgpt-account-id", account_id);
+        }
     }
 
     let response = request
@@ -309,30 +480,78 @@ pub async fn execute_sidecar_search(
         .map_err(|e| ProxyError::Internal(format!("Sidecar request failed: {e}")))?;
 
     let status = response.status();
-    let body: Value = response
-        .json()
+    let body_text = response
+        .text()
         .await
-        .map_err(|e| ProxyError::Internal(format!("Sidecar response parse failed: {e}")))?;
+        .map_err(|e| ProxyError::Internal(format!("Sidecar response read failed: {e}")))?;
 
     if !status.is_success() {
-        let error_msg = body
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.as_str())
-            .unwrap_or("Unknown sidecar error");
-        log::warn!(
-            "[WebSearchSidecar] Search failed ({}): {}",
-            status,
-            error_msg
-        );
+        let error_msg = serde_json::from_str::<Value>(&body_text)
+            .ok()
+            .and_then(|body| {
+                body.get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| body_text.chars().take(200).collect());
         return Err(ProxyError::Internal(format!(
-            "Sidecar search failed: {}",
-            error_msg
+            "Sidecar search failed ({status}): {error_msg}"
         )));
     }
 
-    // Extract the text output from the Responses API response
-    extract_responses_output_text(&body)
+    if creds.is_oauth {
+        // Streaming response: reassemble the terminal response object / text deltas.
+        extract_streaming_responses_text(&body_text)
+    } else {
+        let body: Value = serde_json::from_str(&body_text).map_err(|e| {
+            ProxyError::Internal(format!("Sidecar response parse failed: {e}"))
+        })?;
+        extract_responses_output_text(&body)
+    }
+}
+
+/// Extract text from a streaming Responses API SSE body: prefer the terminal
+/// `response.completed` object, fall back to concatenating output_text deltas.
+fn extract_streaming_responses_text(body: &str) -> Result<String, ProxyError> {
+    let mut completed: Option<Value> = None;
+    let mut deltas = String::new();
+
+    for line in body.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("response.completed") => completed = Some(value),
+            Some("response.output_text.delta") => {
+                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                    deltas.push_str(delta);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(response) = completed {
+        if let Ok(text) = extract_responses_output_text(&response) {
+            return Ok(text);
+        }
+    }
+
+    if !deltas.is_empty() {
+        return Ok(deltas);
+    }
+
+    Err(ProxyError::Internal(
+        "Sidecar stream carried no text output".to_string(),
+    ))
 }
 
 /// Extract text content from a Responses API response.
@@ -414,6 +633,7 @@ pub fn detect_web_search_calls_chat(chat_response: &Value) -> Vec<WebSearchCall>
 }
 
 /// Detect web_search tool calls in an Anthropic Messages response.
+#[allow(dead_code)]
 pub fn detect_web_search_calls_anthropic(response: &Value) -> Vec<WebSearchCall> {
     let mut calls = Vec::new();
 
@@ -512,6 +732,7 @@ pub fn build_chat_followup_with_search_results(
 }
 
 /// Build an Anthropic Messages follow-up request body with web search results appended.
+#[allow(dead_code)]
 pub fn build_anthropic_followup_with_search_results(
     original_body: &mut Value,
     calls: &[WebSearchCall],
