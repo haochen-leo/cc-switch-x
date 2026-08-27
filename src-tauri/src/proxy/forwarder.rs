@@ -1755,6 +1755,35 @@ impl RequestForwarder {
             );
         }
 
+        // Third-party native Responses upstreams (dashscope etc.) don't
+        // implement OpenAI's private deferred-tool discovery contract
+        // (`tool_search`). Bridge it: materialize the declaration into a plain
+        // function tool, and lift tools discovered in replayed
+        // `tool_search_output` items into top-level `tools` (converting the
+        // carrier history items into standard function_call items). The
+        // response handler rewrites the model's `function_call` named
+        // `tool_search` back into a client-executed `tool_search_call` item.
+        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
+            && !codex_responses_to_chat
+            && !codex_responses_to_anthropic
+            && super::providers::provider_needs_responses_tool_search_bridge(provider)
+        {
+            let materialized = super::providers::transform_codex_responses_toolsearch::materialize_tool_search_declaration(
+                &mut request_body,
+            );
+            let promoted = super::providers::transform_codex_responses_toolsearch::promote_tool_search_output_tools(
+                &mut request_body,
+            );
+            if materialized || promoted {
+                log::debug!(
+                    "[Codex] Bridged tool_search discovery for native Responses upstream (provider={}, declaration={}, promoted={})",
+                    provider.id,
+                    materialized,
+                    promoted
+                );
+            }
+        }
+
         if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
             self.apply_media_prevention(&mut request_body, provider);
         }
