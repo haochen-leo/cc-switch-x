@@ -134,6 +134,19 @@ export function ProxyTabContent({
               onToggleProxy={handleToggleProxy}
               isProxyPending={isProxyPending}
             />
+            <div className="mt-4">
+              <ToggleRow
+                icon={<Globe className="h-4 w-4 text-green-500" />}
+                title={t("settings.advanced.proxy.webSearchSidecar")}
+                description={t(
+                  "settings.advanced.proxy.webSearchSidecarDescription",
+                )}
+                checked={settings?.webSearchSidecarEnabled ?? true}
+                onCheckedChange={(checked) =>
+                  onAutoSave({ webSearchSidecarEnabled: checked })
+                }
+              />
+            </div>
           </AccordionContent>
         </AccordionItem>
 

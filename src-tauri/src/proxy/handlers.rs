@@ -1312,14 +1312,18 @@ async fn handle_responses_for_app(
 
     let mut body = body;
     if let Some(hosted_config) = web_search_config {
+        // 实验特性开关（设置页可关，默认开）：关闭时代搜不激活，工具按未激活处理剥除。
+        let sidecar_enabled = crate::settings::get_settings().web_search_sidecar_enabled;
+
         // Only activate sidecar for the Chat conversion path. The follow-up
         // loop is only wired for Chat upstreams; Anthropic upstreams would
         // receive a synthetic tool nobody answers, so the hosted tool is
         // stripped below whenever the sidecar does not activate.
         let providers = ctx.get_providers();
-        let is_chat = providers.first().is_some_and(|first_provider| {
-            super::providers::should_convert_codex_responses_to_chat(first_provider, &endpoint)
-        });
+        let is_chat = sidecar_enabled
+            && providers.first().is_some_and(|first_provider| {
+                super::providers::should_convert_codex_responses_to_chat(first_provider, &endpoint)
+            });
 
         if is_chat {
             let creds =
