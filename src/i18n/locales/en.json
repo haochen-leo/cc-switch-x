@@ -291,6 +291,7 @@
     "windowControlFailed": "Window control failed: {{error}}",
     "officialBlockedByProxy": "Cannot switch to official provider while local routing is active. Using routing with official APIs may cause account bans.",
     "proxyOfficialWarning": "Current provider {{name}} is official. Consider switching to a third-party provider before using local routing.",
+    "proxyThirdPartyDirectWarning": "Proxy takeover disabled. With a direct connection, third-party provider {{name}} may lose some tools (e.g. node_repl).",
     "proxyReasonClaudeDesktop": "Using Claude Desktop local routing mode"
   },
   "confirm": {
