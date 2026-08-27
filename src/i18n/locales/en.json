@@ -364,8 +364,6 @@
         "enableFeatureDescription": "When enabled, the routing and failover toggles will appear at the top of the main page",
         "enableFailoverToggle": "Show Failover Toggle on Main Page",
         "enableFailoverToggleDescription": "When enabled, the failover toggle will appear independently at the top of the main page",
-        "webSearchSidecar": "Web Search Sidecar (experimental)",
-        "webSearchSidecarDescription": "When a Codex request carries the web_search tool, the local proxy runs the search via an available executor and feeds results back; when disabled, the tool is silently removed",
         "running": "Running",
         "stopped": "Stopped"
       },

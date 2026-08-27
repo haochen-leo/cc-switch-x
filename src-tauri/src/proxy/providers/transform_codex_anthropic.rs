@@ -1863,13 +1863,11 @@ mod tests {
         });
         let result = responses_request_to_anthropic(input, 4096).unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 2);
         assert_eq!(tools[0]["name"], "get_weather");
         assert_eq!(tools[0]["input_schema"]["type"], "object");
         assert!(tools[0].get("parameters").is_none());
-        // hosted web_search 转为合成 function tool，由 sidecar 拦截执行
-        assert_eq!(tools[1]["name"], "web_search");
-        assert_eq!(tools[2]["name"], "apply_patch");
+        assert_eq!(tools[1]["name"], "apply_patch");
     }
 
     #[test]
@@ -2598,10 +2596,8 @@ mod tests {
             "tool_choice": "required"
         });
         let result = responses_request_to_anthropic(input, 4096).unwrap();
-        // web_search 转为合成工具后不再是 unsupported hosted tool，custom 工具仍然保留
-        assert_eq!(result["tools"].as_array().unwrap().len(), 2);
-        assert_eq!(result["tools"][0]["name"], "web_search");
-        assert_eq!(result["tools"][1]["name"], "apply_patch");
+        assert_eq!(result["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(result["tools"][0]["name"], "apply_patch");
         assert_eq!(result["tool_choice"], json!({ "type": "any" }));
     }
 
