@@ -1300,6 +1300,53 @@ async fn handle_responses_for_app(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+
+    // Web search sidecar: detect hosted web_search tool and resolve credentials
+    let web_search_config =
+        super::providers::web_search_sidecar::extract_hosted_web_search(&body);
+    let mut sidecar_context: Option<(
+        super::providers::web_search_sidecar::SidecarCredentials,
+        Value,
+        Value, // original body clone for follow-up requests
+    )> = None;
+
+    let mut body = body;
+    if let Some(hosted_config) = web_search_config {
+        // Only activate sidecar for Chat/Anthropic conversion paths (not native Responses)
+        let providers = ctx.get_providers();
+        if let Some(first_provider) = providers.first() {
+            let is_chat_or_anthropic = super::providers::should_convert_codex_responses_to_chat(
+                first_provider,
+                &endpoint,
+            ) || super::providers::should_convert_codex_responses_to_anthropic(
+                first_provider,
+                &endpoint,
+            );
+
+            if is_chat_or_anthropic {
+                if let Some(creds) =
+                    super::providers::web_search_sidecar::resolve_sidecar_credentials(&state).await
+                {
+                    log::info!(
+                        "[WebSearchSidecar] Activating sidecar (base_url={})",
+                        creds.base_url
+                    );
+                    // Force non-streaming for simpler loop handling
+                    body["stream"] = json!(false);
+                    let body_clone = body.clone();
+                    sidecar_context = Some((creds, hosted_config, body_clone));
+                } else {
+                    // No sidecar credentials: strip web_search from tools so it is
+                    // silently dropped (user can configure MCP search instead)
+                    strip_web_search_tool_from_body(&mut body);
+                }
+            }
+        } else {
+            // No providers available: strip web_search
+            strip_web_search_tool_from_body(&mut body);
+        }
+    }
+
     let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
     // Captured before `body` is moved into the forwarder: the flat-name →
     // {namespace, name} map used to restore the native Responses upstream's
@@ -1347,6 +1394,21 @@ async fn handle_responses_for_app(
     }
 
     if super::providers::should_convert_codex_responses_to_chat(&ctx.provider, &endpoint) {
+        // Web search sidecar loop: if sidecar is active, handle the loop here
+        if let Some((sidecar_creds, hosted_config, original_body)) = sidecar_context {
+            return handle_codex_chat_with_web_search_sidecar(
+                response,
+                &ctx,
+                &state,
+                is_stream,
+                connection_guard,
+                codex_tool_context,
+                sidecar_creds,
+                hosted_config,
+                original_body,
+            )
+            .await;
+        }
         return handle_codex_chat_to_responses_transform(
             response,
             &ctx,
@@ -2194,6 +2256,239 @@ async fn handle_codex_chat_to_responses_transform(
             log::error!("[Codex] 构建 Responses 响应失败: {e}");
             ProxyError::Internal(format!("Failed to build response: {e}"))
         })
+}
+
+/// Remove `{type: "web_search"}` from the request body's tools array.
+/// Used when the sidecar is not available — web_search is silently dropped.
+fn strip_web_search_tool_from_body(body: &mut Value) {
+    if let Some(tools) = body.get_mut("tools").and_then(|t| t.as_array_mut()) {
+        tools.retain(|tool| {
+            tool.get("type").and_then(|t| t.as_str()) != Some("web_search")
+        });
+    }
+}
+
+/// Web search sidecar loop for the Codex Chat path.
+///
+/// When the sidecar is active, this handler:
+/// 1. Parses the non-streaming Chat response
+/// 2. Detects web_search tool calls
+/// 3. Executes searches via OpenAI Responses API (the sidecar)
+/// 4. Appends results and re-sends to the upstream
+/// 5. Repeats until no more web_search calls (max 3 iterations)
+/// 6. Converts the final response to SSE and returns it to Codex
+async fn handle_codex_chat_with_web_search_sidecar(
+    response: super::hyper_client::ProxyResponse,
+    ctx: &RequestContext,
+    state: &ProxyState,
+    is_stream: bool,
+    _connection_guard: Option<ActiveConnectionGuard>,
+    tool_context: transform_codex_chat::CodexToolContext,
+    sidecar_creds: super::providers::web_search_sidecar::SidecarCredentials,
+    hosted_config: Value,
+    original_responses_body: Value,
+) -> Result<axum::response::Response, ProxyError> {
+    use super::providers::web_search_sidecar;
+
+    let status = response.status();
+    if !status.is_success() {
+        return handle_codex_chat_error_response(response, ctx, state, status).await;
+    }
+
+    // Read the non-streaming response body
+    let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
+    let body_timeout = std::time::Duration::from_secs(120);
+    let (_response_headers, _status, body_bytes) =
+        read_decoded_body(response, ctx.tag, body_timeout, Some(&capture)).await?;
+
+    let mut chat_response: Value = serde_json::from_slice(&body_bytes).map_err(|e| {
+        log::error!("[WebSearchSidecar] Failed to parse Chat response: {e}");
+        ProxyError::TransformError(format!("Failed to parse chat response: {e}"))
+    })?;
+
+    // Reconstruct the Chat body for follow-up requests
+    let mut chat_body_opt = transform_codex_chat::responses_to_chat_completions_with_reasoning(
+        original_responses_body.clone(),
+        None,
+    )
+    .ok();
+
+    if let Some(ref mut chat_body) = chat_body_opt {
+        // Ensure stream is false for follow-up requests
+        chat_body["stream"] = json!(false);
+
+        // Sidecar loop
+        let mut loop_count = 0;
+        while loop_count < web_search_sidecar::MAX_SEARCH_LOOPS {
+            let calls = web_search_sidecar::detect_web_search_calls_chat(&chat_response);
+            if calls.is_empty() {
+                break;
+            }
+
+            log::info!(
+                "[WebSearchSidecar] Detected {} web_search call(s), executing sidecar (loop {})",
+                calls.len(),
+                loop_count + 1
+            );
+
+            // Execute sidecar searches
+            let mut results = Vec::new();
+            for call in &calls {
+                match web_search_sidecar::execute_sidecar_search(
+                    &sidecar_creds,
+                    &call.query,
+                    &hosted_config,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        log::debug!(
+                            "[WebSearchSidecar] Search succeeded for query: {:?}",
+                            call.query.chars().take(50).collect::<String>()
+                        );
+                        results.push(result);
+                    }
+                    Err(e) => {
+                        log::warn!("[WebSearchSidecar] Search failed: {e}");
+                        results.push(format!("Web search failed: {e}"));
+                    }
+                }
+            }
+
+            // Append results to the Chat body
+            web_search_sidecar::build_chat_followup_with_search_results(
+                chat_body,
+                &calls,
+                &results,
+            );
+
+            // Re-send to upstream
+            match send_chat_request_to_upstream(chat_body, ctx, state).await {
+                Ok(new_response) => {
+                    chat_response = new_response;
+                }
+                Err(e) => {
+                    log::error!("[WebSearchSidecar] Follow-up request failed: {e}");
+                    break;
+                }
+            }
+
+            loop_count += 1;
+        }
+    }
+
+    // Convert the final Chat response to Responses format
+    let mut responses_response =
+        transform_codex_chat::chat_completion_to_response_with_context(
+            chat_response,
+            &tool_context,
+        )
+        .map_err(|e| {
+            log::error!("[WebSearchSidecar] Chat → Responses conversion failed: {e}");
+            e
+        })?;
+
+    transform_codex_apply_patch::sanitize_response_apply_patch_inputs(&mut responses_response);
+    state
+        .codex_chat_history
+        .record_response(&responses_response)
+        .await;
+
+    // If the client expected streaming, convert to SSE; otherwise return JSON
+    if is_stream {
+        let sse_stream =
+            super::providers::web_search_sse::responses_json_to_sse_stream(&responses_response);
+        let logged_stream = create_logged_passthrough_stream(
+            sse_stream,
+            ctx.tag,
+            None,
+            ctx.streaming_timeout_config(),
+            None,
+            Some(capture),
+        );
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "Content-Type",
+            axum::http::HeaderValue::from_static("text/event-stream"),
+        );
+        headers.insert(
+            "Cache-Control",
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+
+        let body = axum::body::Body::from_stream(logged_stream);
+        Ok((headers, body).into_response())
+    } else {
+        let response_body = serde_json::to_vec(&responses_response).map_err(|e| {
+            ProxyError::TransformError(format!("Failed to serialize responses response: {e}"))
+        })?;
+
+        let mut builder = axum::response::Response::builder().status(StatusCode::OK);
+        builder = builder.header(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        builder
+            .body(axum::body::Body::from(response_body))
+            .map_err(|e| ProxyError::Internal(format!("Failed to build response: {e}")))
+    }
+}
+
+/// Send a Chat Completions request directly to the upstream provider.
+/// Used for sidecar follow-up requests (bypasses the full forwarder pipeline).
+async fn send_chat_request_to_upstream(
+    chat_body: &Value,
+    ctx: &RequestContext,
+    _state: &ProxyState,
+) -> Result<Value, ProxyError> {
+    let provider = &ctx.provider;
+    let adapter = get_adapter(&ctx.app_type)
+        .ok_or_else(|| ProxyError::Internal("No adapter for app type".to_string()))?;
+
+    let base_url = adapter.extract_base_url(provider)?;
+    let url = adapter.build_url(&base_url, "/chat/completions");
+
+    // Resolve auth
+    let auth = adapter.extract_auth(provider);
+    let mut request = super::http_client::get()
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(120))
+        .json(chat_body);
+
+    if let Some(auth_info) = auth {
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_info.api_key),
+        );
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| ProxyError::Internal(format!("Follow-up request failed: {e}")))?;
+
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|e| ProxyError::Internal(format!("Follow-up response parse failed: {e}")))?;
+
+    if !status.is_success() {
+        let error_msg = body
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown upstream error");
+        return Err(ProxyError::UpstreamError {
+            status: status.as_u16(),
+            body: Some(error_msg.to_string()),
+            retry_after_ms: None,
+        });
+    }
+
+    Ok(body)
 }
 
 /// Response-transform handler for the Codex (Responses) ↔ Anthropic Messages gateway.
