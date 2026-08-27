@@ -37,6 +37,7 @@ pub mod transform_codex_apply_patch;
 pub mod transform_codex_chat;
 pub mod transform_codex_compaction;
 pub mod transform_codex_responses_namespace;
+pub mod transform_codex_responses_toolsearch;
 pub mod transform_codex_responses_xai_sanitize;
 pub mod transform_gemini;
 pub mod transform_responses;
@@ -63,7 +64,8 @@ pub use codex::{
     codex_provider_requires_native_responses_item_id_normalization, codex_provider_upstream_model,
     codex_provider_uses_anthropic, codex_provider_uses_chat_completions,
     inject_codex_chat_prompt_cache_key, is_codex_official_provider,
-    provider_needs_responses_namespace_flatten, resolve_codex_catalog_tool_profile,
+    provider_needs_responses_namespace_flatten, provider_needs_responses_tool_search_bridge,
+    resolve_codex_catalog_tool_profile,
     resolve_codex_chat_reasoning_config, should_convert_codex_responses_to_anthropic,
     should_convert_codex_responses_to_chat,
 };

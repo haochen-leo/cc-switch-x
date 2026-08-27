@@ -33,7 +33,8 @@ use super::{
             create_anthropic_sse_stream_from_responses_with_web_search_options,
         },
         transform, transform_codex_anthropic, transform_codex_apply_patch, transform_codex_chat,
-        transform_codex_responses_namespace, transform_gemini, transform_responses,
+        transform_codex_responses_namespace, transform_codex_responses_toolsearch,
+        transform_gemini, transform_responses,
     },
     response_processor::{
         create_logged_passthrough_stream, create_usage_collector, process_response,
@@ -1305,6 +1306,11 @@ async fn handle_responses_for_app(
     // {namespace, name} map used to restore the native Responses upstream's
     // function-call names (see the namespace-restore dispatch below).
     let namespace_restore_map = transform_codex_responses_namespace::namespace_restore_map(&body);
+    // Same idea for the tool_search bridge: tools promoted out of replayed
+    // `tool_search_output` carriers get flat names upstream, and the client
+    // only dispatches them under their original `{namespace, name}` pair.
+    let tool_search_restore_map =
+        transform_codex_responses_toolsearch::tool_search_namespace_restore_map(&body);
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -1387,6 +1393,8 @@ async fn handle_responses_for_app(
         &state,
         connection_guard,
         normalize_response_output_item_ids,
+        super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider),
+        tool_search_restore_map,
     )
     .await
 }
@@ -1511,6 +1519,8 @@ async fn handle_responses_compact_for_app(
         .unwrap_or(false);
     let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
     let namespace_restore_map = transform_codex_responses_namespace::namespace_restore_map(&body);
+    let tool_search_restore_map =
+        transform_codex_responses_toolsearch::tool_search_namespace_restore_map(&body);
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -1588,6 +1598,8 @@ async fn handle_responses_compact_for_app(
         &state,
         connection_guard,
         normalize_response_output_item_ids,
+        super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider),
+        tool_search_restore_map,
     )
     .await
 }
@@ -1785,6 +1797,11 @@ async fn handle_codex_apply_patch_input_sanitize(
     state: &ProxyState,
     connection_guard: Option<ActiveConnectionGuard>,
     normalize_response_output_item_ids: bool,
+    tool_search_bridge: bool,
+    tool_search_restore_map: std::collections::HashMap<
+        String,
+        transform_codex_responses_namespace::NamespacedName,
+    >,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
     let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
@@ -1821,6 +1838,38 @@ async fn handle_codex_apply_patch_input_sanitize(
             ))
         } else {
             Box::new(Box::pin(upstream_stream))
+        };
+        // tool_search bridge (third-party native Responses): turn the model's
+        // plain `function_call` named `tool_search` back into the
+        // client-executed `tool_search_call` item so deferred tool discovery
+        // completes. No-op for streams without such calls.
+        let response_stream: Box<
+            dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
+        > = if tool_search_bridge {
+            Box::new(Box::pin(
+                transform_codex_responses_toolsearch::create_tool_search_call_sse_stream(
+                    response_stream,
+                ),
+            ))
+        } else {
+            response_stream
+        };
+        // Same bridge: tools promoted out of `tool_search_output` carriers were
+        // flattened to `<namespace>__<child>` for the upstream; restore the
+        // client-facing `{name, namespace}` identity so the Codex client's tool
+        // registry (keyed by the pair) accepts the call instead of answering
+        // `unsupported call: …`.
+        let response_stream: Box<
+            dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
+        > = if tool_search_bridge && !tool_search_restore_map.is_empty() {
+            Box::new(Box::pin(
+                transform_codex_responses_namespace::create_namespace_restore_sse_stream(
+                    response_stream,
+                    tool_search_restore_map,
+                ),
+            ))
+        } else {
+            response_stream
         };
         let sanitize_stream =
             transform_codex_apply_patch::create_apply_patch_input_sanitize_sse_stream(
@@ -1860,6 +1909,15 @@ async fn handle_codex_apply_patch_input_sanitize(
         Ok(mut value) => {
             if normalize_response_output_item_ids {
                 transform_codex_chat::normalize_response_output_item_ids(&mut value);
+            }
+            if tool_search_bridge {
+                transform_codex_responses_namespace::restore_response_namespaces(
+                    &mut value,
+                    &tool_search_restore_map,
+                );
+                transform_codex_responses_toolsearch::rewrite_tool_search_function_calls(
+                    &mut value,
+                );
             }
             transform_codex_apply_patch::sanitize_response_apply_patch_inputs(&mut value);
             if let Some(usage) =
