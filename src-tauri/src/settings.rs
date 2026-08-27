@@ -378,11 +378,6 @@ pub struct AppSettings {
     /// Whether to show the failover toggle independently on the main page
     #[serde(default)]
     pub enable_failover_toggle: bool,
-    /// Web Search 代搜 sidecar（实验特性）：Codex 请求带宿主 web_search 工具且
-    /// 目标走 Chat 转换时，由代理拦截并用可用的 Responses 执行器完成搜索。
-    /// 默认开启；关闭后该工具对第三方上游静默移除。
-    #[serde(default = "default_true")]
-    pub web_search_sidecar_enabled: bool,
     /// Whether to show the project profile switcher on the main page header
     #[serde(default = "default_show_profile_switcher")]
     pub show_profile_switcher: bool,
@@ -528,7 +523,6 @@ impl Default for AppSettings {
             usage_confirmed: None,
             usage_dashboard_refresh_interval_ms: None,
             enable_failover_toggle: false,
-            web_search_sidecar_enabled: true,
             show_profile_switcher: true,
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
