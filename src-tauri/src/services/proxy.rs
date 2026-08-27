@@ -1366,6 +1366,40 @@ impl ProxyService {
         Ok(())
     }
 
+    /// Codex 第三方供应商强制代理接管（产品规则）：tool_search/namespace 等
+    /// ChatGPT 后端私有协议的兼容桥只在代理管线内生效（见
+    /// `proxy::providers::provider_needs_responses_*`），直连会让 node_repl
+    /// 之类的延迟发现工具静默不可见。官方供应商豁免——ChatGPT 后端原生支持
+    /// 这些协议，且代理官方有封号风险。
+    ///
+    /// 已接管时幂等返回。必须在有 tokio reactor 的异步上下文调用（内部可能
+    /// 启动代理服务器）；同步调用方请走命令层。
+    pub async fn ensure_codex_third_party_takeover(
+        &self,
+        provider: &Provider,
+    ) -> Result<(), String> {
+        if crate::proxy::providers::is_codex_official_provider(provider) {
+            return Ok(());
+        }
+        let taken_over = self
+            .db
+            .get_live_backup(AppType::Codex.as_str())
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+            || self.detect_takeover_in_live_config_for_app(&AppType::Codex);
+        if taken_over {
+            return Ok(());
+        }
+        log::info!(
+            "Codex 第三方供应商 {} 依赖本地代理桥接，自动开启代理接管",
+            provider.id
+        );
+        self.set_takeover_for_app(AppType::Codex.as_str(), true)
+            .await
+    }
+
     /// 同步关闭指定应用的 Live 接管（恢复配置并清标志，不停止代理服务）。
     ///
     /// 用于 `ProfileService::apply` 等 sync 路径：调用者所在线程可能没有 Tokio
@@ -3694,7 +3728,17 @@ impl ProxyService {
             }
         }
 
-        if takeover_enabled && !previous_takeover {
+        // 第三方恢复目标必须保持接管（强制代理策略），只有恢复回官方供应商
+        // 时才按聚合开启前的状态释放接管。
+        let previous_requires_proxy = self
+            .db
+            .get_provider_by_id(&previous_provider, app_type_str)
+            .ok()
+            .flatten()
+            .is_some_and(|provider| {
+                !crate::proxy::providers::is_codex_official_provider(&provider)
+            });
+        if takeover_enabled && !previous_takeover && !previous_requires_proxy {
             self.set_takeover_for_app(app_type_str, false).await?;
         }
         self.db
@@ -5499,6 +5543,103 @@ wire_api = "responses"
 
         crate::settings::update_settings(crate::settings::AppSettings::default())
             .expect("reset settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn ensure_codex_third_party_takeover_enables_takeover_and_skips_official() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let service = ProxyService::new(db.clone());
+
+        // Seed a live config (no takeover).
+        crate::codex_config::write_codex_live_atomic(
+            &json!({
+                "auth_mode": "chatgpt",
+                "tokens": { "id_token": "oauth-id", "access_token": "oauth-access" }
+            }),
+            Some("model = \"gpt-5.4\"\n"),
+        )
+        .expect("seed live config");
+
+        let mut official = Provider::with_id(
+            "codex-official".to_string(),
+            "OpenAI Official".to_string(),
+            json!({ "auth": {}, "config": "model = \"gpt-5.4\"\n" }),
+            None,
+        );
+        official.category = Some("official".to_string());
+        db.save_provider("codex", &official)
+            .expect("save official provider");
+
+        let mut third_party = Provider::with_id(
+            "dashscope".to_string(),
+            "DashScope".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "dashscope-key" },
+                "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"DashScope\"\nbase_url = \"https://dashscope.aliyuncs.com/compatible-mode/v1\"\nwire_api = \"responses\"\n"
+            }),
+            None,
+        );
+        third_party.category = Some("custom".to_string());
+        db.save_provider("codex", &third_party)
+            .expect("save third-party provider");
+        db.set_current_provider("codex", "codex-official")
+            .expect("set current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("codex-official"))
+            .expect("set local current provider");
+
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .expect("read codex proxy config")
+                .enabled,
+            "precondition: takeover is off"
+        );
+
+        // 官方供应商豁免：ChatGPT 后端原生支持 tool_search/namespace，
+        // 且代理官方有封号风险。
+        service
+            .ensure_codex_third_party_takeover(&official)
+            .await
+            .expect("official is a no-op");
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .expect("read codex proxy config")
+                .enabled,
+            "official provider must not trigger takeover"
+        );
+
+        // 第三方供应商强制接管：桥只在代理管线内生效。
+        service
+            .ensure_codex_third_party_takeover(&third_party)
+            .await
+            .expect("third-party forces takeover");
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("read codex proxy config")
+                .enabled,
+            "third-party provider must auto-enable takeover"
+        );
+        let live = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
+            .expect("read live config");
+        assert!(
+            live.contains("127.0.0.1"),
+            "live config must route through the local proxy, got: {live}"
+        );
+
+        // 幂等：已接管时重复调用不再重写。
+        service
+            .ensure_codex_third_party_takeover(&third_party)
+            .await
+            .expect("idempotent when already taken over");
+
+        service.stop().await.expect("stop proxy server");
     }
 
     #[tokio::test]

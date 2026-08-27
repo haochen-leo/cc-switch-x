@@ -501,6 +501,19 @@ function App() {
     },
   );
 
+  useTauriEvent<{ appType: string; providerName: string }>(
+    "proxy-third-party-direct-warning",
+    (payload) => {
+      toast.warning(
+        t("notifications.proxyThirdPartyDirectWarning", {
+          name: payload.providerName,
+          defaultValue: `已关闭代理接管。第三方供应商 ${payload.providerName} 直连时部分工具（如 node_repl）可能不可用`,
+        }),
+        { duration: 8000 },
+      );
+    },
+  );
+
   useEffect(() => {
     let active = true;
     let unlistenResize: (() => void) | undefined;
