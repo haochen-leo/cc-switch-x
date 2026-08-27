@@ -1059,6 +1059,7 @@ fn append_responses_input_as_chat_messages(
         last_assistant_index,
         &mut pending_reasoning,
     );
+    merge_consecutive_assistant_messages(messages);
     backfill_tool_call_reasoning_placeholders(messages);
     Ok(())
 }
@@ -1441,6 +1442,110 @@ fn backfill_tool_call_reasoning_placeholders(messages: &mut [Value]) {
                 .is_some_and(|calls| !calls.is_empty());
         if is_assistant_tool_call {
             ensure_tool_call_reasoning_content(message);
+        }
+    }
+}
+
+/// Codex replays one assistant turn as separate `message` + `function_call` items,
+/// which the sequential converter above turns into back-to-back assistant messages
+/// (text first, then a tool_calls-only message, reasoning_content duplicated on both).
+/// Chat Completions allows one assistant message to carry content and tool_calls
+/// together; the split shape measurably makes kimi-k3 bail out of tool loops with a
+/// text-only `finish_reason: "stop"` (replay of a captured 135k-token request:
+/// 6/10 split vs 0/10 merged), so merge consecutive assistants back into one.
+fn merge_consecutive_assistant_messages(messages: &mut Vec<Value>) {
+    let mut i = 0;
+    while i + 1 < messages.len() {
+        let is_pair = messages[i].get("role").and_then(Value::as_str) == Some("assistant")
+            && messages[i + 1].get("role").and_then(Value::as_str) == Some("assistant");
+        if !is_pair {
+            i += 1;
+            continue;
+        }
+        let next = messages.remove(i + 1);
+        merge_assistant_message_into(&mut messages[i], next);
+    }
+}
+
+fn merge_assistant_message_into(prev: &mut Value, next: Value) {
+    let Some(prev_obj) = prev.as_object_mut() else {
+        return;
+    };
+    let prev_content = prev_obj.remove("content");
+    let merged = merge_chat_message_content(prev_content, next.get("content").cloned());
+    prev_obj.insert("content".to_string(), merged);
+
+    if let Some(mut next_calls) = next
+        .get("tool_calls")
+        .and_then(|value| value.as_array())
+        .cloned()
+    {
+        if !next_calls.is_empty() {
+            let entry = prev_obj
+                .entry("tool_calls".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(arr) = entry.as_array_mut() {
+                arr.append(&mut next_calls);
+            }
+        }
+    }
+
+    if let Some(next_reasoning) = next
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
+        let is_duplicate = prev_obj
+            .get("reasoning_content")
+            .and_then(Value::as_str)
+            .is_some_and(|prev| prev.trim() == next_reasoning.trim());
+        if !is_duplicate {
+            append_reasoning_content(prev_obj, &next_reasoning);
+        }
+    }
+}
+
+fn merge_chat_message_content(prev: Option<Value>, next: Option<Value>) -> Value {
+    fn is_empty(value: &Value) -> bool {
+        match value {
+            Value::Null => true,
+            Value::String(text) => text.is_empty(),
+            Value::Array(parts) => parts.is_empty(),
+            _ => false,
+        }
+    }
+    match (prev, next) {
+        (None, None) => Value::Null,
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (Some(a), Some(b)) => {
+            if is_empty(&a) {
+                return b;
+            }
+            if is_empty(&b) {
+                return a;
+            }
+            match (a, b) {
+                (Value::String(mut a), Value::String(b)) => {
+                    a.push('\n');
+                    a.push_str(&b);
+                    Value::String(a)
+                }
+                (Value::Array(mut a), Value::Array(b)) => {
+                    a.extend(b);
+                    Value::Array(a)
+                }
+                (Value::String(a), Value::Array(mut b)) => {
+                    let mut parts = vec![json!({ "type": "text", "text": a })];
+                    parts.append(&mut b);
+                    Value::Array(parts)
+                }
+                (Value::Array(mut a), Value::String(b)) => {
+                    a.push(json!({ "type": "text", "text": b }));
+                    Value::Array(a)
+                }
+                (a, _) => a,
+            }
         }
     }
 }
@@ -4370,6 +4475,8 @@ mod tests {
         // 回归：reasoning 必须前向附挂到其后的 assistant 消息，不得回溯拼进
         // 上一条 assistant。此前多轮序列 [r1, m1, r2, m2] 中 r2 会被拼到 m1
         // 尾部、 m2 丢失 reasoning_content，思考型模型（kimi 等）因此中途"断片"。
+        // 连续 assistant 合并后（见 merge_consecutive_assistant_messages），同一
+        // 回合的 文本+工具调用 合成单条消息，真正的回合边界由 tool 消息区隔。
         let input = json!({
             "model": "kimi-k2-thinking",
             "input": [
@@ -4387,6 +4494,21 @@ mod tests {
                     "summary": [{"type": "summary_text", "text": "second thought"}]
                 },
                 {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "result"
+                },
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "third thought"}]
+                },
+                {
                     "type": "message",
                     "role": "assistant",
                     "content": "Second answer."
@@ -4395,20 +4517,82 @@ mod tests {
                     "role": "user",
                     "content": "Continue"
                 }
-            ]
+            ],
+            "tools": [{
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object"}
+            }]
         });
 
         let result = responses_to_chat_completions(input).unwrap();
         let messages = result["messages"].as_array().unwrap();
 
+        // 第一回合：文本+工具调用合并为单条 assistant，reasoning 按序保留
         assert_eq!(messages[0]["role"], "assistant");
         assert_eq!(messages[0]["content"], "First answer.");
-        assert_eq!(messages[0]["reasoning_content"], "first thought");
-        assert_eq!(messages[1]["role"], "assistant");
-        assert_eq!(messages[1]["content"], "Second answer.");
-        assert_eq!(messages[1]["reasoning_content"], "second thought");
-        assert_eq!(messages[2]["role"], "user");
-        assert!(messages[2].get("reasoning_content").is_none());
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(
+            messages[0]["reasoning_content"],
+            "first thought\n\nsecond thought"
+        );
+        assert_eq!(messages[1]["role"], "tool");
+        // 第二回合的 reasoning 不得回溯污染第一回合
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["content"], "Second answer.");
+        assert_eq!(messages[2]["reasoning_content"], "third thought");
+        assert_eq!(messages[3]["role"], "user");
+        assert!(messages[3].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn responses_request_to_chat_merges_assistant_text_with_following_tool_call() {
+        // 回归（kimi-k3 长循环中断，2026-08-26）：Codex 把同一 assistant 回合回放为
+        // message + function_call 两个 item，顺序转换器曾产出连续两条 assistant
+        // 消息（文本一条、tool_calls 一条、reasoning 重复）。实测该形态使 kimi-k3
+        // 在长工具循环里以 ~60% 概率纯文本 stop 提前收回合（事故请求体重放
+        // 6/10 vs 合并后 0/10）。同一回合必须合并为单条，且重复 reasoning 去重。
+        let input = json!({
+            "model": "kimi-k3",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "same thought"}]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "继续提取后半部分的回答。"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "ok"
+                }
+            ],
+            "tools": [{
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object"}
+            }]
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        let messages = result["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"], "继续提取后半部分的回答。");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
+        // reasoning 不重复、也不被占位符污染
+        assert_eq!(messages[0]["reasoning_content"], "same thought");
+        assert_eq!(messages[1]["role"], "tool");
     }
 
     #[test]
@@ -5066,7 +5250,10 @@ mod tests {
     }
 
     #[test]
-    fn responses_request_to_chat_preserves_legacy_unknown_item_batch_boundary_without_media() {
+    fn responses_request_to_chat_merges_tool_call_batches_split_by_unknown_item_without_media() {
+        // 未知 inert item 曾把同一回合的两个 tool_call 批次隔成两条 assistant；
+        // 连续 assistant 合并后它们归并为单条消息（tool_calls 保序），
+        // reasoning 取后续批次的真实思考而非占位符。
         let result = convert_test_input(vec![
             test_function_call("call_1"),
             json!({"type": "future_metadata", "value": 1}),
@@ -5080,16 +5267,11 @@ mod tests {
         ]);
         let messages = result_messages(&result);
 
-        assert_eq!(
-            message_roles(&result),
-            vec!["assistant", "assistant", "tool", "tool"]
-        );
-        assert_eq!(messages[0]["tool_calls"].as_array().unwrap().len(), 1);
+        assert_eq!(message_roles(&result), vec!["assistant", "tool", "tool"]);
+        assert_eq!(messages[0]["tool_calls"].as_array().unwrap().len(), 2);
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
-        assert_eq!(messages[0]["reasoning_content"], "tool call");
-        assert_eq!(messages[1]["tool_calls"].as_array().unwrap().len(), 1);
-        assert_eq!(messages[1]["tool_calls"][0]["id"], "call_2");
-        assert_eq!(messages[1]["reasoning_content"], "second batch reasoning");
+        assert_eq!(messages[0]["tool_calls"][1]["id"], "call_2");
+        assert_eq!(messages[0]["reasoning_content"], "second batch reasoning");
     }
 
     #[test]
@@ -6055,4 +6237,6 @@ mod tests {
         assert_eq!(result["output"][0]["name"], "exec");
         assert_eq!(result["output"][0]["input"], "pwd");
     }
+
+
 }
