@@ -288,6 +288,22 @@ pub fn provider_needs_responses_namespace_flatten(provider: &Provider) -> bool {
     provider.is_xai_oauth()
 }
 
+/// Whether a Codex provider needs the `tool_search` (deferred tool discovery)
+/// bridge on the native Responses passthrough.
+///
+/// The discovery contract (`tool_search` declaration, `tool_search_call` /
+/// `tool_search_output` items, backend-side materialization of discovered
+/// tools) is private to the OpenAI ChatGPT backend; third-party
+/// Responses-compatible upstreams (e.g. DashScope) don't implement it, so
+/// plugin/MCP tools discovered via `tool_search` (node_repl, browser plugins)
+/// would stay invisible there. The Chat/Anthropic transform paths already
+/// bridge this contract, and the managed xAI OAuth provider deliberately
+/// scrubs these carriers instead (strict serde), so the bridge applies only
+/// to remaining third-party native Responses upstreams.
+pub fn provider_needs_responses_tool_search_bridge(provider: &Provider) -> bool {
+    !is_codex_official_provider(provider) && !provider.is_xai_oauth()
+}
+
 fn has_explicit_codex_third_party_upstream(provider: &Provider) -> bool {
     let non_empty_setting = |key: &str| {
         provider
