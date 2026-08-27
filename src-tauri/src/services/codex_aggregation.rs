@@ -493,7 +493,7 @@ fn provider_default_context_window(provider: &Provider) -> Option<u64> {
         .filter(|value| *value > 0)
 }
 
-fn read_official_catalog_models() -> Result<Vec<Value>, String> {
+pub(crate) fn read_official_catalog_models() -> Result<Vec<Value>, String> {
     let codex_dir = crate::codex_config::get_codex_config_dir();
     let paths = [
         codex_dir.join("models_cache.json"),

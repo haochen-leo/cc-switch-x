@@ -467,6 +467,7 @@ impl CodexToolContext {
     }
 
     /// Whether the original request contained a hosted {type: "web_search"} tool.
+    #[allow(dead_code)]
     pub(crate) fn has_web_search(&self) -> bool {
         self.has_web_search
     }
