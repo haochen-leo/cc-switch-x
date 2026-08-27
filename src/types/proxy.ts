@@ -54,7 +54,6 @@ export interface ProxyTakeoverStatus {
 
 export interface CodexAggregationStatus {
   enabled: boolean;
-  responsesOnly: boolean;
   providerId: string;
   modelCount: number;
   sourceProviderCount: number;
@@ -69,7 +68,6 @@ export interface CodexAggregationSourceProvider {
   official: boolean;
   selected: boolean;
   conversionRequired: boolean;
-  aggregationEligible: boolean;
 }
 
 export interface ProviderHealth {
