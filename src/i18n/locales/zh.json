@@ -364,8 +364,6 @@
         "enableFeatureDescription": "开启后，主页面顶部将显示路由和故障转移开关",
         "enableFailoverToggle": "在主页面显示故障转移开关",
         "enableFailoverToggleDescription": "开启后，主页面顶部将独立显示故障转移开关",
-        "webSearchSidecar": "Web Search 代搜（实验特性）",
-        "webSearchSidecarDescription": "Codex 请求携带 web_search 工具时，由本地代理调用可用的搜索执行器完成检索并回填结果；关闭后该工具将被静默移除",
         "running": "运行中",
         "stopped": "已停止"
       },
