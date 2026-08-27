@@ -1364,13 +1364,20 @@ async fn handle_responses_for_app(
         .await;
     }
 
-    // Native Responses passthrough to a strict gateway (xAI): the request-side
-    // flatten (in the forwarder) turned Codex `namespace` tools into flat
-    // function tools, so the upstream returns flat function-call names. Restore
-    // them to `{name, namespace}` so the Codex client matches them against its
-    // namespaced tool registry.
+    // Native Responses passthrough. The request-side flatten (in the
+    // forwarder) turned Codex `namespace` tools into flat function tools, so
+    // the upstream returns flat function-call names that must be restored to
+    // `{name, namespace}` for the Codex client's namespaced tool registry.
+    //
+    // xAI has no tool_search bridge (its sanitizer scrubs the carriers), so
+    // it keeps the dedicated restore-only handler. Third-party native
+    // upstreams can have BOTH the flatten and the bridge active on the same
+    // request; they must fall through to the combined handler below with a
+    // merged flat-name map, otherwise this early return would skip the
+    // `tool_search_call` rewrite.
     if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider)
         && !namespace_restore_map.is_empty()
+        && !super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider)
     {
         let normalize_response_output_item_ids =
             !super::providers::is_codex_official_provider(&ctx.provider);
@@ -1385,6 +1392,14 @@ async fn handle_responses_for_app(
         .await;
     }
 
+    // Third-party native upstreams: merge the two flat-name maps. Both derive
+    // from the same request body via the shared `flatten_namespace_tool_name`,
+    // so a flat name resolves to the same `{namespace, name}` in either map.
+    let mut restore_map = tool_search_restore_map;
+    if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider) {
+        restore_map.extend(namespace_restore_map);
+    }
+
     let normalize_response_output_item_ids =
         !super::providers::is_codex_official_provider(&ctx.provider);
     handle_codex_apply_patch_input_sanitize(
@@ -1394,7 +1409,7 @@ async fn handle_responses_for_app(
         connection_guard,
         normalize_response_output_item_ids,
         super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider),
-        tool_search_restore_map,
+        restore_map,
     )
     .await
 }
@@ -1574,8 +1589,12 @@ async fn handle_responses_compact_for_app(
         .await;
     }
 
+    // Same dispatch as `handle_codex_responses`: xAI keeps the restore-only
+    // handler; third-party native upstreams merge both flat-name maps and use
+    // the combined handler so the `tool_search_call` rewrite is never skipped.
     if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider)
         && !namespace_restore_map.is_empty()
+        && !super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider)
     {
         let normalize_response_output_item_ids =
             !super::providers::is_codex_official_provider(&ctx.provider);
@@ -1590,6 +1609,11 @@ async fn handle_responses_compact_for_app(
         .await;
     }
 
+    let mut restore_map = tool_search_restore_map;
+    if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider) {
+        restore_map.extend(namespace_restore_map);
+    }
+
     let normalize_response_output_item_ids =
         !super::providers::is_codex_official_provider(&ctx.provider);
     handle_codex_apply_patch_input_sanitize(
@@ -1599,7 +1623,7 @@ async fn handle_responses_compact_for_app(
         connection_guard,
         normalize_response_output_item_ids,
         super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider),
-        tool_search_restore_map,
+        restore_map,
     )
     .await
 }
