@@ -389,6 +389,8 @@ export interface Settings {
   usageDashboardRefreshIntervalMs?: number;
   // Whether to show the failover toggle independently on the main page
   enableFailoverToggle?: boolean;
+  // Web Search 代搜 sidecar（实验特性，默认开启）：代理拦截宿主 web_search 并完成搜索
+  webSearchSidecarEnabled?: boolean;
   // Whether to show the project profile switcher on the main page header
   showProfileSwitcher?: boolean;
   // Preserve Codex ChatGPT login in auth.json when switching third-party providers
