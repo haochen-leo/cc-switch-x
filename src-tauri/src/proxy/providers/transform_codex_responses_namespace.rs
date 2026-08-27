@@ -58,7 +58,10 @@ pub(crate) fn namespace_restore_map(request_body: &Value) -> HashMap<String, Nam
     map
 }
 
-fn collect_namespace_restore_tools(tools: &[Value], map: &mut HashMap<String, NamespacedName>) {
+pub(crate) fn collect_namespace_restore_tools(
+    tools: &[Value],
+    map: &mut HashMap<String, NamespacedName>,
+) {
     for tool in tools {
         if tool.get("type").and_then(Value::as_str) != Some("namespace") {
             continue;
@@ -108,6 +111,34 @@ fn collect_additional_tools_namespace_restore(
             }
             for child in obj.values() {
                 collect_additional_tools_namespace_restore(child, map);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extend the restore map with `namespace` declarations carried by replayed
+/// `tool_search_output` items. The tool_search bridge lifts those discoveries
+/// to flat top-level tools for upstreams that don't implement deferred tool
+/// discovery, so their calls need the same response-side restore.
+pub(crate) fn collect_tool_search_output_namespace_restore(
+    value: &Value,
+    map: &mut HashMap<String, NamespacedName>,
+) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_tool_search_output_namespace_restore(item, map);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("type").and_then(Value::as_str) == Some("tool_search_output") {
+                if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
+                    collect_namespace_restore_tools(tools, map);
+                }
+            }
+            for child in obj.values() {
+                collect_tool_search_output_namespace_restore(child, map);
             }
         }
         _ => {}
