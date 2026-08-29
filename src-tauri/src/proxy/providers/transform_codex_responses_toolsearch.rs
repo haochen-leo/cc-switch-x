@@ -129,7 +129,19 @@ pub(crate) fn promote_tool_search_output_tools(body: &mut Value) -> bool {
         return false;
     }
 
-    // Existing top-level tool names seed the dedup set.
+    // A top-level deferred declaration is only a lazy catalog entry. It is
+    // not callable by the third-party upstream until a matching
+    // `tool_search_output` promotes it below, so remove these entries before
+    // seeding the dedup set. This keeps undiscovered tools out of the
+    // upstream's related/callable set.
+    let mut changed = false;
+    if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
+        let before = tools.len();
+        tools.retain(|tool| tool.get("defer_loading").and_then(Value::as_bool) != Some(true));
+        changed |= tools.len() != before;
+    }
+
+    // Existing non-deferred top-level tool names seed the dedup set.
     let mut seen: HashSet<String> = HashSet::new();
     if let Some(tools) = body.get("tools").and_then(Value::as_array) {
         for tool in tools {
@@ -158,7 +170,6 @@ pub(crate) fn promote_tool_search_output_tools(body: &mut Value) -> bool {
     }
 
     // Second pass (mutable): rewrite the carrier history items.
-    let mut changed = false;
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input.iter_mut() {
             changed |= rewrite_tool_search_carrier(item);
@@ -198,7 +209,9 @@ fn lift_discovered_tool(tool: &Value, seen: &mut HashSet<String>, out: &mut Vec<
             if name.is_empty() || !seen.insert(name.to_string()) {
                 return;
             }
-            out.push(tool.clone());
+            let mut lifted = tool.clone();
+            remove_defer_loading(&mut lifted);
+            out.push(lifted);
         }
         Some("namespace") => {
             let Some(namespace) = tool.get("name").and_then(Value::as_str).map(str::trim) else {
@@ -231,10 +244,21 @@ fn lift_discovered_tool(tool: &Value, seen: &mut HashSet<String>, out: &mut Vec<
                 if let Some(obj) = lifted.as_object_mut() {
                     obj.insert("name".to_string(), json!(flat));
                 }
+                remove_defer_loading(&mut lifted);
                 out.push(lifted);
             }
         }
         _ => {}
+    }
+}
+
+/// A discovered tool is loaded by the time it is promoted to the upstream
+/// top-level callable set. Keep the marker in the replayed Codex history, but
+/// remove it from the materialized copy so upstreams do not reject a request
+/// that has no native `type: "tool_search"` declaration.
+fn remove_defer_loading(tool: &mut Value) {
+    if let Some(obj) = tool.as_object_mut() {
+        obj.remove("defer_loading");
     }
 }
 
@@ -458,7 +482,21 @@ mod tests {
     #[test]
     fn promotes_discovered_namespace_tools_and_rewrites_carriers() {
         let mut body = json!({
-            "tools": [{"type": "function", "name": "exec_command"}],
+            "tools": [
+                {"type": "function", "name": "exec_command"},
+                {
+                    "type": "function",
+                    "name": "mcp__node_repl__js",
+                    "parameters": {"type": "object"},
+                    "defer_loading": true
+                },
+                {
+                    "type": "function",
+                    "name": "mcp__unrelated__foo",
+                    "parameters": {"type": "object"},
+                    "defer_loading": true
+                }
+            ],
             "input": [
                 {"type": "message", "role": "user", "content": []},
                 {
@@ -482,14 +520,25 @@ mod tests {
                             "description": "node repl",
                             "tools": [
                                 {"type": "function", "name": "js_reset", "parameters": {}},
-                                {"type": "function", "name": "js", "parameters": {"type": "object"}}
+                                {
+                                    "type": "function",
+                                    "name": "js",
+                                    "parameters": {"type": "object"},
+                                    "defer_loading": true
+                                }
                             ]
                         },
-                        {"type": "function", "name": "exec_command"}
+                        {
+                            "type": "function",
+                            "name": "mcp__plain",
+                            "parameters": {"type": "object"},
+                            "defer_loading": true
+                        }
                     ]
                 }
             ]
         });
+        let original_discovered_tools = body["input"][2]["tools"].clone();
         assert!(promote_tool_search_output_tools(&mut body));
 
         let names: Vec<&str> = body["tools"]
@@ -503,9 +552,28 @@ mod tests {
             vec![
                 "exec_command",
                 "mcp__node_repl__js_reset",
-                "mcp__node_repl__js"
+                "mcp__node_repl__js",
+                "mcp__plain"
             ],
             "namespace children are lifted flat; the pre-existing exec_command is deduped"
+        );
+        assert!(body["tools"][2].get("defer_loading").is_none());
+        assert!(body["tools"][3].get("defer_loading").is_none());
+        assert!(
+            body["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool.get("defer_loading").is_none()),
+            "third-party upstream receives no deferred top-level declarations"
+        );
+        assert!(
+            body["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool.get("name").and_then(Value::as_str) != Some("mcp__unrelated__foo")),
+            "undiscovered deferred tools stay out of the upstream callable set"
         );
 
         let input = body["input"].as_array().unwrap();
@@ -518,6 +586,10 @@ mod tests {
         assert_eq!(input[2]["call_id"], "call_1");
         let output: Value = serde_json::from_str(input[2]["output"].as_str().unwrap()).unwrap();
         assert_eq!(output["type"], "tool_search_output");
+        assert_eq!(
+            output["tools"], original_discovered_tools,
+            "replayed Codex history keeps the original deferred markers"
+        );
 
         // Second call is a no-op (carriers already converted).
         assert!(!promote_tool_search_output_tools(&mut body));
