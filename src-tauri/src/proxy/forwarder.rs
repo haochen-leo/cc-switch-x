@@ -1735,6 +1735,25 @@ impl RequestForwarder {
             );
         }
 
+        // Codex exposes apply_patch as a freeform custom tool. Most
+        // third-party native Responses gateways accept only standard function
+        // tools, so bridge the declaration, forced choice and replay history
+        // after namespace flattening. The response handler restores the
+        // function call before ID normalization and client dispatch.
+        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
+            && !codex_responses_to_chat
+            && !codex_responses_to_anthropic
+            && super::providers::provider_needs_responses_apply_patch_bridge(provider)
+            && super::providers::transform_codex_apply_patch::bridge_request_apply_patch_custom_to_function(
+                &mut request_body,
+            )
+        {
+            log::debug!(
+                "[Codex] Bridged apply_patch custom tool to function for native Responses upstream (provider={})",
+                provider.id
+            );
+        }
+
         // xAI-only on the same native-Responses path: scrub the
         // OpenAI-backend-private fields and tool carriers
         // (`external_web_access`, `prompt_cache_retention`, `additional_tools`,
