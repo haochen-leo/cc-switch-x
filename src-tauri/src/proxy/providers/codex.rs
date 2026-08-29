@@ -303,6 +303,54 @@ pub fn provider_needs_xai_responses_sanitize(provider: &Provider) -> bool {
     provider.is_xai_oauth()
 }
 
+/// Whether native Responses traffic needs Codex's freeform `apply_patch`
+/// bridged through a standard function tool.
+///
+/// OpenAI's native Responses backend and DeepSeek's official Codex gateway
+/// accept the custom tool contract directly. Other third-party native
+/// gateways are normalized to the broadly supported function contract, then
+/// restored on the response path before Codex sees the call.
+pub fn provider_needs_responses_apply_patch_bridge(provider: &Provider) -> bool {
+    if is_codex_official_provider(provider)
+        || codex_provider_uses_chat_completions(provider)
+        || codex_provider_uses_anthropic(provider)
+    {
+        return false;
+    }
+    if provider.is_xai_oauth() {
+        return true;
+    }
+
+    let base_url = provider
+        .settings_config
+        .get("base_url")
+        .or_else(|| provider.settings_config.get("baseURL"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("config")
+                .and_then(JsonValue::as_str)
+                .and_then(extract_codex_base_url_from_toml)
+        });
+    let Some(host) = base_url
+        .as_deref()
+        .and_then(|url| url::Url::parse(url).ok())
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+    else {
+        // No explicit third-party endpoint means CodexAdapter's OpenAI default.
+        return false;
+    };
+
+    host != "api.openai.com"
+        && !host.ends_with(".openai.com")
+        && host != "chatgpt.com"
+        && !host.ends_with(".chatgpt.com")
+        && host != "deepseek.com"
+        && !host.ends_with(".deepseek.com")
+}
+
 /// Whether a Codex provider needs the `tool_search` (deferred tool discovery)
 /// bridge on the native Responses passthrough.
 ///
@@ -2226,5 +2274,57 @@ wire_api = "responses"
         assert!(provider_needs_xai_responses_sanitize(&xai));
         assert!(!provider_needs_xai_responses_sanitize(&plain));
         assert!(!provider_needs_xai_responses_sanitize(&official));
+    }
+
+    #[test]
+    fn apply_patch_function_bridge_targets_third_party_native_gateways() {
+        let native = |_name: &str, base_url: &str, model: &str| {
+            create_provider(json!({
+                "model": model,
+                "base_url": base_url,
+                "api_format": "openai_responses"
+            }))
+        };
+
+        assert!(provider_needs_responses_apply_patch_bridge(&native(
+            "Qwen",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max"
+        )));
+        assert!(provider_needs_responses_apply_patch_bridge(&native(
+            "MiMo",
+            "https://api.xiaomimimo.com/v1",
+            "mimo-v2.5"
+        )));
+
+        let mut xai = create_provider(json!({ "auth": {}, "config": "" }));
+        xai.meta = Some(crate::provider::ProviderMeta {
+            provider_type: Some("xai_oauth".to_string()),
+            ..Default::default()
+        });
+        assert!(provider_needs_responses_apply_patch_bridge(&xai));
+
+        assert!(!provider_needs_responses_apply_patch_bridge(&native(
+            "OpenAI",
+            "https://api.openai.com/v1",
+            "gpt-5.6-sol"
+        )));
+        assert!(!provider_needs_responses_apply_patch_bridge(&native(
+            "DeepSeek",
+            "https://api.deepseek.com/v1",
+            "deepseek-v4-flash"
+        )));
+
+        let chat = create_provider(json!({
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_format": "openai_chat"
+        }));
+        assert!(!provider_needs_responses_apply_patch_bridge(&chat));
+
+        let anthropic = create_provider(json!({
+            "base_url": "https://dashscope.aliyuncs.com/apps/anthropic",
+            "api_format": "anthropic"
+        }));
+        assert!(!provider_needs_responses_apply_patch_bridge(&anthropic));
     }
 }

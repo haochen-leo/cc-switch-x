@@ -1,11 +1,14 @@
-//! Response-side compatibility for Codex freeform `apply_patch` calls.
+//! Native Responses compatibility for Codex freeform `apply_patch` calls.
 //!
-//! Some native Responses-compatible upstreams return the freeform input wrapped
-//! in a JSON string such as `{"patch":"*** Begin Patch\n..."}`. Codex passes
-//! freeform custom-tool input directly to the patch parser, so the leading `{`
-//! makes the call fail before the patch body is examined. This module only
-//! unwraps `apply_patch` custom-tool inputs when the extracted text is a valid
-//! patch envelope.
+//! Codex exposes `apply_patch` as a Responses custom/freeform tool. Many native
+//! Responses-compatible gateways support standard function tools but reject the
+//! `custom` tool type. The request bridge below converts only `apply_patch`
+//! custom declarations/history into a single-string function contract; the
+//! response bridge restores function calls to Codex custom-tool items.
+//!
+//! Some gateways additionally wrap the patch string in JSON. The final
+//! sanitizer unwraps those shapes only when it can recover a valid patch
+//! envelope.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,6 +19,10 @@ use serde_json::{json, Value};
 use crate::proxy::sse::{append_utf8_safe, strip_sse_field, take_sse_block};
 
 const PATCH_BEGIN: &str = "*** Begin Patch";
+const APPLY_PATCH_TOOL_NAME: &str = "apply_patch";
+const APPLY_PATCH_FUNCTION_INPUT_FIELD: &str = "input";
+const APPLY_PATCH_FUNCTION_INPUT_DESCRIPTION: &str =
+    "Raw apply_patch patch text. Preserve the patch envelope and formatting exactly.";
 const PATCH_FIELD_PRIORITY: &[&str] = &[
     "input",
     "patch",
@@ -26,6 +33,426 @@ const PATCH_FIELD_PRIORITY: &[&str] = &[
     "parameters",
 ];
 const MAX_UNWRAP_DEPTH: usize = 8;
+
+pub(crate) fn bridge_request_apply_patch_custom_to_function(value: &mut Value) -> bool {
+    let mut apply_patch_call_ids = HashSet::new();
+    collect_apply_patch_custom_call_ids(value, &mut apply_patch_call_ids);
+    bridge_request_value(value, &apply_patch_call_ids)
+}
+
+fn collect_apply_patch_custom_call_ids(value: &Value, call_ids: &mut HashSet<String>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_apply_patch_custom_call_ids(item, call_ids);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                && obj.get("name").and_then(Value::as_str) == Some(APPLY_PATCH_TOOL_NAME)
+            {
+                if let Some(call_id) = obj.get("call_id").and_then(Value::as_str) {
+                    call_ids.insert(call_id.to_string());
+                }
+            }
+            for child in obj.values() {
+                collect_apply_patch_custom_call_ids(child, call_ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn bridge_request_value(value: &mut Value, apply_patch_call_ids: &HashSet<String>) -> bool {
+    let mut changed = false;
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                changed |= bridge_request_value(item, apply_patch_call_ids);
+            }
+        }
+        Value::Object(obj) => {
+            let item_type = obj
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            match item_type.as_str() {
+                "custom_tool_call"
+                    if obj.get("name").and_then(Value::as_str) == Some(APPLY_PATCH_TOOL_NAME) =>
+                {
+                    let input = obj
+                        .remove("input")
+                        .map(custom_input_value_to_string)
+                        .unwrap_or_default();
+                    obj.insert("type".to_string(), json!("function_call"));
+                    obj.insert(
+                        "arguments".to_string(),
+                        json!(function_arguments_from_custom_input(&input)),
+                    );
+                    changed = true;
+                }
+                "custom_tool_call_output"
+                    if obj
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|call_id| apply_patch_call_ids.contains(call_id)) =>
+                {
+                    obj.insert("type".to_string(), json!("function_call_output"));
+                    changed = true;
+                }
+                _ => {}
+            }
+
+            if let Some(tool_choice) = obj.get_mut("tool_choice").and_then(Value::as_object_mut) {
+                if tool_choice.get("type").and_then(Value::as_str) == Some("custom")
+                    && tool_choice.get("name").and_then(Value::as_str)
+                        == Some(APPLY_PATCH_TOOL_NAME)
+                {
+                    tool_choice.insert("type".to_string(), json!("function"));
+                    changed = true;
+                }
+            }
+
+            for key in ["tools", "additional_tools"] {
+                if let Some(tools) = obj.get_mut(key).and_then(Value::as_array_mut) {
+                    for tool in tools {
+                        changed |= bridge_apply_patch_tool_definition(tool);
+                    }
+                }
+            }
+
+            for child in obj.values_mut() {
+                changed |= bridge_request_value(child, apply_patch_call_ids);
+            }
+        }
+        _ => {}
+    }
+    changed
+}
+
+fn bridge_apply_patch_tool_definition(tool: &mut Value) -> bool {
+    let is_apply_patch = match tool {
+        Value::String(name) => name == APPLY_PATCH_TOOL_NAME,
+        Value::Object(obj) => {
+            obj.get("type").and_then(Value::as_str) == Some("custom")
+                && obj.get("name").and_then(Value::as_str) == Some(APPLY_PATCH_TOOL_NAME)
+        }
+        _ => false,
+    };
+    if !is_apply_patch {
+        return false;
+    }
+
+    let original_description = tool
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .unwrap_or("Apply a patch to files in the workspace.");
+    *tool = json!({
+        "type": "function",
+        "name": APPLY_PATCH_TOOL_NAME,
+        "description": original_description,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                APPLY_PATCH_FUNCTION_INPUT_FIELD: {
+                    "type": "string",
+                    "description": APPLY_PATCH_FUNCTION_INPUT_DESCRIPTION
+                }
+            },
+            "required": [APPLY_PATCH_FUNCTION_INPUT_FIELD]
+        }
+    });
+    true
+}
+
+fn custom_input_value_to_string(value: Value) -> String {
+    match value {
+        Value::String(text) => text,
+        other => serde_json::to_string(&other).unwrap_or_default(),
+    }
+}
+
+fn function_arguments_from_custom_input(input: &str) -> String {
+    serde_json::to_string(&json!({ APPLY_PATCH_FUNCTION_INPUT_FIELD: input })).unwrap_or_default()
+}
+
+pub(crate) fn restore_response_apply_patch_function_calls(value: &mut Value) -> bool {
+    let mut apply_patch_call_ids = HashSet::new();
+    collect_apply_patch_function_call_ids(value, &mut apply_patch_call_ids);
+    restore_response_value(value, &apply_patch_call_ids)
+}
+
+fn collect_apply_patch_function_call_ids(value: &Value, call_ids: &mut HashSet<String>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_apply_patch_function_call_ids(item, call_ids);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("type").and_then(Value::as_str) == Some("function_call")
+                && obj.get("name").and_then(Value::as_str) == Some(APPLY_PATCH_TOOL_NAME)
+            {
+                if let Some(call_id) = obj.get("call_id").and_then(Value::as_str) {
+                    call_ids.insert(call_id.to_string());
+                }
+            }
+            for child in obj.values() {
+                collect_apply_patch_function_call_ids(child, call_ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn restore_response_value(value: &mut Value, apply_patch_call_ids: &HashSet<String>) -> bool {
+    let mut changed = false;
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                changed |= restore_response_value(item, apply_patch_call_ids);
+            }
+        }
+        Value::Object(obj) => {
+            let item_type = obj
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            match item_type.as_str() {
+                "function_call"
+                    if obj.get("name").and_then(Value::as_str) == Some(APPLY_PATCH_TOOL_NAME) =>
+                {
+                    let arguments = obj
+                        .remove("arguments")
+                        .map(custom_input_value_to_string)
+                        .unwrap_or_default();
+                    obj.insert("type".to_string(), json!("custom_tool_call"));
+                    obj.insert(
+                        "input".to_string(),
+                        json!(custom_input_from_function_arguments(&arguments)),
+                    );
+                    changed = true;
+                }
+                "function_call_output"
+                    if obj
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|call_id| apply_patch_call_ids.contains(call_id)) =>
+                {
+                    obj.insert("type".to_string(), json!("custom_tool_call_output"));
+                    changed = true;
+                }
+                _ => {}
+            }
+
+            for child in obj.values_mut() {
+                changed |= restore_response_value(child, apply_patch_call_ids);
+            }
+        }
+        _ => {}
+    }
+    changed
+}
+
+fn custom_input_from_function_arguments(arguments: &str) -> String {
+    if arguments.trim().is_empty() {
+        return String::new();
+    }
+    if let Some(patch) = normalized_patch_text(arguments) {
+        return patch;
+    }
+    match serde_json::from_str::<Value>(arguments) {
+        Ok(Value::Object(obj)) => {
+            for key in PATCH_FIELD_PRIORITY {
+                if let Some(Value::String(text)) = obj.get(*key) {
+                    return normalized_patch_text(text).unwrap_or_else(|| text.to_string());
+                }
+            }
+            arguments.to_string()
+        }
+        _ => arguments.to_string(),
+    }
+}
+
+#[derive(Debug, Default)]
+struct ApplyPatchFunctionStreamState {
+    item_ids: HashSet<String>,
+    buffered_arguments: HashMap<String, String>,
+}
+
+pub(crate) fn create_apply_patch_function_restore_sse_stream<E>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send
+where
+    E: std::error::Error + Send + 'static,
+{
+    async_stream::stream! {
+        let mut buffer = String::new();
+        let mut utf8_remainder: Vec<u8> = Vec::new();
+        let mut state = ApplyPatchFunctionStreamState::default();
+
+        tokio::pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
+                    while let Some(block) = take_sse_block(&mut buffer) {
+                        if block.trim().is_empty() {
+                            continue;
+                        }
+                        for bytes in restore_function_sse_block(&block, &mut state) {
+                            yield Ok(bytes);
+                        }
+                    }
+                }
+                Err(e) => {
+                    yield Err(std::io::Error::other(e.to_string()));
+                    return;
+                }
+            }
+        }
+
+        if !utf8_remainder.is_empty() {
+            buffer.push_str(&String::from_utf8_lossy(&utf8_remainder));
+        }
+        let tail = std::mem::take(&mut buffer);
+        if !tail.trim().is_empty() {
+            for bytes in restore_function_sse_block(&tail, &mut state) {
+                yield Ok(bytes);
+            }
+        }
+    }
+}
+
+fn restore_function_sse_block(
+    block: &str,
+    state: &mut ApplyPatchFunctionStreamState,
+) -> Vec<Bytes> {
+    let mut event_name: Option<&str> = None;
+    let mut data_parts: Vec<&str> = Vec::new();
+    for line in block.lines() {
+        if let Some(event) = strip_sse_field(line, "event") {
+            event_name = Some(event.trim());
+        }
+        if let Some(data) = strip_sse_field(line, "data") {
+            data_parts.push(data);
+        }
+    }
+
+    if data_parts.is_empty() {
+        return vec![Bytes::from(format!("{block}\n\n"))];
+    }
+
+    let data = data_parts.join("\n");
+    if data.trim() == "[DONE]" {
+        return vec![Bytes::from(format!("{block}\n\n"))];
+    }
+
+    let mut event: Value = match serde_json::from_str(&data) {
+        Ok(value) => value,
+        Err(_) => return vec![Bytes::from(format!("{block}\n\n"))],
+    };
+    let event_type = event
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    if matches!(
+        event_type.as_str(),
+        "response.output_item.added" | "response.output_item.done"
+    ) {
+        if let Some(item) = event.get("item").and_then(Value::as_object) {
+            let is_apply_patch = item.get("type").and_then(Value::as_str) == Some("function_call")
+                && item.get("name").and_then(Value::as_str) == Some(APPLY_PATCH_TOOL_NAME);
+            if is_apply_patch {
+                if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+                    state.item_ids.insert(item_id.to_string());
+                }
+            }
+        }
+    }
+
+    let item_id = event
+        .get("item_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if event_type == "response.function_call_arguments.delta" {
+        if let Some(item_id) = item_id.as_deref() {
+            if state.item_ids.contains(item_id) {
+                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+                    state
+                        .buffered_arguments
+                        .entry(item_id.to_string())
+                        .or_default()
+                        .push_str(delta);
+                }
+                return Vec::new();
+            }
+        }
+    }
+
+    if event_type == "response.function_call_arguments.done" {
+        if let Some(item_id) = item_id.as_deref() {
+            if state.item_ids.contains(item_id) {
+                let buffered = state.buffered_arguments.remove(item_id);
+                let had_buffer = buffered.is_some();
+                let arguments = event
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .filter(|arguments| !arguments.is_empty())
+                    .map(str::to_string)
+                    .or(buffered)
+                    .unwrap_or_default();
+                let input = custom_input_from_function_arguments(&arguments);
+                let output_index = event.get("output_index").cloned().unwrap_or(json!(0));
+                event["type"] = json!("response.custom_tool_call_input.done");
+                event
+                    .as_object_mut()
+                    .expect("Responses SSE event must be an object")
+                    .remove("arguments");
+                event["input"] = json!(input.clone());
+
+                let done = sse_event_bytes("response.custom_tool_call_input.done", event);
+                if had_buffer {
+                    return vec![
+                        sse_event_bytes(
+                            "response.custom_tool_call_input.delta",
+                            json!({
+                                "type": "response.custom_tool_call_input.delta",
+                                "item_id": item_id,
+                                "output_index": output_index,
+                                "delta": input,
+                            }),
+                        ),
+                        done,
+                    ];
+                }
+                return vec![done];
+            }
+        }
+    }
+
+    let changed = restore_response_apply_patch_function_calls(&mut event);
+    if changed && event_type == "response.output_item.added" {
+        if let Some(item) = event.get_mut("item").and_then(Value::as_object_mut) {
+            if item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                && item.get("name").and_then(Value::as_str) == Some(APPLY_PATCH_TOOL_NAME)
+                && item.get("input").and_then(Value::as_str) == Some("")
+            {
+                item.remove("input");
+            }
+        }
+    }
+
+    let restored = serde_json::to_string(&event).unwrap_or(data);
+    vec![sse_event_text(event_name, &restored)]
+}
 
 pub(crate) fn sanitize_response_apply_patch_inputs(value: &mut Value) -> bool {
     let mut apply_patch_item_ids = HashSet::new();
@@ -320,6 +747,184 @@ mod tests {
 
     fn sample_patch() -> &'static str {
         "*** Begin Patch\n*** Update File: /tmp/a.txt\n@@\n-old\n+new\n*** End Patch"
+    }
+
+    #[test]
+    fn bridges_request_custom_apply_patch_to_standard_function() {
+        let patch = sample_patch();
+        let mut request = json!({
+            "tools": [{
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "Apply a patch.",
+                "format": { "type": "grammar", "syntax": "lark", "definition": "start: /.+/" }
+            }],
+            "additional_tools": [{
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "Apply a discovered patch."
+            }],
+            "tool_choice": { "type": "custom", "name": "apply_patch" },
+            "input": [
+                {
+                    "type": "custom_tool_call",
+                    "id": "ctc_1",
+                    "call_id": "call_1",
+                    "name": "apply_patch",
+                    "input": patch
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_1",
+                    "output": "Done!"
+                }
+            ]
+        });
+
+        assert!(bridge_request_apply_patch_custom_to_function(&mut request));
+        for key in ["tools", "additional_tools"] {
+            let tool = &request[key][0];
+            assert_eq!(tool["type"], "function");
+            assert_eq!(tool["name"], APPLY_PATCH_TOOL_NAME);
+            assert_eq!(
+                tool["parameters"]["required"],
+                json!([APPLY_PATCH_FUNCTION_INPUT_FIELD])
+            );
+            assert!(tool.get("format").is_none());
+        }
+        assert_eq!(request["tool_choice"]["type"], "function");
+        assert_eq!(request["input"][0]["type"], "function_call");
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                request["input"][0]["arguments"]
+                    .as_str()
+                    .expect("string arguments")
+            )
+            .expect("valid arguments")[APPLY_PATCH_FUNCTION_INPUT_FIELD],
+            patch
+        );
+        assert_eq!(request["input"][1]["type"], "function_call_output");
+    }
+
+    #[test]
+    fn restores_non_streaming_function_apply_patch_to_custom_call() {
+        let patch = sample_patch();
+        let mut response = json!({
+            "id": "resp_1",
+            "output": [{
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "apply_patch",
+                "arguments": json!({ "input": patch }).to_string()
+            }]
+        });
+
+        assert!(restore_response_apply_patch_function_calls(&mut response));
+        assert_eq!(response["output"][0]["type"], "custom_tool_call");
+        assert_eq!(response["output"][0]["input"], patch);
+        assert!(response["output"][0].get("arguments").is_none());
+    }
+
+    #[test]
+    fn bridged_apply_patch_survives_xai_strict_sanitizer() {
+        let mut request = json!({
+            "model": "grok-4.5",
+            "tools": [{
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "Apply a patch.",
+                "format": { "type": "grammar", "syntax": "lark", "definition": "start: /.+/" }
+            }],
+            "tool_choice": { "type": "custom", "name": "apply_patch" }
+        });
+
+        assert!(bridge_request_apply_patch_custom_to_function(&mut request));
+        crate::proxy::providers::transform_codex_responses_xai_sanitize::sanitize_xai_responses_request(
+            &mut request,
+        );
+
+        assert_eq!(request["tools"][0]["type"], "function");
+        assert_eq!(request["tools"][0]["name"], APPLY_PATCH_TOOL_NAME);
+        assert_eq!(request["tool_choice"]["type"], "function");
+        assert_eq!(request["tool_choice"]["name"], APPLY_PATCH_TOOL_NAME);
+    }
+
+    #[tokio::test]
+    async fn restores_streamed_function_arguments_to_custom_input() {
+        let patch = sample_patch();
+        let arguments = json!({ "input": patch }).to_string();
+        let split = arguments.len() / 2;
+        let input = format!(
+            "event: response.output_item.added\n\
+             data: {}\n\n\
+             event: response.function_call_arguments.delta\n\
+             data: {}\n\n\
+             event: response.function_call_arguments.delta\n\
+             data: {}\n\n\
+             event: response.function_call_arguments.done\n\
+             data: {}\n\n\
+             event: response.output_item.done\n\
+             data: {}\n\n",
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "apply_patch",
+                    "arguments": ""
+                }
+            }),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 0,
+                "delta": &arguments[..split]
+            }),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 0,
+                "delta": &arguments[split..]
+            }),
+            json!({
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_1",
+                "output_index": 0,
+                "arguments": arguments
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "apply_patch",
+                    "arguments": json!({ "input": patch }).to_string()
+                }
+            })
+        );
+        let upstream = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(input))]);
+        let output = create_apply_patch_function_restore_sse_stream(upstream)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(Result::unwrap)
+            .fold(Vec::new(), |mut acc, bytes| {
+                acc.extend_from_slice(&bytes);
+                acc
+            });
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(output.contains("\"type\":\"custom_tool_call\""));
+        assert!(output.contains("event: response.custom_tool_call_input.delta"));
+        assert!(output.contains("event: response.custom_tool_call_input.done"));
+        assert!(output.contains("\"delta\":\"*** Begin Patch\\n"));
+        assert!(output.contains("\"input\":\"*** Begin Patch\\n"));
+        assert!(!output.contains("response.function_call_arguments"));
     }
 
     #[test]
