@@ -1388,6 +1388,7 @@ async fn handle_responses_for_app(
             connection_guard,
             namespace_restore_map,
             normalize_response_output_item_ids,
+            super::providers::provider_needs_responses_apply_patch_bridge(&ctx.provider),
         )
         .await;
     }
@@ -1408,6 +1409,7 @@ async fn handle_responses_for_app(
         &state,
         connection_guard,
         normalize_response_output_item_ids,
+        super::providers::provider_needs_responses_apply_patch_bridge(&ctx.provider),
         super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider),
         restore_map,
     )
@@ -1605,6 +1607,7 @@ async fn handle_responses_compact_for_app(
             connection_guard,
             namespace_restore_map,
             normalize_response_output_item_ids,
+            super::providers::provider_needs_responses_apply_patch_bridge(&ctx.provider),
         )
         .await;
     }
@@ -1622,6 +1625,7 @@ async fn handle_responses_compact_for_app(
         &state,
         connection_guard,
         normalize_response_output_item_ids,
+        super::providers::provider_needs_responses_apply_patch_bridge(&ctx.provider),
         super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider),
         restore_map,
     )
@@ -1643,6 +1647,7 @@ async fn handle_codex_responses_namespace_restore(
         transform_codex_responses_namespace::NamespacedName,
     >,
     normalize_response_output_item_ids: bool,
+    apply_patch_bridge: bool,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
     let capture = payload_capture::PayloadCaptureContext::from_request(state, ctx);
@@ -1672,9 +1677,20 @@ async fn handle_codex_responses_namespace_restore(
             status.as_u16(),
             content_type,
         );
+        let response_stream: Box<
+            dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
+        > = if apply_patch_bridge {
+            Box::new(Box::pin(
+                transform_codex_apply_patch::create_apply_patch_function_restore_sse_stream(
+                    upstream_stream,
+                ),
+            ))
+        } else {
+            Box::new(Box::pin(upstream_stream))
+        };
         let restore_stream =
             transform_codex_responses_namespace::create_namespace_restore_sse_stream(
-                upstream_stream,
+                response_stream,
                 restore_map,
             );
         let restore_stream: Box<
@@ -1731,6 +1747,11 @@ async fn handle_codex_responses_namespace_restore(
     // this only guards against a malformed upstream).
     let restored_bytes = match serde_json::from_slice::<Value>(&body_bytes) {
         Ok(mut value) => {
+            if apply_patch_bridge {
+                transform_codex_apply_patch::restore_response_apply_patch_function_calls(
+                    &mut value,
+                );
+            }
             transform_codex_responses_namespace::restore_response_namespaces(
                 &mut value,
                 &restore_map,
@@ -1821,6 +1842,7 @@ async fn handle_codex_apply_patch_input_sanitize(
     state: &ProxyState,
     connection_guard: Option<ActiveConnectionGuard>,
     normalize_response_output_item_ids: bool,
+    apply_patch_bridge: bool,
     tool_search_bridge: bool,
     tool_search_restore_map: std::collections::HashMap<
         String,
@@ -1854,14 +1876,25 @@ async fn handle_codex_apply_patch_input_sanitize(
         );
         let response_stream: Box<
             dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
-        > = if normalize_response_output_item_ids {
+        > = if apply_patch_bridge {
             Box::new(Box::pin(
-                transform_codex_chat::create_response_output_id_normalize_sse_stream(
+                transform_codex_apply_patch::create_apply_patch_function_restore_sse_stream(
                     upstream_stream,
                 ),
             ))
         } else {
             Box::new(Box::pin(upstream_stream))
+        };
+        let response_stream: Box<
+            dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
+        > = if normalize_response_output_item_ids {
+            Box::new(Box::pin(
+                transform_codex_chat::create_response_output_id_normalize_sse_stream(
+                    response_stream,
+                ),
+            ))
+        } else {
+            response_stream
         };
         // tool_search bridge (third-party native Responses): turn the model's
         // plain `function_call` named `tool_search` back into the
@@ -1931,6 +1964,11 @@ async fn handle_codex_apply_patch_input_sanitize(
     let mut rebuilt_as_json = false;
     let response_bytes = match serde_json::from_slice::<Value>(&body_bytes) {
         Ok(mut value) => {
+            if apply_patch_bridge {
+                transform_codex_apply_patch::restore_response_apply_patch_function_calls(
+                    &mut value,
+                );
+            }
             if normalize_response_output_item_ids {
                 transform_codex_chat::normalize_response_output_item_ids(&mut value);
             }
