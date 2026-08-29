@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::{
@@ -7,10 +6,14 @@ use crate::config::{
 };
 use crate::error::AppError;
 use crate::model_capabilities::{image_input_capability_from_modalities, ImageInputCapability};
+#[cfg(test)]
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(test)]
+use std::collections::{HashMap, HashSet};
 use std::fs;
+#[cfg(test)]
 use std::process::{Command, Stdio};
 use toml_edit::DocumentMut;
 
@@ -33,14 +36,6 @@ const CODEX_DESKTOP_ENABLED_REASONING_EFFORTS: &str = "enabled-reasoning-efforts
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-// Generating a ProxyChat catalog needs the Codex model template set once per
-// process. Without this cache every provider switch/takeover can start the
-// Codex CLI again, which is especially expensive for npm-installed `codex.cmd`
-// on Windows. Tests deliberately bypass the global cache because they isolate
-// CODEX_HOME and seed different model templates.
-#[cfg(not(test))]
-static CODEX_MODEL_CATALOG_TEMPLATE_CACHE: OnceCell<CodexModelCatalogTemplates> = OnceCell::new();
 
 /// Top-level `config.toml` key that controls Codex's built-in web-search tool.
 pub(crate) const CODEX_WEB_SEARCH_FIELD: &str = "web_search";
@@ -121,8 +116,11 @@ fn codex_native_gateway_rejects_web_search(config_text: &str) -> bool {
     }
     false
 }
+#[cfg(test)]
 const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
+#[cfg(test)]
 const CODEX_MODEL_CATALOG_DEFAULT_TEMPLATE_SLUG: &str = "gpt-5.6-sol";
+const CODEX_THIRD_PARTY_CATALOG_TEMPLATE_SLUG: &str = "cc-switch-third-party";
 const CODEX_MANAGED_OAUTH_LIVE_AUTH_MARKER_FILENAME: &str = "codex_managed_oauth_live_auth.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,22 +308,20 @@ impl CodexLiveStateSnapshot {
 /// Which Codex tool surface the generated model catalog should target.
 ///
 /// - `ProxyChat`: cc-switch's proxy takes over and converts Responses<->Chat,
-///   so the catalog keeps Codex's default tool set (incl. the freeform
-///   `apply_patch` custom tool, which the proxy rewrites to a function tool).
-/// - `NativeResponses`: Codex talks directly to a provider's native
-///   `/responses` endpoint (no proxy). Such gateways (e.g. Xiaomi MiMo,
-///   MiniMax) reject `type=="custom"` tools, so the catalog must suppress the
-///   freeform `apply_patch` and rely on `shell_type="shell_command"` for edits.
+///   while preserving the cc-switch third-party prompt/tool template.
+/// - `NativeResponses`: cc-switch forwards Codex Responses to the provider's
+///   native `/responses` endpoint. Third-party aliases use the same stable
+///   template; strict gateways receive the request/response `apply_patch`
+///   custom<->function bridge in the proxy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexCatalogToolProfile {
     ProxyChat,
     NativeResponses,
     /// Codex talks (through cc-switch's proxy) to a native Anthropic Messages
-    /// gateway. Like `NativeResponses` it must suppress Codex's freeform custom
-    /// tools — the Responses→Anthropic transform keeps only `function` tools.
-    /// Additionally the Codex `web_search` hosted tool is unusable on this path
-    /// (the transform drops it), so it is always disabled — see
-    /// `prepare_codex_config_text_with_model_catalog`.
+    /// gateway. Third-party aliases use the same stable template, and the
+    /// Responses→Anthropic converter round-trips Codex custom tools. The Codex
+    /// `web_search` hosted tool remains disabled because that transform does
+    /// not expose it upstream — see `prepare_codex_config_text_with_model_catalog`.
     Anthropic,
 }
 
@@ -339,8 +335,8 @@ impl CodexCatalogToolProfile {
     pub fn from_api_format(api_format: Option<&str>) -> Self {
         match api_format {
             Some("anthropic") => CodexCatalogToolProfile::Anthropic,
-            // Native (direct) Responses gateways reject Codex's freeform custom
-            // tools (apply_patch, etc.); strip them via the NativeResponses profile.
+            // Native Responses keeps the complete catalog; strict third-party
+            // tool contracts are normalized by the proxy bridge.
             Some("openai_responses") => CodexCatalogToolProfile::NativeResponses,
             _ => CodexCatalogToolProfile::ProxyChat,
         }
@@ -1215,18 +1211,23 @@ fn codex_catalog_model_entry(
     entry_obj.insert("availability_nux".to_string(), Value::Null);
     entry_obj.insert("upgrade".to_string(), Value::Null);
 
-    // `use_responses_lite` only works against the official OpenAI backend: on, Codex
-    // sends the `x-openai-internal-codex-responses-lite` header and moves
-    // tools/instructions into an `additional_tools` input item. OpenAI rejects the
-    // header for non-whitelisted models and third-party Responses gateways do not
-    // understand the item type, so force it off whatever the cloned template says.
+    // `use_responses_lite` is an OpenAI-backend private wire format: when on,
+    // Codex sends the `x-openai-internal-codex-responses-lite` header and moves
+    // tools/instructions into an `additional_tools` input item. OpenAI rejects
+    // the header for non-whitelisted models and third-party Responses gateways
+    // do not understand the item type, so force it off whatever the template
+    // says.
     entry_obj.insert("use_responses_lite".to_string(), json!(false));
-    // Same class of official-only protocol flags carried by cloned descriptors:
-    // `tool_mode` would switch the tool surface to code-mode (hiding direct tools)
-    // and `multi_agent_version` would pin the subagent protocol, both regardless of
-    // user config. Drop them so behavior falls back to the user's feature flags.
-    entry_obj.remove("tool_mode");
-    entry_obj.remove("multi_agent_version");
+    // Keep generated cc-switch catalog entries on the same compaction
+    // compatibility bucket. Codex triggers hash-change compaction when both
+    // previous/current models carry different `comp_hash` values; pinning this
+    // to DeepSeek/GPT-5.6's current bucket avoids avoidable compaction while
+    // switching among routed third-party models.
+    entry_obj.insert("comp_hash".to_string(), json!("3000"));
+    // Other client-compatibility fields (`tool_mode`, `multi_agent_version`,
+    // etc.) are template-owned. Generic third-party catalogs are built from
+    // `codex_third_party_template.json`, not from OpenAI's dynamic cache, so
+    // they should not be hard-coded here.
 
     // Image support is a model capability, not a tool-profile capability.
     // Trust hidden preset metadata first, then the confirmed text-only registry;
@@ -1241,26 +1242,11 @@ fn codex_catalog_model_entry(
     );
 
     if profile != CodexCatalogToolProfile::ProxyChat {
-        // Native `/responses` and Anthropic gateways reject / drop Codex's freeform
-        // `apply_patch` (type=="custom") tool. Strip any key that would make Codex
-        // emit a custom/freeform tool, and rely on shell_type="shell_command" for
-        // edits. Defensive even though the native template is already clean
-        // (guards against template drift / an accidental gpt-5.5 clone).
-        //
-        // NOTE: `base_instructions` is NOT stripped — Codex's catalog parser
-        // treats it as a REQUIRED field and refuses to load the file without
-        // it ("missing field `base_instructions`"). The template carries a
-        // neutral identity default; per-vendor official text overrides below.
-        for key in [
-            "apply_patch_tool_type",
-            "web_search_tool_type",
-            "tools",
-            "model_messages",
-        ] {
-            entry_obj.remove(key);
-        }
-        entry_obj.insert("shell_type".to_string(), json!("shell_command"));
-
+        // All three transport profiles keep the same complete model template.
+        // Their protocol differences are handled in the proxy converters:
+        // Chat and Anthropic already bridge custom tools, while native
+        // Responses now bridges apply_patch for strict third-party gateways.
+        // Only explicit per-model capability overrides are applied here.
         if let Some(base_instructions) = spec
             .base_instructions
             .as_deref()
@@ -1274,9 +1260,9 @@ fn codex_catalog_model_entry(
         }
     }
 
-    // Per-model reasoning levels override the template's conservative
-    // none/high default (e.g. a LiteLLM gateway serving a model that accepts
-    // low/medium/high/xhigh/max). Applies to every profile.
+    // Per-model reasoning levels replace the template's declared level list
+    // (e.g. a LiteLLM gateway serving a model that accepts a different set).
+    // Applies to every profile.
     let template_default = template
         .get("default_reasoning_level")
         .and_then(|value| value.as_str());
@@ -1295,24 +1281,24 @@ struct CodexCatalogModelSpec {
     /// `model_context_window` (or 128k) — except official vendor catalog
     /// entries, which keep the vendor's declared window.
     context_window: Option<u64>,
-    /// Per-row override for the native template's `supports_parallel_tool_calls`
-    /// (e.g. MiniMax=true, MiMo=false). Only consulted for `NativeResponses`.
+    /// Per-row override for the template's `supports_parallel_tool_calls`
+    /// (e.g. MiniMax=true, MiMo=false). Consulted for non-ProxyChat profiles.
     supports_parallel_tool_calls: Option<bool>,
     /// Hidden per-row capability declaration from built-in provider metadata.
     /// When omitted, all catalog profiles consult the shared text-only model
     /// registry and otherwise default to `["text", "image"]`.
     input_modalities: Option<Vec<String>>,
-    /// Per-row override for the native template's `base_instructions` (the
-    /// model identity / system preamble). Carries each vendor's OFFICIAL value
+    /// Per-row override for the template's `base_instructions` (the model
+    /// identity / system preamble). Carries each vendor's OFFICIAL value
     /// (e.g. MiMo "developed by Xiaomi", MiniMax "based on MiniMax-M3"); falls
-    /// back to the template default when absent. Only consulted for
-    /// `NativeResponses`.
+    /// back to the shared template default when absent. Consulted for
+    /// non-ProxyChat profiles.
     base_instructions: Option<String>,
     /// Per-row override for the generated catalog's `supported_reasoning_levels`
     /// (e.g. ["none", "low", "medium", "high", "xhigh", "max"]). When omitted
-    /// the template's conservative default (none/high) is kept. Consulted for
-    /// every profile; the vendor-catalog path applies it on top of the
-    /// official entry.
+    /// the shared template's declared list is kept. Consulted for every
+    /// profile; the vendor-catalog path applies it on top of the official
+    /// entry.
     reasoning_levels: Option<Vec<String>>,
     /// Per-row override for the generated catalog's `default_reasoning_level`.
     /// Only meaningful together with `reasoning_levels`; when absent the
@@ -1422,21 +1408,27 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     specs
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct CodexModelCatalogTemplates {
-    default_template: Value,
+    /// cc-switch-owned stable template for third-party aliases. This prevents
+    /// newly-added official/product fields from leaking into generated
+    /// third-party catalog rows merely because Codex updated models_cache.json.
+    third_party_template: Value,
     by_slug: HashMap<String, Value>,
 }
 
+#[cfg(test)]
 impl CodexModelCatalogTemplates {
     fn template_for_model(&self, model: &str) -> Value {
         self.by_slug
             .get(model)
             .cloned()
-            .unwrap_or_else(|| self.default_template.clone())
+            .unwrap_or_else(|| self.third_party_template.clone())
     }
 }
 
+#[cfg(test)]
 fn codex_model_catalog_templates_from_catalog(
     catalog: &Value,
 ) -> Option<CodexModelCatalogTemplates> {
@@ -1458,17 +1450,21 @@ fn codex_model_catalog_templates_from_catalog(
         by_slug.insert(slug.to_string(), template);
     }
 
-    let default_template = by_slug
-        .get(CODEX_MODEL_CATALOG_DEFAULT_TEMPLATE_SLUG)
-        .or_else(|| by_slug.get(CODEX_MODEL_CATALOG_TEMPLATE_SLUG))
-        .cloned()?;
+    let has_default_template = by_slug.contains_key(CODEX_MODEL_CATALOG_DEFAULT_TEMPLATE_SLUG)
+        || by_slug.contains_key(CODEX_MODEL_CATALOG_TEMPLATE_SLUG);
+    if !has_default_template {
+        return None;
+    }
+
+    let third_party_template = load_codex_third_party_template_static()?;
 
     Some(CodexModelCatalogTemplates {
-        default_template,
+        third_party_template,
         by_slug,
     })
 }
 
+#[cfg(test)]
 fn load_codex_model_templates_from_cache() -> Result<Option<CodexModelCatalogTemplates>, AppError> {
     let path = get_codex_config_dir().join("models_cache.json");
     if !path.exists() {
@@ -1482,6 +1478,7 @@ fn load_codex_model_templates_from_cache() -> Result<Option<CodexModelCatalogTem
 
 /// Fixed candidates for locating the `codex` CLI when it is not on the process
 /// PATH (common in GUI apps launched outside a terminal).
+#[cfg(test)]
 const CODEX_CLI_FIXED_CANDIDATES: &[&str] = &[
     "codex",                                // PATH (all platforms)
     "/opt/homebrew/bin/codex",              // macOS Apple Silicon Homebrew
@@ -1489,6 +1486,7 @@ const CODEX_CLI_FIXED_CANDIDATES: &[&str] = &[
     "/home/linuxbrew/.linuxbrew/bin/codex", // Linux Homebrew
 ];
 
+#[cfg(test)]
 fn push_codex_cli_candidate(
     candidates: &mut Vec<PathBuf>,
     seen: &mut HashSet<String>,
@@ -1500,6 +1498,7 @@ fn push_codex_cli_candidate(
     }
 }
 
+#[cfg(test)]
 fn push_existing_codex_cli_candidate(
     candidates: &mut Vec<PathBuf>,
     seen: &mut HashSet<String>,
@@ -1510,6 +1509,7 @@ fn push_existing_codex_cli_candidate(
     }
 }
 
+#[cfg(test)]
 fn push_codex_cli_candidates_from_version_dirs(
     candidates: &mut Vec<PathBuf>,
     seen: &mut HashSet<String>,
@@ -1539,6 +1539,7 @@ fn push_codex_cli_candidates_from_version_dirs(
     }
 }
 
+#[cfg(test)]
 fn push_home_codex_cli_candidates(
     candidates: &mut Vec<PathBuf>,
     seen: &mut HashSet<String>,
@@ -1579,6 +1580,7 @@ fn push_home_codex_cli_candidates(
     );
 }
 
+#[cfg(test)]
 fn push_env_codex_cli_candidates(candidates: &mut Vec<PathBuf>, seen: &mut HashSet<String>) {
     for (env_key, suffix) in [
         ("NPM_CONFIG_PREFIX", &["bin", "codex"][..]),
@@ -1626,6 +1628,7 @@ fn push_env_codex_cli_candidates(candidates: &mut Vec<PathBuf>, seen: &mut HashS
     }
 }
 
+#[cfg(test)]
 fn codex_cli_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
@@ -1640,6 +1643,7 @@ fn codex_cli_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+#[cfg(test)]
 fn codex_bundled_models_command(candidate: &Path) -> Command {
     let mut command = Command::new(candidate);
     command
@@ -1658,6 +1662,7 @@ fn codex_bundled_models_command(candidate: &Path) -> Command {
     command
 }
 
+#[cfg(test)]
 fn load_codex_model_templates_from_bundled() -> Result<Option<CodexModelCatalogTemplates>, AppError>
 {
     for candidate in codex_cli_candidates() {
@@ -1693,22 +1698,24 @@ fn load_codex_model_templates_from_bundled() -> Result<Option<CodexModelCatalogT
     Ok(None)
 }
 
+#[cfg(test)]
 fn load_codex_model_templates_static() -> Option<CodexModelCatalogTemplates> {
-    let template = load_codex_model_template_static()?;
+    let template_55 = load_codex_model_template_static()?;
+    let mut third_party_template = load_codex_third_party_template_static()?;
+    fill_parser_required_fields_from_static(&mut third_party_template);
     let mut by_slug = HashMap::new();
-    by_slug.insert(
-        CODEX_MODEL_CATALOG_TEMPLATE_SLUG.to_string(),
-        template.clone(),
-    );
+    by_slug.insert(CODEX_MODEL_CATALOG_TEMPLATE_SLUG.to_string(), template_55);
     Some(CodexModelCatalogTemplates {
-        default_template: template,
+        third_party_template,
         by_slug,
     })
 }
 
+/// Bundled GPT-5.5 compatibility template used only to backfill parser-required
+/// fields that a newer Codex cache/CLI template may omit.
 fn load_codex_model_template_static() -> Option<Value> {
     let text = include_str!("resources/gpt5_5_template.json");
-    match serde_json::from_str(text) {
+    match serde_json::from_str::<Value>(text) {
         Ok(template) => Some(template),
         Err(e) => {
             log::warn!("Failed to parse bundled gpt-5.5 template: {e}");
@@ -1717,16 +1724,27 @@ fn load_codex_model_template_static() -> Option<Value> {
     }
 }
 
-/// Bundled clean template for native `/responses` providers. Unlike the
-/// gpt-5.5 template it carries NO freeform `apply_patch` / `web_search` tool
-/// declarations and no GPT-5 base_instructions, so Codex never emits a
-/// `type=="custom"` tool that native gateways (MiMo/MiniMax/…) reject. Edits
-/// flow through `shell_type="shell_command"` instead. We deliberately do NOT
-/// fall back to `models_cache.json` here (that would reintroduce gpt-5.5's
-/// freeform apply_patch).
-fn load_codex_native_responses_template() -> Value {
-    let text = include_str!("resources/codex_native_responses_template.json");
-    serde_json::from_str(text).expect("bundled codex native responses template must be valid JSON")
+/// cc-switch-owned fixed template for third-party aliases. It carries the
+/// 5.6 prompt/tool harness and DeepSeek-style client compatibility fields,
+/// while omitting OpenAI plan/service-tier and auto-review product metadata.
+fn load_codex_third_party_template_static() -> Option<Value> {
+    let text = include_str!("resources/codex_third_party_template.json");
+    match serde_json::from_str::<Value>(text) {
+        Ok(template) => {
+            if template.get("slug").and_then(Value::as_str)
+                != Some(CODEX_THIRD_PARTY_CATALOG_TEMPLATE_SLUG)
+            {
+                log::warn!(
+                    "Bundled third-party Codex template slug is not `{CODEX_THIRD_PARTY_CATALOG_TEMPLATE_SLUG}`"
+                );
+            }
+            Some(template)
+        }
+        Err(e) => {
+            log::warn!("Failed to parse bundled third-party Codex template: {e}");
+            None
+        }
+    }
 }
 
 /// Hosts whose native `/responses` gateway publishes an OFFICIAL Codex model
@@ -1735,9 +1753,9 @@ fn load_codex_native_responses_template() -> Value {
 /// `CODEX_WEB_SEARCH_REJECT_MODEL_PREFIXES`: the official entries GRANT
 /// capabilities (freeform `apply_patch`, vendor harness), and an aggregator
 /// merely hosting the same model may not honor them. The safe failure
-/// direction for aggregators is the neutral template (degraded but working);
-/// wrongly granting freeform apply_patch would reintroduce the custom-tool
-/// rejection bug.
+/// direction for aggregators is the shared template plus the native
+/// custom-to-function proxy bridge; vendor-specific capability claims still
+/// require a host match.
 const CODEX_DEEPSEEK_OFFICIAL_CATALOG_HOSTS: &[&str] = &["deepseek.com"];
 
 /// Bundled copy of DeepSeek's official Codex models.json — the exact file
@@ -1758,10 +1776,10 @@ fn load_codex_deepseek_official_catalog_models() -> Vec<Value> {
 
 /// Official vendor catalog entries for the provider in `config_text`, if its
 /// gateway ships one. Only the `NativeResponses` profile qualifies: ProxyChat
-/// runs through cc-switch's converter (gpt-5.5 template contract) and the
-/// Anthropic transform drops custom tools, so both must keep their existing
-/// templates. Host-driven like the web_search blacklist, so existing providers
-/// pick it up on their next switch without a re-save.
+/// and Anthropic traffic runs through cc-switch's proxy converters, which own
+/// the tool-contract normalization there. Host-driven like the web_search
+/// blacklist, so existing providers pick it up on their next switch without a
+/// re-save.
 fn codex_official_vendor_catalog_models(
     config_text: &str,
     profile: CodexCatalogToolProfile,
@@ -1851,8 +1869,9 @@ fn codex_vendor_catalog_model_entry(
     apply_codex_reasoning_level_override(entry_obj, vendor_default.as_deref(), spec);
 
     // Defensive: if a future codex parser requires a field the vendor file
-    // predates, backfill only whitelisted parser-required keys.
-    fill_template_fields_from_static(&mut entry);
+    // predates, backfill only whitelisted parser-required keys. Do not merge
+    // generic reasoning levels into an official vendor capability table.
+    fill_parser_required_fields_from_static(&mut entry);
     entry
 }
 
@@ -1874,6 +1893,7 @@ const CODEX_CATALOG_PARSER_REQUIRED_FIELDS: &[&str] = &["supports_reasoning_summ
 /// layer in cc-switch-owned static additions:
 /// - parser-required fields that are missing, and
 /// - reasoning levels added by cc-switch's bundled template.
+#[cfg(test)]
 fn fill_template_fields_from_static(template: &mut Value) {
     let Some(static_template) = load_codex_model_template_static() else {
         return;
@@ -1883,6 +1903,26 @@ fn fill_template_fields_from_static(template: &mut Value) {
     else {
         return;
     };
+    fill_parser_required_fields(template_obj, static_obj);
+    merge_supported_reasoning_levels_from_static(template_obj, static_obj);
+}
+
+fn fill_parser_required_fields_from_static(template: &mut Value) {
+    let Some(static_template) = load_codex_model_template_static() else {
+        return;
+    };
+    let (Some(template_obj), Some(static_obj)) =
+        (template.as_object_mut(), static_template.as_object())
+    else {
+        return;
+    };
+    fill_parser_required_fields(template_obj, static_obj);
+}
+
+fn fill_parser_required_fields(
+    template_obj: &mut serde_json::Map<String, Value>,
+    static_obj: &serde_json::Map<String, Value>,
+) {
     for key in CODEX_CATALOG_PARSER_REQUIRED_FIELDS {
         if !template_obj.contains_key(*key) {
             if let Some(value) = static_obj.get(*key) {
@@ -1890,10 +1930,9 @@ fn fill_template_fields_from_static(template: &mut Value) {
             }
         }
     }
-
-    merge_supported_reasoning_levels_from_static(template_obj, static_obj);
 }
 
+#[cfg(test)]
 fn merge_supported_reasoning_levels_from_static(
     template_obj: &mut serde_json::Map<String, Value>,
     static_obj: &serde_json::Map<String, Value>,
@@ -1938,6 +1977,7 @@ fn merge_supported_reasoning_levels_from_static(
     }
 }
 
+#[cfg(test)]
 fn load_codex_model_catalog_template_uncached() -> Result<CodexModelCatalogTemplates, AppError> {
     // ① models_cache.json (created by Codex when it connects to OpenAI)
     if let Some(templates) = load_codex_model_templates_from_cache()? {
@@ -1957,6 +1997,7 @@ fn load_codex_model_catalog_template_uncached() -> Result<CodexModelCatalogTempl
     )))
 }
 
+#[cfg(test)]
 fn get_or_load_codex_model_catalog_template<T, F>(
     cache: &OnceCell<T>,
     loader: F,
@@ -1966,14 +2007,6 @@ where
     F: FnOnce() -> Result<T, AppError>,
 {
     cache.get_or_try_init(loader).cloned()
-}
-
-#[cfg(not(test))]
-fn load_codex_model_catalog_template() -> Result<CodexModelCatalogTemplates, AppError> {
-    get_or_load_codex_model_catalog_template(
-        &CODEX_MODEL_CATALOG_TEMPLATE_CACHE,
-        load_codex_model_catalog_template_uncached,
-    )
 }
 
 #[cfg(test)]
@@ -1998,6 +2031,7 @@ fn codex_model_catalog_from_specs(
     json!({ "models": entries })
 }
 
+#[cfg(test)]
 fn codex_model_catalog_from_specs_with_templates(
     specs: &[CodexCatalogModelSpec],
     templates: &CodexModelCatalogTemplates,
@@ -2016,6 +2050,14 @@ fn codex_model_catalog_from_specs_with_templates(
     json!({ "models": entries })
 }
 
+fn load_codex_third_party_template_for_catalog() -> Result<Value, AppError> {
+    let mut template = load_codex_third_party_template_static().ok_or_else(|| {
+        AppError::Message("Bundled third-party Codex model catalog template is invalid".to_string())
+    })?;
+    fill_parser_required_fields_from_static(&mut template);
+    Ok(template)
+}
+
 fn codex_model_catalog_from_settings(
     settings: &Value,
     config_text: &str,
@@ -2027,10 +2069,9 @@ fn codex_model_catalog_from_settings(
     }
 
     // Vendors that publish an OFFICIAL Codex models.json for their native
-    // `/responses` gateway get it mirrored verbatim instead of the neutral
-    // template: its freeform apply_patch, vendor harness base_instructions and
-    // reasoning levels are load-bearing (the harness tells the model to use
-    // apply_patch, so catalog and harness must stay consistent).
+    // `/responses` gateway get it mirrored verbatim instead of the shared 5.6
+    // template: the vendor harness and capability declarations stay
+    // authoritative for that endpoint.
     if let Some(vendor_models) = codex_official_vendor_catalog_models(config_text, profile) {
         let entries: Vec<Value> = specs
             .iter()
@@ -2043,30 +2084,16 @@ fn codex_model_catalog_from_settings(
     let default_context_window =
         extract_codex_top_level_u64(config_text, "model_context_window").unwrap_or(128_000);
 
-    // Native providers use the bundled clean template (no freeform apply_patch,
-    // no cache dependency). ProxyChat keeps Codex's tool-capable model template,
-    // using an exact official template when present and the current conservative
-    // default for third-party aliases.
-    match profile {
-        CodexCatalogToolProfile::NativeResponses | CodexCatalogToolProfile::Anthropic => {
-            let template = load_codex_native_responses_template();
-            Ok(Some(codex_model_catalog_from_specs(
-                &specs,
-                &template,
-                profile,
-                default_context_window,
-            )))
-        }
-        CodexCatalogToolProfile::ProxyChat => {
-            let templates = load_codex_model_catalog_template()?;
-            Ok(Some(codex_model_catalog_from_specs_with_templates(
-                &specs,
-                &templates,
-                profile,
-                default_context_window,
-            )))
-        }
-    }
+    // 三条链路的 generic third-party catalog 统一从 cc-switch-owned 模板
+    // clone，不再读取 models_cache / 本地 Codex CLI 的官方动态模板。厂商
+    // 官方 catalog（目前 DeepSeek）已经在上面的分支提前返回。
+    let template = load_codex_third_party_template_for_catalog()?;
+    Ok(Some(codex_model_catalog_from_specs(
+        &specs,
+        &template,
+        profile,
+        default_context_window,
+    )))
 }
 
 fn set_codex_model_catalog_json_field(
@@ -4667,7 +4694,7 @@ base_url = "https://production.api/v1"
     }
 
     #[test]
-    fn proxy_chat_catalog_uses_exact_template_and_56_default() {
+    fn proxy_chat_catalog_uses_exact_template_and_third_party_template_for_aliases() {
         let gpt55_template = json!({
             "slug": "gpt-5.5",
             "base_instructions": "gpt-5.5 base instructions",
@@ -4691,12 +4718,32 @@ base_url = "https://production.api/v1"
             "apply_patch_tool_type": "freeform",
             "use_responses_lite": true,
             "tool_mode": "code_mode_only",
-            "multi_agent_version": "v2"
+            "multi_agent_version": "v2",
+            "comp_hash": "3000",
+            "model_specialty": "cyber",
+            "node_repl_auto_review_required": true,
+            "node_repl_disabled": true,
+            "auto_review_model_override": "reviewer",
+            "multi_agent_reasoning_effort": "high",
+            "prefer_websockets": true,
+            "minimal_client_version": "0.144.0",
+            "available_in_plans": ["plus"],
+            "default_service_tier": "priority"
         });
-        let templates = codex_model_catalog_templates_from_catalog(&json!({
+        let mut templates = codex_model_catalog_templates_from_catalog(&json!({
             "models": [gpt55_template, gpt56_template]
         }))
         .expect("catalog with gpt-5.6-sol must yield templates");
+        let third_party_template = load_codex_third_party_template_static()
+            .expect("third-party template must parse as valid JSON");
+        let third_party_instructions = third_party_template["model_messages"]
+            ["instructions_template"]
+            .as_str()
+            .expect("third-party template must carry model_messages instructions");
+        // Prove the generator pins comp_hash rather than merely inheriting the
+        // current template value: this avoids model-switch hash-change
+        // compaction if the template drifts.
+        templates.third_party_template["comp_hash"] = json!("9999");
         let specs = vec![
             CodexCatalogModelSpec {
                 model: "gpt-5.6-sol".to_string(),
@@ -4747,9 +4794,38 @@ base_url = "https://production.api/v1"
 
         assert!(instructions("gpt-5.6-sol").contains("Diagnose: determine the cause"));
         assert!(!instructions("gpt-5.6-sol").contains("Unless the user explicitly asks"));
-        assert!(instructions("kimi-k3/dashscope-chat").contains("Diagnose: determine the cause"));
+        assert_eq!(
+            instructions("kimi-k3/dashscope-chat"),
+            third_party_instructions,
+            "third-party aliases must use the fixed cc-switch template, not the official dynamic default"
+        );
+        assert_ne!(
+            instructions("kimi-k3/dashscope-chat"),
+            instructions("gpt-5.6-sol"),
+            "third-party aliases must not inherit a matching official default template"
+        );
         assert!(!instructions("kimi-k3/dashscope-chat").contains("Unless the user explicitly asks"));
         assert!(instructions("gpt-5.5").contains("Unless the user explicitly asks"));
+        assert_eq!(
+            models[1].get("base_instructions"),
+            third_party_template.get("base_instructions"),
+            "third-party aliases must clone the fixed cc-switch base instructions"
+        );
+        assert_eq!(
+            models[1].get("supported_reasoning_levels"),
+            third_party_template.get("supported_reasoning_levels"),
+            "third-party aliases must clone the fixed cc-switch reasoning surface"
+        );
+        let third_party_efforts: Vec<&str> = models[1]["supported_reasoning_levels"]
+            .as_array()
+            .expect("third-party supported_reasoning_levels array")
+            .iter()
+            .filter_map(|level| level.get("effort").and_then(Value::as_str))
+            .collect();
+        assert!(
+            !third_party_efforts.contains(&"ultra"),
+            "third-party template must not advertise OpenAI-only ultra reasoning"
+        );
         assert_eq!(
             models[1]
                 .get("apply_patch_tool_type")
@@ -4757,6 +4833,65 @@ base_url = "https://production.api/v1"
             Some("freeform"),
             "third-party ProxyChat entries must keep the tool-capable template"
         );
+        // Generated catalog entries pin comp_hash to avoid hash-change
+        // compaction when switching among routed third-party models. Generic
+        // third-party aliases inherit the rest of cc-switch's template-owned
+        // DeepSeek-style markers, not OpenAI's dynamic product fields.
+        assert_eq!(
+            models[0].get("comp_hash").and_then(|value| value.as_str()),
+            Some("3000"),
+            "generated entries pin comp_hash"
+        );
+        assert_eq!(
+            models[1].get("comp_hash").and_then(|value| value.as_str()),
+            Some("3000"),
+            "third-party entry must pin comp_hash"
+        );
+        assert!(
+            models[1].get("tool_mode").is_some_and(Value::is_null),
+            "third-party entry must inherit explicit null tool_mode from the template"
+        );
+        assert_eq!(
+            models[1]
+                .get("multi_agent_version")
+                .and_then(|value| value.as_str()),
+            third_party_template
+                .get("multi_agent_version")
+                .and_then(|value| value.as_str()),
+            "third-party entry must inherit the template multi-agent version"
+        );
+        assert_eq!(
+            models[1]
+                .get("minimal_client_version")
+                .and_then(|value| value.as_str()),
+            third_party_template
+                .get("minimal_client_version")
+                .and_then(|value| value.as_str()),
+            "third-party entry must inherit the template minimal client version"
+        );
+        assert_eq!(
+            models[1]
+                .get("prefer_websockets")
+                .and_then(|value| value.as_bool()),
+            third_party_template
+                .get("prefer_websockets")
+                .and_then(|value| value.as_bool()),
+            "third-party entry must inherit the template websocket preference"
+        );
+        for key in [
+            "model_specialty",
+            "node_repl_auto_review_required",
+            "node_repl_disabled",
+            "auto_review_model_override",
+            "multi_agent_reasoning_effort",
+            "available_in_plans",
+            "default_service_tier",
+        ] {
+            assert!(
+                models[1].get(key).is_none(),
+                "cloned third-party entry must not inherit {key}"
+            );
+        }
         // The official 5.6 entry ships `use_responses_lite: true`; generated entries
         // must force it off — non-official upstreams reject lite requests (header 400
         // or unknown `additional_tools` input item).
@@ -4768,18 +4903,14 @@ base_url = "https://production.api/v1"
                 Some(false),
                 "every generated entry must disable responses lite"
             );
-            assert!(
-                entry.get("tool_mode").is_none() && entry.get("multi_agent_version").is_none(),
-                "official-only tool-surface flags must not leak into generated entries"
-            );
         }
     }
 
     #[test]
     fn native_responses_catalog_honors_per_model_reasoning_levels() {
-        // The native template only declares none/high. A per-model
-        // reasoningLevels override must replace supported_reasoning_levels and
-        // pick a sensible default_reasoning_level.
+        // A per-model reasoningLevels override must replace the shared
+        // template's supported_reasoning_levels and pick a sensible
+        // default_reasoning_level.
         let settings = json!({
             "modelCatalog": {
                 "models": [
@@ -4828,6 +4959,23 @@ base_url = "https://production.api/v1"
                 .collect()
         };
 
+        // Third-party aliases use the fixed cc-switch template, not the
+        // official default from models_cache / CLI.
+        let template_default = load_codex_model_catalog_template()
+            .expect("template loads")
+            .third_party_template
+            .get("default_reasoning_level")
+            .and_then(Value::as_str)
+            .expect("template declares a default reasoning level")
+            .to_string();
+        let expected_default = |levels: &[&str], highest: &str| -> String {
+            if levels.contains(&template_default.as_str()) {
+                template_default.clone()
+            } else {
+                highest.to_string()
+            }
+        };
+
         // Explicit default wins.
         assert_eq!(
             efforts(0),
@@ -4840,44 +4988,45 @@ base_url = "https://production.api/v1"
             Some("xhigh")
         );
 
-        // No explicit default: falls back to the last (highest) declared level.
+        // No explicit default: the template default is kept when supported,
+        // otherwise the highest declared level wins.
         assert_eq!(efforts(1), vec!["low", "medium", "high"]);
         assert_eq!(
             models[1]
                 .get("default_reasoning_level")
                 .and_then(|v| v.as_str()),
-            Some("high")
+            Some(expected_default(&["low", "medium", "high"], "high").as_str())
         );
 
-        // Template default ("high") is kept when it is still in the list.
+        // Same rule on a list that skips low/medium.
         assert_eq!(efforts(2), vec!["none", "high", "xhigh"]);
         assert_eq!(
             models[2]
                 .get("default_reasoning_level")
                 .and_then(|v| v.as_str()),
-            Some("high")
+            Some(expected_default(&["none", "high", "xhigh"], "xhigh").as_str())
         );
 
         // Unknown / empty efforts are dropped; the default still resolves to
-        // a supported level (the template default, "high").
+        // a supported level.
         assert_eq!(efforts(3), vec!["none", "high"]);
         assert_eq!(
             models[3]
                 .get("default_reasoning_level")
                 .and_then(|v| v.as_str()),
-            Some("high")
+            Some(expected_default(&["none", "high"], "high").as_str())
         );
 
         // Declaration order is normalized to canonical order, duplicates and
-        // an unknown explicit default are dropped, and the fallback picks the
-        // highest supported level in canonical order (not the last declared
-        // one, and never an unknown effort).
+        // an unknown explicit default are dropped, and the default resolves to
+        // the template default when supported, otherwise the highest supported
+        // level in canonical order (never an unknown effort).
         assert_eq!(efforts(4), vec!["low", "xhigh"]);
         assert_eq!(
             models[4]
                 .get("default_reasoning_level")
                 .and_then(|v| v.as_str()),
-            Some("xhigh")
+            Some(expected_default(&["low", "xhigh"], "xhigh").as_str())
         );
     }
 
@@ -4925,11 +5074,10 @@ base_url = "https://production.api/v1"
     }
 
     #[test]
-    fn native_responses_profile_suppresses_apply_patch_and_keeps_shell() {
-        // Native (direct) /responses providers must NOT emit a freeform
-        // apply_patch (type=="custom") tool — gateways like MiMo reject it.
-        // The native profile uses the bundled clean template and relies on
-        // shell_type="shell_command" for edits, plus per-row overrides.
+    fn native_responses_profile_keeps_complete_template_for_proxy_bridge() {
+        // Native providers now keep the same freeform apply_patch grant and
+        // model_messages as the other profiles. Strict gateways receive the
+        // standard-function bridge in the proxy request/response path.
         let settings = json!({
             "modelCatalog": {
                 "models": [
@@ -4961,11 +5109,12 @@ base_url = "https://production.api/v1"
         assert_eq!(
             entry.get("shell_type").and_then(|v| v.as_str()),
             Some("shell_command"),
-            "native entries edit via shell, not the custom apply_patch tool"
+            "the complete template keeps shell_command alongside apply_patch"
         );
-        assert!(
-            entry.get("apply_patch_tool_type").is_none(),
-            "native entries must NOT declare a freeform apply_patch tool"
+        assert_eq!(
+            entry.get("apply_patch_tool_type").and_then(|v| v.as_str()),
+            Some("freeform"),
+            "native entries expose apply_patch; the proxy bridges strict gateways"
         );
         // `base_instructions` is REQUIRED by Codex's catalog parser, so it must
         // be present — and the per-row official override must win over the
@@ -4976,8 +5125,8 @@ base_url = "https://production.api/v1"
             "per-row baseInstructions override must apply (and field must exist)"
         );
         assert!(
-            entry.get("model_messages").is_none(),
-            "native entries must not carry the gpt-5.5 model_messages persona text"
+            entry.get("model_messages").is_some(),
+            "native entries keep the complete shared model_messages prompt"
         );
         assert_eq!(
             entry.get("supports_parallel_tool_calls"),
@@ -4992,6 +5141,60 @@ base_url = "https://production.api/v1"
         assert_eq!(
             entry.get("context_window").and_then(|v| v.as_u64()),
             Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn anthropic_profile_keeps_freeform_apply_patch() {
+        // The Responses→Anthropic bridge already round-trips Codex's freeform
+        // apply_patch (type=="custom") tool — request-side it becomes a
+        // single-string-parameter Anthropic tool, response-side the tool_use
+        // input is unwrapped back to raw patch text — so the Anthropic profile
+        // must keep the grant instead of degrading edits to shell_command-only
+        // like the native Responses profile does.
+        let settings = json!({
+            "modelCatalog": { "models": [{ "model": "kimi-k3" }] }
+        });
+
+        let catalog =
+            codex_model_catalog_from_settings(&settings, "", CodexCatalogToolProfile::Anthropic)
+                .expect("anthropic catalog generation should not error")
+                .expect("non-empty modelCatalog must yield a catalog");
+
+        let entry = &catalog["models"][0];
+        assert_eq!(
+            entry.get("apply_patch_tool_type").and_then(|v| v.as_str()),
+            Some("freeform"),
+            "Anthropic entries keep the freeform apply_patch grant (bridge converts custom tools)"
+        );
+        // Anthropic aliases use the same fixed third-party template as the
+        // other generic third-party paths, avoiding the old independent native
+        // template's reasoning-level clamp.
+        let template_efforts: Vec<String> = load_codex_model_catalog_template()
+            .expect("template loads")
+            .template_for_model("kimi-k3")
+            .get("supported_reasoning_levels")
+            .and_then(Value::as_array)
+            .expect("template supported_reasoning_levels array")
+            .iter()
+            .filter_map(|level| level.get("effort").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        let efforts: Vec<&str> = entry["supported_reasoning_levels"]
+            .as_array()
+            .expect("supported_reasoning_levels array")
+            .iter()
+            .filter_map(|level| level.get("effort").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(efforts, template_efforts);
+        assert_eq!(
+            entry.get("shell_type").and_then(|v| v.as_str()),
+            Some("shell_command"),
+            "shell_command stays as the non-patch edit path"
+        );
+        assert!(
+            entry.get("model_messages").is_some(),
+            "Anthropic entries keep the complete shared model_messages prompt"
         );
     }
 
@@ -5089,7 +5292,7 @@ base_url = "https://production.api/v1"
         // Regression guard for the "missing field `base_instructions`" parse
         // error: Codex refuses to load a model catalog whose entries lack
         // base_instructions. Synthesized presets carry no per-row override, so
-        // the entry MUST inherit the template's neutral default rather than
+        // the entry MUST inherit the shared template's default rather than
         // dropping the field entirely.
         let settings = json!({
             "modelCatalog": { "models": [{ "model": "qwen3-coder-plus" }] }
@@ -5126,9 +5329,8 @@ wire_api = "responses"
         // DeepSeek publishes an official Codex models.json (freeform
         // apply_patch + GPT-5 harness + low/high/max reasoning levels). For a
         // deepseek.com native provider the generated catalog must mirror it
-        // verbatim instead of the stripped neutral template — the harness
-        // tells the model to use apply_patch, so stripping the tool while
-        // keeping the harness would be self-inconsistent.
+        // verbatim instead of cloning the shared 5.6 template — the vendor's
+        // own harness and capability declarations stay authoritative.
         let settings = json!({
             "modelCatalog": {
                 "models": [
@@ -5303,7 +5505,7 @@ wire_api = "responses"
                 CodexCatalogToolProfile::NativeResponses
             )
             .is_none(),
-            "non-DeepSeek native hosts keep the neutral template"
+            "non-DeepSeek native hosts keep the shared template"
         );
         assert!(
             codex_official_vendor_catalog_models("", CodexCatalogToolProfile::NativeResponses)
@@ -5313,9 +5515,10 @@ wire_api = "responses"
 
     #[test]
     fn proxy_chat_profile_still_keeps_apply_patch() {
-        // Regression guard for Mode A: the proxy-chat profile must keep the
-        // freeform apply_patch tool (the proxy rewrites custom<->function).
-        let template = load_codex_native_responses_template();
+        // Regression guard: every generated profile keeps the freeform
+        // apply_patch grant; each proxy path owns its protocol conversion.
+        // The bundled gpt-5.5 fallback carries the same grant.
+        let template = load_codex_model_template_static().expect("bundled gpt-5.5 template parses");
         let specs = vec![CodexCatalogModelSpec {
             model: "x".to_string(),
             display_name: Some("x".to_string()),
@@ -5326,14 +5529,9 @@ wire_api = "responses"
             reasoning_levels: None,
             default_reasoning_level: None,
         }];
-        // Using a gpt-5.5-shaped template under ProxyChat must NOT strip
-        // apply_patch_tool_type. (The native template lacks it, so synthesize
-        // one with the field present to prove ProxyChat leaves it intact.)
-        let mut proxy_template = template.clone();
-        proxy_template["apply_patch_tool_type"] = json!("freeform");
         let catalog = codex_model_catalog_from_specs(
             &specs,
-            &proxy_template,
+            &template,
             CodexCatalogToolProfile::ProxyChat,
             128_000,
         );
@@ -5342,7 +5540,7 @@ wire_api = "responses"
                 .get("apply_patch_tool_type")
                 .and_then(|v| v.as_str()),
             Some("freeform"),
-            "ProxyChat must preserve apply_patch_tool_type (no native stripping)"
+            "ProxyChat must preserve apply_patch_tool_type"
         );
     }
 
@@ -5809,28 +6007,110 @@ web_search = "disabled"
 
     #[test]
     fn static_template_is_valid_json_with_slug() {
-        let template =
+        let compatibility_template =
             load_codex_model_template_static().expect("static template must parse as valid JSON");
         assert_eq!(
-            template.get("slug").and_then(|v| v.as_str()),
+            compatibility_template.get("slug").and_then(|v| v.as_str()),
             Some("gpt-5.5"),
-            "static template slug must be gpt-5.5"
+            "compatibility template slug must be gpt-5.5"
+        );
+
+        let third_party_template = load_codex_third_party_template_static()
+            .expect("static third-party template must parse as valid JSON");
+        assert_eq!(
+            third_party_template.get("slug").and_then(|v| v.as_str()),
+            Some(CODEX_THIRD_PARTY_CATALOG_TEMPLATE_SLUG),
+            "third-party fallback must use the cc-switch-owned template"
+        );
+
+        let templates = load_codex_model_templates_static().expect("static template set must load");
+        assert_eq!(
+            templates
+                .template_for_model(CODEX_MODEL_CATALOG_TEMPLATE_SLUG)
+                .get("slug")
+                .and_then(Value::as_str),
+            Some("gpt-5.5"),
+            "exact gpt-5.5 must resolve to the bundled compatibility template"
+        );
+        assert_eq!(
+            templates
+                .third_party_template
+                .get("slug")
+                .and_then(Value::as_str),
+            Some(CODEX_THIRD_PARTY_CATALOG_TEMPLATE_SLUG),
+            "unknown aliases must fall back to the fixed third-party template"
         );
     }
 
     #[test]
     fn static_template_has_required_keys() {
-        let template =
-            load_codex_model_template_static().expect("static template must parse as valid JSON");
-        for key in &[
-            "model_messages",
-            "base_instructions",
-            "context_window",
-            "display_name",
+        let templates = load_codex_model_templates_static().expect("static template set must load");
+        let compatibility_template =
+            load_codex_model_template_static().expect("static gpt-5.5 template must load");
+        for template in [&compatibility_template, &templates.third_party_template] {
+            for key in &[
+                "model_messages",
+                "base_instructions",
+                "context_window",
+                "display_name",
+            ] {
+                assert!(
+                    template.get(key).is_some(),
+                    "static template must contain key '{key}'"
+                );
+            }
+        }
+        assert_eq!(
+            templates
+                .third_party_template
+                .get("comp_hash")
+                .and_then(Value::as_str),
+            Some("3000"),
+            "third-party template must follow DeepSeek's comp_hash"
+        );
+        assert!(
+            templates
+                .third_party_template
+                .get("tool_mode")
+                .is_some_and(Value::is_null),
+            "third-party template must follow DeepSeek's explicit null tool_mode"
+        );
+        assert_eq!(
+            templates
+                .third_party_template
+                .get("multi_agent_version")
+                .and_then(Value::as_str),
+            Some("v2"),
+            "third-party template must follow DeepSeek's multi-agent version"
+        );
+        assert_eq!(
+            templates
+                .third_party_template
+                .get("minimal_client_version")
+                .and_then(Value::as_str),
+            Some("0.144.0"),
+            "third-party template must follow DeepSeek's minimal client version"
+        );
+        assert_eq!(
+            templates
+                .third_party_template
+                .get("prefer_websockets")
+                .and_then(Value::as_bool),
+            Some(false),
+            "third-party template must follow DeepSeek's websocket preference"
+        );
+        for key in [
+            "model_specialty",
+            "node_repl_auto_review_required",
+            "node_repl_disabled",
+            "auto_review_model_override",
+            "multi_agent_reasoning_effort",
+            "available_in_plans",
+            "default_service_tier",
         ] {
             assert!(
-                template.get(key).is_some(),
-                "static template must contain key '{key}'"
+                templates.third_party_template.get(key).is_none(),
+                "third-party template must not carry OpenAI product field {key}"
             );
         }
     }
