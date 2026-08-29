@@ -3454,8 +3454,8 @@ impl ProxyService {
         &self,
     ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
         use crate::services::codex_aggregation::{
-            aggregate_provider_stats, codex_aggregation_source_providers,
-            CodexAggregationStatus, CODEX_AGGREGATE_PROVIDER_ID,
+            aggregate_provider_stats, codex_aggregation_source_providers, CodexAggregationStatus,
+            CODEX_AGGREGATE_PROVIDER_ID,
         };
 
         let current_provider =

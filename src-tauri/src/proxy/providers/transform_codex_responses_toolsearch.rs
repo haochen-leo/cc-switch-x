@@ -500,7 +500,11 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["exec_command", "mcp__node_repl__js_reset", "mcp__node_repl__js"],
+            vec![
+                "exec_command",
+                "mcp__node_repl__js_reset",
+                "mcp__node_repl__js"
+            ],
             "namespace children are lifted flat; the pre-existing exec_command is deduped"
         );
 
