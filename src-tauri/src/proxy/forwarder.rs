@@ -1696,6 +1696,19 @@ impl RequestForwarder {
         } else {
             mapped_body
         };
+        let codex_native_responses_upstream_model = request_body
+            .get("model")
+            .and_then(|m| m.as_str())
+            .filter(|m| !m.is_empty())
+            .map(str::to_string);
+        let codex_native_responses_openai_private_contract =
+            matches!(app_type, AppType::Codex | AppType::GrokBuild)
+                && !codex_responses_to_chat
+                && !codex_responses_to_anthropic
+                && super::providers::codex_native_responses_uses_openai_private_contract(
+                    provider,
+                    codex_native_responses_upstream_model.as_deref(),
+                );
 
         // Native Responses passthrough to the strict xAI gateway: lift
         // per-turn tool carriers before namespace flattening so nested
@@ -1724,7 +1737,10 @@ impl RequestForwarder {
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_namespace_flatten(provider)
+            && super::providers::provider_needs_responses_namespace_flatten(
+                provider,
+                codex_native_responses_upstream_model.as_deref(),
+            )
             && super::providers::transform_codex_responses_namespace::flatten_request_namespaces(
                 &mut request_body,
             )?
@@ -1743,7 +1759,10 @@ impl RequestForwarder {
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_apply_patch_bridge(provider)
+            && super::providers::provider_needs_responses_apply_patch_bridge(
+                provider,
+                codex_native_responses_upstream_model.as_deref(),
+            )
             && super::providers::transform_codex_apply_patch::bridge_request_apply_patch_custom_to_function(
                 &mut request_body,
             )
@@ -1787,7 +1806,10 @@ impl RequestForwarder {
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_tool_search_bridge(provider)
+            && super::providers::provider_needs_responses_tool_search_bridge(
+                provider,
+                codex_native_responses_upstream_model.as_deref(),
+            )
         {
             let materialized = super::providers::transform_codex_responses_toolsearch::materialize_tool_search_declaration(
                 &mut request_body,
@@ -1816,7 +1838,7 @@ impl RequestForwarder {
             codex_responses_to_chat,
             codex_responses_to_anthropic,
         ) {
-            let changed = if super::providers::is_codex_official_provider(provider) {
+            let changed = if codex_native_responses_openai_private_contract {
                 super::providers::transform_codex_chat::normalize_official_replayed_item_ids_for_responses_upstream(
                     &mut request_body,
                 )

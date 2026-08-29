@@ -1364,6 +1364,12 @@ async fn handle_responses_for_app(
         .await;
     }
 
+    let openai_private_contract =
+        super::providers::codex_native_responses_uses_openai_private_contract(
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+        );
+
     // Native Responses passthrough. The request-side flatten (in the
     // forwarder) turned Codex `namespace` tools into flat function tools, so
     // the upstream returns flat function-call names that must be restored to
@@ -1375,12 +1381,16 @@ async fn handle_responses_for_app(
     // request; they must fall through to the combined handler below with a
     // merged flat-name map, otherwise this early return would skip the
     // `tool_search_call` rewrite.
-    if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider)
-        && !namespace_restore_map.is_empty()
-        && !super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider)
+    if super::providers::provider_needs_responses_namespace_flatten(
+        &ctx.provider,
+        ctx.outbound_model.as_deref(),
+    ) && !namespace_restore_map.is_empty()
+        && !super::providers::provider_needs_responses_tool_search_bridge(
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+        )
     {
-        let normalize_response_output_item_ids =
-            !super::providers::is_codex_official_provider(&ctx.provider);
+        let normalize_response_output_item_ids = !openai_private_contract;
         return handle_codex_responses_namespace_restore(
             response,
             &ctx,
@@ -1388,7 +1398,10 @@ async fn handle_responses_for_app(
             connection_guard,
             namespace_restore_map,
             normalize_response_output_item_ids,
-            super::providers::provider_needs_responses_apply_patch_bridge(&ctx.provider),
+            super::providers::provider_needs_responses_apply_patch_bridge(
+                &ctx.provider,
+                ctx.outbound_model.as_deref(),
+            ),
         )
         .await;
     }
@@ -1397,20 +1410,28 @@ async fn handle_responses_for_app(
     // from the same request body via the shared `flatten_namespace_tool_name`,
     // so a flat name resolves to the same `{namespace, name}` in either map.
     let mut restore_map = tool_search_restore_map;
-    if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider) {
+    if super::providers::provider_needs_responses_namespace_flatten(
+        &ctx.provider,
+        ctx.outbound_model.as_deref(),
+    ) {
         restore_map.extend(namespace_restore_map);
     }
 
-    let normalize_response_output_item_ids =
-        !super::providers::is_codex_official_provider(&ctx.provider);
+    let normalize_response_output_item_ids = !openai_private_contract;
     handle_codex_apply_patch_input_sanitize(
         response,
         &ctx,
         &state,
         connection_guard,
         normalize_response_output_item_ids,
-        super::providers::provider_needs_responses_apply_patch_bridge(&ctx.provider),
-        super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider),
+        super::providers::provider_needs_responses_apply_patch_bridge(
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+        ),
+        super::providers::provider_needs_responses_tool_search_bridge(
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+        ),
         restore_map,
     )
     .await
@@ -1591,15 +1612,25 @@ async fn handle_responses_compact_for_app(
         .await;
     }
 
+    let openai_private_contract =
+        super::providers::codex_native_responses_uses_openai_private_contract(
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+        );
+
     // Same dispatch as `handle_codex_responses`: xAI keeps the restore-only
     // handler; third-party native upstreams merge both flat-name maps and use
     // the combined handler so the `tool_search_call` rewrite is never skipped.
-    if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider)
-        && !namespace_restore_map.is_empty()
-        && !super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider)
+    if super::providers::provider_needs_responses_namespace_flatten(
+        &ctx.provider,
+        ctx.outbound_model.as_deref(),
+    ) && !namespace_restore_map.is_empty()
+        && !super::providers::provider_needs_responses_tool_search_bridge(
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+        )
     {
-        let normalize_response_output_item_ids =
-            !super::providers::is_codex_official_provider(&ctx.provider);
+        let normalize_response_output_item_ids = !openai_private_contract;
         return handle_codex_responses_namespace_restore(
             response,
             &ctx,
@@ -1607,26 +1638,37 @@ async fn handle_responses_compact_for_app(
             connection_guard,
             namespace_restore_map,
             normalize_response_output_item_ids,
-            super::providers::provider_needs_responses_apply_patch_bridge(&ctx.provider),
+            super::providers::provider_needs_responses_apply_patch_bridge(
+                &ctx.provider,
+                ctx.outbound_model.as_deref(),
+            ),
         )
         .await;
     }
 
     let mut restore_map = tool_search_restore_map;
-    if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider) {
+    if super::providers::provider_needs_responses_namespace_flatten(
+        &ctx.provider,
+        ctx.outbound_model.as_deref(),
+    ) {
         restore_map.extend(namespace_restore_map);
     }
 
-    let normalize_response_output_item_ids =
-        !super::providers::is_codex_official_provider(&ctx.provider);
+    let normalize_response_output_item_ids = !openai_private_contract;
     handle_codex_apply_patch_input_sanitize(
         response,
         &ctx,
         &state,
         connection_guard,
         normalize_response_output_item_ids,
-        super::providers::provider_needs_responses_apply_patch_bridge(&ctx.provider),
-        super::providers::provider_needs_responses_tool_search_bridge(&ctx.provider),
+        super::providers::provider_needs_responses_apply_patch_bridge(
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+        ),
+        super::providers::provider_needs_responses_tool_search_bridge(
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+        ),
         restore_map,
     )
     .await

@@ -61,6 +61,7 @@ pub use claude::{
 pub use codex::CodexAdapter;
 pub use codex::{
     apply_codex_chat_upstream_model, apply_codex_upstream_model, codex_anthropic_thinking_policy,
+    codex_native_responses_uses_openai_private_contract,
     codex_provider_requires_native_responses_item_id_normalization, codex_provider_upstream_model,
     codex_provider_uses_anthropic, codex_provider_uses_chat_completions,
     inject_codex_chat_prompt_cache_key, is_codex_official_provider,

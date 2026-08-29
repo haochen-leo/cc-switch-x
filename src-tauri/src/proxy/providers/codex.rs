@@ -285,11 +285,14 @@ pub fn codex_anthropic_thinking_policy(
 /// these declarations — strict ones reject with
 /// `422 unknown variant "namespace"`, lenient ones silently drop the tools
 /// (the same invisible-tool failure class as `tool_search`). Only the
-/// official ChatGPT backend understands the shape natively, so every
-/// non-official provider gets the flatten+restore pass; the Chat/Anthropic
-/// transform paths already unwrap namespaces on their own.
-pub fn provider_needs_responses_namespace_flatten(provider: &Provider) -> bool {
-    !is_codex_official_provider(provider)
+/// official ChatGPT backend and OpenAI GPT relays understand the shape
+/// natively, so remaining providers get the flatten+restore pass; the
+/// Chat/Anthropic transform paths already unwrap namespaces on their own.
+pub fn provider_needs_responses_namespace_flatten(
+    provider: &Provider,
+    upstream_model: Option<&str>,
+) -> bool {
+    !codex_native_responses_uses_openai_private_contract(provider, upstream_model)
 }
 
 /// Whether the native-Responses passthrough must additionally be scrubbed
@@ -310,8 +313,11 @@ pub fn provider_needs_xai_responses_sanitize(provider: &Provider) -> bool {
 /// accept the custom tool contract directly. Other third-party native
 /// gateways are normalized to the broadly supported function contract, then
 /// restored on the response path before Codex sees the call.
-pub fn provider_needs_responses_apply_patch_bridge(provider: &Provider) -> bool {
-    if is_codex_official_provider(provider)
+pub fn provider_needs_responses_apply_patch_bridge(
+    provider: &Provider,
+    upstream_model: Option<&str>,
+) -> bool {
+    if codex_native_responses_uses_openai_private_contract(provider, upstream_model)
         || codex_provider_uses_chat_completions(provider)
         || codex_provider_uses_anthropic(provider)
     {
@@ -362,9 +368,43 @@ pub fn provider_needs_responses_apply_patch_bridge(provider: &Provider) -> bool 
 /// would stay invisible there. The Chat/Anthropic transform paths already
 /// bridge this contract, and the managed xAI OAuth provider deliberately
 /// scrubs these carriers instead (strict serde), so the bridge applies only
-/// to remaining third-party native Responses upstreams.
-pub fn provider_needs_responses_tool_search_bridge(provider: &Provider) -> bool {
-    !is_codex_official_provider(provider) && !provider.is_xai_oauth()
+/// to remaining third-party native Responses upstreams that are not OpenAI GPT
+/// relays.
+pub fn provider_needs_responses_tool_search_bridge(
+    provider: &Provider,
+    upstream_model: Option<&str>,
+) -> bool {
+    !codex_native_responses_uses_openai_private_contract(provider, upstream_model)
+        && !provider.is_xai_oauth()
+}
+
+/// Whether a native Responses Codex upstream should receive the OpenAI/ChatGPT
+/// private contract unchanged.
+///
+/// Some custom providers are only token relays in front of the real OpenAI
+/// backend. They are not official Codex account cards, but their final upstream
+/// model is still an OpenAI `gpt-*` model and can handle Codex-private shapes
+/// such as `tool_search` + `defer_loading`, namespaced tools and freeform
+/// `apply_patch` directly. Treat `gpt-[0-9]…` model names as that native
+/// contract and skip the third-party compatibility bridges.
+pub fn codex_native_responses_uses_openai_private_contract(
+    provider: &Provider,
+    upstream_model: Option<&str>,
+) -> bool {
+    is_codex_official_provider(provider) || codex_model_looks_like_openai_gpt(upstream_model)
+}
+
+fn codex_model_looks_like_openai_gpt(model: Option<&str>) -> bool {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return false;
+    };
+    let lower = model.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("gpt-") else {
+        return false;
+    };
+    rest.as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_digit())
 }
 
 fn has_explicit_codex_third_party_upstream(provider: &Provider) -> bool {
@@ -2253,7 +2293,7 @@ wire_api = "responses"
             provider_type: Some("xai_oauth".to_string()),
             ..Default::default()
         });
-        assert!(provider_needs_responses_namespace_flatten(&xai));
+        assert!(provider_needs_responses_namespace_flatten(&xai, None));
 
         // A plain third-party API-key Codex provider is flattened too: the
         // client enables `namespace_tools` for every custom provider, and a
@@ -2262,18 +2302,52 @@ wire_api = "responses"
             "auth": { "OPENAI_API_KEY": "sk-x" },
             "config": "base_url = \"https://dashscope.aliyuncs.com/compatible-mode/v1\"\nwire_api = \"responses\""
         }));
-        assert!(provider_needs_responses_namespace_flatten(&plain));
+        assert!(provider_needs_responses_namespace_flatten(&plain, None));
 
         // The official ChatGPT backend speaks the namespace shape natively.
         let mut official = create_provider(json!({ "auth": {}, "config": "" }));
         official.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
         official.category = Some("official".to_string());
-        assert!(!provider_needs_responses_namespace_flatten(&official));
+        assert!(!provider_needs_responses_namespace_flatten(&official, None));
 
         // The strict-field sanitizer stays xAI-only.
         assert!(provider_needs_xai_responses_sanitize(&xai));
         assert!(!provider_needs_xai_responses_sanitize(&plain));
         assert!(!provider_needs_xai_responses_sanitize(&official));
+    }
+
+    #[test]
+    fn gpt_number_model_uses_openai_private_responses_contract() {
+        let provider = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-x" },
+            "config": "base_url = \"https://token-free.example.com/v1\"\nwire_api = \"responses\""
+        }));
+
+        assert!(codex_native_responses_uses_openai_private_contract(
+            &provider,
+            Some("gpt-5.6-sol/token-free")
+        ));
+        assert!(!provider_needs_responses_namespace_flatten(
+            &provider,
+            Some("gpt-5.6-sol/token-free")
+        ));
+        assert!(!provider_needs_responses_apply_patch_bridge(
+            &provider,
+            Some("gpt-5.6-sol/token-free")
+        ));
+        assert!(!provider_needs_responses_tool_search_bridge(
+            &provider,
+            Some("gpt-5.6-sol/token-free")
+        ));
+
+        assert!(!codex_native_responses_uses_openai_private_contract(
+            &provider,
+            Some("gpt-oss-120b")
+        ));
+        assert!(provider_needs_responses_tool_search_bridge(
+            &provider,
+            Some("gpt-oss-120b")
+        ));
     }
 
     #[test]
@@ -2286,45 +2360,51 @@ wire_api = "responses"
             }))
         };
 
-        assert!(provider_needs_responses_apply_patch_bridge(&native(
-            "Qwen",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "qwen3.8-max"
-        )));
-        assert!(provider_needs_responses_apply_patch_bridge(&native(
-            "MiMo",
-            "https://api.xiaomimimo.com/v1",
-            "mimo-v2.5"
-        )));
+        assert!(provider_needs_responses_apply_patch_bridge(
+            &native(
+                "Qwen",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3.8-max"
+            ),
+            None
+        ));
+        assert!(provider_needs_responses_apply_patch_bridge(
+            &native("MiMo", "https://api.xiaomimimo.com/v1", "mimo-v2.5"),
+            None
+        ));
 
         let mut xai = create_provider(json!({ "auth": {}, "config": "" }));
         xai.meta = Some(crate::provider::ProviderMeta {
             provider_type: Some("xai_oauth".to_string()),
             ..Default::default()
         });
-        assert!(provider_needs_responses_apply_patch_bridge(&xai));
+        assert!(provider_needs_responses_apply_patch_bridge(&xai, None));
 
-        assert!(!provider_needs_responses_apply_patch_bridge(&native(
-            "OpenAI",
-            "https://api.openai.com/v1",
-            "gpt-5.6-sol"
-        )));
-        assert!(!provider_needs_responses_apply_patch_bridge(&native(
-            "DeepSeek",
-            "https://api.deepseek.com/v1",
-            "deepseek-v4-flash"
-        )));
+        assert!(!provider_needs_responses_apply_patch_bridge(
+            &native("OpenAI", "https://api.openai.com/v1", "gpt-5.6-sol"),
+            None
+        ));
+        assert!(!provider_needs_responses_apply_patch_bridge(
+            &native(
+                "DeepSeek",
+                "https://api.deepseek.com/v1",
+                "deepseek-v4-flash"
+            ),
+            None
+        ));
 
         let chat = create_provider(json!({
             "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "api_format": "openai_chat"
         }));
-        assert!(!provider_needs_responses_apply_patch_bridge(&chat));
+        assert!(!provider_needs_responses_apply_patch_bridge(&chat, None));
 
         let anthropic = create_provider(json!({
             "base_url": "https://dashscope.aliyuncs.com/apps/anthropic",
             "api_format": "anthropic"
         }));
-        assert!(!provider_needs_responses_apply_patch_bridge(&anthropic));
+        assert!(!provider_needs_responses_apply_patch_bridge(
+            &anthropic, None
+        ));
     }
 }
