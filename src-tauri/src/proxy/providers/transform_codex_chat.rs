@@ -6237,6 +6237,4 @@ mod tests {
         assert_eq!(result["output"][0]["name"], "exec");
         assert_eq!(result["output"][0]["input"], "pwd");
     }
-
-
 }

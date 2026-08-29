@@ -205,8 +205,10 @@ pub async fn build_codex_aggregate_provider(
         .cloned()
         .ok_or_else(|| "缺少 OpenAI Official 供应商，无法创建 Codex 聚合入口".to_string())?;
     let configured = read_configured_source_provider_ids(db)?;
-    let selected_provider_ids = resolve_selected_provider_ids(&source_providers, configured.as_ref());
-    let source_provider_statuses = source_provider_statuses(&source_providers, &selected_provider_ids);
+    let selected_provider_ids =
+        resolve_selected_provider_ids(&source_providers, configured.as_ref());
+    let source_provider_statuses =
+        source_provider_statuses(&source_providers, &selected_provider_ids);
     let selected_provider_ids_in_order = source_provider_statuses
         .iter()
         .filter(|source| source.selected)
