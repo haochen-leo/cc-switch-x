@@ -2,6 +2,8 @@ version: 2
 updates:
   - package-ecosystem: "npm"
     directory: "/"
+    target-branch: "main"
+    open-pull-requests-limit: 3
     schedule:
       interval: "weekly"
     labels:
@@ -16,6 +18,8 @@ updates:
 
   - package-ecosystem: "cargo"
     directory: "/src-tauri"
+    target-branch: "main"
+    open-pull-requests-limit: 3
     schedule:
       interval: "weekly"
     labels:
@@ -30,6 +34,8 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "main"
+    open-pull-requests-limit: 3
     schedule:
       interval: "monthly"
     labels:

@@ -144,7 +144,7 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 
 ### Windows ユーザー
 
-[Releases](../../releases) ページから最新版の `CC-Switch-X-v{version}-Windows.msi` インストーラー、またはポータブル版 `CC-Switch-X-v{version}-Windows-Portable.zip` をダウンロード。
+[Releases](https://github.com/haochen-leo/cc-switch-x/releases) ページから最新版の `CC-Switch-X-v{version}-Windows.msi` インストーラー、またはポータブル版 `CC-Switch-X-v{version}-Windows-Portable.zip` をダウンロード。
 
 ### macOS ユーザー
 
@@ -154,7 +154,7 @@ CC Switch X にはまだ専用の Homebrew Cask がありません。以下の�
 
 **方法 2: 手動ダウンロード**
 
-[Releases](../../releases) から `CC-Switch-X-v{version}-macOS.zip` をダウンロードして展開。
+[Releases](https://github.com/haochen-leo/cc-switch-x/releases) から `CC-Switch-X-v{version}-macOS.dmg`（推奨）または `.zip` をダウンロード。
 
 > **注意**: 開発者アカウント未登録のため、初回起動時に「開発元を確認できません」と表示される場合があります。一度閉じてから「システム設定」→「プライバシーとセキュリティ」→「このまま開く」をクリックしてください。以降は通常通り起動できます。
 
@@ -164,7 +164,7 @@ CC Switch X にはまだ専用の AUR パッケージがありません。上流
 
 ### Linux ユーザー
 
-[Releases](../../releases) から最新版の Linux ビルドをダウンロード：
+[Releases](https://github.com/haochen-leo/cc-switch-x/releases) から最新版の Linux ビルドをダウンロード：
 
 - `CC-Switch-X-v{version}-Linux-x86_64.deb`（Debian/Ubuntu）
 - `CC-Switch-X-v{version}-Linux-x86_64.rpm`（Fedora/RHEL/openSUSE）

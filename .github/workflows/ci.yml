@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, codex/cc-switch-x-release]
   push:
-    branches: [main]
+    branches: [main, codex/cc-switch-x-release]
 
 concurrency:
   group: ci-${{ github.ref }}
