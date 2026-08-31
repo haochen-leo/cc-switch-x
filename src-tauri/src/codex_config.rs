@@ -35,7 +35,7 @@ const CODEX_REALTIME_WS_BASE_URL: &str = "https://api.openai.com/v1";
 const CODEX_DESKTOP_SECTION: &str = "desktop";
 const CODEX_DESKTOP_ENABLED_REASONING_EFFORTS: &str = "enabled-reasoning-efforts";
 
-#[cfg(target_os = "windows")]
+#[cfg(all(test, target_os = "windows"))]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Top-level `config.toml` key that controls Codex's built-in web-search tool.
