@@ -1888,6 +1888,23 @@ impl RequestForwarder {
             self.apply_media_prevention(&mut request_body, provider);
         }
 
+        if should_sanitize_codex_native_responses_reasoning_envelopes(
+            app_type,
+            endpoint,
+            codex_responses_to_chat,
+            codex_responses_to_anthropic,
+        ) {
+            let changed = super::providers::transform_codex_anthropic::sanitize_anthropic_reasoning_envelopes_for_native_responses(
+                &mut request_body,
+            );
+            if changed > 0 {
+                log::debug!(
+                    "[Codex] Sanitized {changed} cc-switch Anthropic reasoning envelope(s) before native Responses upstream (provider={})",
+                    provider.id
+                );
+            }
+        }
+
         if should_normalize_codex_native_responses_item_ids(
             app_type,
             endpoint,
@@ -4078,6 +4095,25 @@ fn should_normalize_codex_native_responses_item_ids(
         )
 }
 
+fn should_sanitize_codex_native_responses_reasoning_envelopes(
+    app_type: &AppType,
+    endpoint: &str,
+    codex_responses_to_chat: bool,
+    codex_responses_to_anthropic: bool,
+) -> bool {
+    let path = endpoint
+        .split_once('?')
+        .map_or(endpoint, |(path, _query)| path);
+
+    matches!(app_type, AppType::Codex | AppType::GrokBuild)
+        && matches!(
+            path,
+            "/responses" | "/v1/responses" | "/responses/compact" | "/v1/responses/compact"
+        )
+        && !codex_responses_to_chat
+        && !codex_responses_to_anthropic
+}
+
 fn log_prompt_cache_trace(
     app_type: &AppType,
     provider: &Provider,
@@ -4365,6 +4401,43 @@ mod tests {
             &native,
             false,
             false
+        ));
+    }
+
+    #[test]
+    fn native_responses_reasoning_envelope_sanitizer_covers_codex_and_grokbuild() {
+        for app_type in [AppType::Codex, AppType::GrokBuild] {
+            assert!(should_sanitize_codex_native_responses_reasoning_envelopes(
+                &app_type,
+                "/v1/responses?stream=true",
+                false,
+                false,
+            ));
+            assert!(should_sanitize_codex_native_responses_reasoning_envelopes(
+                &app_type,
+                "/v1/responses/compact",
+                false,
+                false,
+            ));
+            assert!(!should_sanitize_codex_native_responses_reasoning_envelopes(
+                &app_type,
+                "/v1/responses",
+                true,
+                false,
+            ));
+            assert!(!should_sanitize_codex_native_responses_reasoning_envelopes(
+                &app_type,
+                "/v1/responses",
+                false,
+                true,
+            ));
+        }
+
+        assert!(!should_sanitize_codex_native_responses_reasoning_envelopes(
+            &AppType::Codex,
+            "/v1/chat/completions",
+            false,
+            false,
         ));
     }
 
