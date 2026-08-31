@@ -40,8 +40,9 @@ pub enum AnthropicThinkingPolicy {
     Strict,
     /// Third-party Anthropic-compatible endpoints (dashscope/kimi, ...) neither
     /// sign nor verify thinking blocks. The requested thinking effort is honored
-    /// on every turn regardless of replay history, and unsigned thinking blocks
-    /// round-trip untouched.
+    /// on every turn regardless of replay history. New unsigned thinking output
+    /// is represented as plain Responses reasoning; legacy unsigned bridge
+    /// envelopes remain readable for existing conversations.
     Lenient,
 }
 
@@ -70,11 +71,9 @@ fn reasoning_explicitly_disabled(effort: Option<&str>) -> bool {
 /// tool-result request. The prefix keeps unrelated providers' ciphertext isolated.
 ///
 /// Third-party Anthropic-compatible endpoints (kimi via dashscope, ...) emit
-/// thinking blocks with a missing or empty signature — the upstream neither
-/// signs nor verifies them. Those blocks are bridged too (the empty signature
-/// is itself the unsigned marker); a strict upstream strips replayed unsigned
-/// blocks on the next request instead of 400ing (see
-/// `responses_request_to_anthropic_with_policy`).
+/// thinking blocks with a missing or empty signature. New output does not use
+/// this carrier for those blocks; the encoder continues to accept them only so
+/// existing conversations containing legacy bridge envelopes remain decodable.
 pub(crate) fn encode_anthropic_thinking_block(block: &Value) -> Option<String> {
     match block.get("type").and_then(|value| value.as_str()) {
         Some("thinking") => {
@@ -113,23 +112,91 @@ pub(crate) fn decode_anthropic_thinking_block(encrypted_content: &str) -> Option
     encode_anthropic_thinking_block(&block).map(|_| block)
 }
 
+/// Remove cc-switch-owned Anthropic replay carriers before a native Responses
+/// request leaves the proxy. They are not upstream ciphertext and must never be
+/// sent to OpenAI or another native Responses provider.
+///
+/// Visible thinking text is retained as a standard plain reasoning summary.
+/// Redacted/empty carriers have no portable content and are removed entirely.
+/// All non-cc-switch encrypted content is left byte-for-byte unchanged.
+pub(crate) fn sanitize_anthropic_reasoning_envelopes_for_native_responses(
+    body: &mut Value,
+) -> usize {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+
+    let mut changed = 0;
+    input.retain_mut(|item| {
+        let is_anthropic_envelope = item.get("type").and_then(Value::as_str) == Some("reasoning")
+            && item
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.starts_with(ANTHROPIC_THINKING_ENCRYPTED_PREFIX));
+        if !is_anthropic_envelope {
+            return true;
+        }
+
+        let has_summary = item
+            .get("summary")
+            .and_then(Value::as_array)
+            .is_some_and(|parts| {
+                parts.iter().any(|part| {
+                    part.get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.is_empty())
+                })
+            });
+        changed += 1;
+        if !has_summary {
+            return false;
+        }
+
+        if let Some(object) = item.as_object_mut() {
+            object.remove("encrypted_content");
+        }
+        true
+    });
+    changed
+}
+
 pub(crate) fn responses_reasoning_item_from_anthropic_block(
     item_id: &str,
     block: &Value,
 ) -> Option<Value> {
-    let encrypted_content = encode_anthropic_thinking_block(block)?;
+    let block_type = block.get("type").and_then(Value::as_str)?;
     let summary = block
         .get("thinking")
         .and_then(|value| value.as_str())
         .filter(|text| !text.is_empty())
         .map(|text| vec![json!({ "type": "summary_text", "text": text })])
         .unwrap_or_default();
-    Some(json!({
+
+    let mut item = json!({
         "id": item_id,
         "type": "reasoning",
-        "summary": summary,
-        "encrypted_content": encrypted_content
-    }))
+        "summary": summary
+    });
+    match block_type {
+        "thinking" => {
+            if !block.get("thinking").is_some_and(Value::is_string) {
+                return None;
+            }
+            let signature = match block.get("signature") {
+                None => None,
+                Some(Value::String(signature)) => Some(signature.as_str()),
+                Some(_) => return None,
+            };
+            if signature.is_some_and(|signature| !signature.is_empty()) {
+                item["encrypted_content"] = json!(encode_anthropic_thinking_block(block)?);
+            }
+        }
+        "redacted_thinking" => {
+            item["encrypted_content"] = json!(encode_anthropic_thinking_block(block)?);
+        }
+        _ => return None,
+    }
+    Some(item)
 }
 
 /// Anthropic `tool_use.input` is always a JSON object. Compatible gateways can
@@ -2865,12 +2932,12 @@ mod tests {
     }
 
     #[test]
-    fn test_unsigned_thinking_is_replayed_as_encrypted_reasoning() {
+    fn test_unsigned_thinking_becomes_plain_reasoning() {
         // Third-party Anthropic-compatible endpoints (kimi via dashscope, ...)
-        // emit thinking blocks with a missing or empty signature. They must
-        // still be bridged into an encrypted reasoning item so Codex can replay
-        // them; a strict upstream strips such replayed blocks on the next
-        // request instead of 400ing.
+        // emit thinking blocks with a missing or empty signature and do not
+        // require that block to be replayed on the next tool turn. Represent
+        // them as standard plain Responses reasoning instead of manufacturing
+        // provider-looking encrypted_content.
         let input = json!({
             "id":"msg_unsigned",
             "content":[
@@ -2884,10 +2951,70 @@ mod tests {
         let output = result["output"].as_array().unwrap();
         assert_eq!(output.len(), 2);
         assert_eq!(output[0]["type"], "reasoning");
-        let encrypted = output[0]["encrypted_content"].as_str().unwrap();
-        let block = decode_anthropic_thinking_block(encrypted).unwrap();
-        assert_eq!(block["thinking"], "unsigned");
+        assert_eq!(output[0]["summary"][0]["text"], "unsigned");
+        assert!(output[0].get("encrypted_content").is_none());
         assert_eq!(output[1]["type"], "message");
+    }
+
+    #[test]
+    fn test_malformed_unsigned_thinking_is_rejected() {
+        let malformed = json!({
+            "type": "thinking"
+        });
+
+        assert!(
+            responses_reasoning_item_from_anthropic_block("rs_malformed", &malformed).is_none()
+        );
+    }
+
+    #[test]
+    fn test_native_sanitizer_downgrades_only_anthropic_bridge_envelopes() {
+        let legacy_unsigned = encode_anthropic_thinking_block(&json!({
+            "type": "thinking",
+            "thinking": "legacy unsigned",
+            "signature": ""
+        }))
+        .unwrap();
+        let redacted = encode_anthropic_thinking_block(&json!({
+            "type": "redacted_thinking",
+            "data": "opaque"
+        }))
+        .unwrap();
+        let openai_ciphertext = "gAAAAAB-openai-opaque";
+        let mut body = json!({
+            "input": [
+                {
+                    "id": "rs_legacy",
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "legacy unsigned"}],
+                    "encrypted_content": legacy_unsigned
+                },
+                {
+                    "id": "rs_openai",
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": openai_ciphertext
+                },
+                {
+                    "id": "rs_redacted",
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": redacted
+                }
+            ]
+        });
+
+        assert_eq!(
+            sanitize_anthropic_reasoning_envelopes_for_native_responses(&mut body),
+            2
+        );
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["id"], "rs_legacy");
+        assert_eq!(input[0]["summary"][0]["text"], "legacy unsigned");
+        assert!(input[0].get("encrypted_content").is_none());
+        assert_eq!(input[1]["id"], "rs_openai");
+        assert_eq!(input[1]["encrypted_content"], openai_ciphertext);
     }
 
     #[test]

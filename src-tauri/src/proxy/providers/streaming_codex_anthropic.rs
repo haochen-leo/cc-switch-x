@@ -1121,6 +1121,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_unsigned_thinking_stream_uses_plain_reasoning() {
+        let input = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_unsigned\",\"model\":\"kimi-k3\"}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}\n\n",
+            "event: content_block_stop\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+        let merged = run(input).await;
+        assert!(merged.contains("\"type\":\"reasoning\""));
+        assert!(merged.contains("\"text\":\"hmm\""));
+        assert!(!merged.contains("\"encrypted_content\""));
+        assert!(!merged.contains(ANTHROPIC_THINKING_ENCRYPTED_PREFIX));
+    }
+
+    #[tokio::test]
     async fn test_thinking_signature_is_preserved() {
         let input = concat!(
             "event: message_start\n",
