@@ -25,6 +25,7 @@ body:
         - English
         - 中文
         - 日本語
+        - Deutsch
     validations:
       required: true
 

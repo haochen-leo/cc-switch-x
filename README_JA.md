@@ -40,14 +40,14 @@ CC Switch X は、複数の公式・サードパーティモデルプロバイ�
 
 [完全な更新履歴](CHANGELOG.md) | [リリースノート](docs/release-notes/v0.1.0-beta.1-ja.md)
 
-CC Switch X は、8 種類の AI ツール向けプロバイダ・設定管理、MCP / Prompts / Skills、トレイ切り替え、使用量追跡、セッション管理、クラウド同期、インポート・エクスポート、バックアップ、クロスプラットフォーム対応など、上流の幅広いデスクトップ管理機能を継承しています。一般機能は[上流プロジェクト](https://github.com/farion1231/cc-switch)、利用方法は[ユーザーマニュアル](docs/user-manual/en/README.md)を参照してください。
+CC Switch X は、9 種類の AI ツール向けプロバイダ・設定管理、MCP / Prompts / Skills、トレイ切り替え、使用量追跡、セッション管理、クラウド同期、インポート・エクスポート、バックアップ、クロスプラットフォーム対応など、上流の幅広いデスクトップ管理機能を継承しています。一般機能は[上流プロジェクト](https://github.com/farion1231/cc-switch)、利用方法は[ユーザーマニュアル](docs/user-manual/en/README.md)を参照してください。
 
 ## よくある質問
 
 <details>
 <summary><strong>CC Switch はどの AI ツールに対応していますか？</strong></summary>
 
-CC Switch は **Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**Grok Build**、**OpenCode**、**OpenClaw**、**Hermes** の 8 つのツールに対応しています。各ツールに専用のプロバイダプリセットと設定管理が用意されています。
+CC Switch は **Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**Grok Build**、**OpenCode**、**OpenClaw**、**Hermes**、**Pi** の 9 つのツールに対応しています。各ツールに専用のプロバイダプリセットと設定管理が用意されています。
 
 </details>
 
@@ -367,4 +367,4 @@ PR を送る前に以下をご確認ください：
 
 ## ライセンス
 
-MIT © Jason Young
+MIT © Jason Young; CC Switch X の追加部分 © haochen-leo
