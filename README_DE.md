@@ -40,10 +40,6 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 
 ## Screenshots
 
-|                  Hauptoberfläche                   |                  Anbieter hinzufügen                  |
-| :------------------------------------------------: | :---------------------------------------------------: |
-| ![Hauptoberfläche](assets/screenshots/main-en.png) | ![Anbieter hinzufügen](assets/screenshots/add-en.png) |
-
 |                  Claude Modell-Mapping & Routing pro Rolle                  |                Codex Modellquellen-Aggregation                 |
 | :-------------------------------------------------------------------------: | :------------------------------------------------------------: |
 | ![Claude Modell-Mapping pro Rolle](assets/screenshots/claude-models-en.png) | ![Codex Modellquellen](assets/screenshots/codex-models-en.png) |
