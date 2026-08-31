@@ -9,7 +9,7 @@ export function supportsOfficialInAppUpdate(): Promise<boolean> {
   if (!officialUpdateSupportPromise) {
     officialUpdateSupportPromise = getIdentifier()
       .then((identifier) => identifier === OFFICIAL_APP_IDENTIFIER)
-      .catch(() => true);
+      .catch(() => false);
   }
 
   return officialUpdateSupportPromise;

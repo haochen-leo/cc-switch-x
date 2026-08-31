@@ -43,6 +43,12 @@ fn read_override_from_store(app: &tauri::AppHandle) -> Option<PathBuf> {
             }
 
             let path = resolve_path(path_str);
+            if points_to_official_data_dir(&path) {
+                log::warn!(
+                    "忽略指向官方 CC Switch 数据目录的覆盖路径，CC Switch X 必须使用独立数据库"
+                );
+                return None;
+            }
 
             if !path.exists() {
                 log::warn!(
@@ -84,6 +90,13 @@ pub fn set_app_config_dir_to_store(
         Some(p) => {
             let trimmed = p.trim();
             if !trimmed.is_empty() {
+                let resolved = resolve_path(trimmed);
+                if points_to_official_data_dir(&resolved) {
+                    return Err(AppError::InvalidInput(
+                        "CC Switch X 不能直接使用官方 ~/.cc-switch 数据目录；请使用导入功能。"
+                            .to_string(),
+                    ));
+                }
                 store.set(STORE_KEY_APP_CONFIG_DIR, Value::String(trimmed.to_string()));
                 log::info!("已将 app_config_dir 写入 Store: {trimmed}");
             } else {
@@ -122,6 +135,21 @@ fn resolve_path(raw: &str) -> PathBuf {
     }
 
     PathBuf::from(raw)
+}
+
+fn points_to_official_data_dir(path: &std::path::Path) -> bool {
+    let official = crate::brand::official_app_config_dir();
+    if path == official {
+        return true;
+    }
+
+    match (
+        std::fs::canonicalize(path),
+        std::fs::canonicalize(&official),
+    ) {
+        (Ok(candidate), Ok(official)) => candidate == official,
+        _ => false,
+    }
 }
 
 /// 从旧的 settings.json 迁移 app_config_dir 到 Store

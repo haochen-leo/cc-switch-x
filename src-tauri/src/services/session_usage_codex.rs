@@ -549,6 +549,7 @@ fn get_codex_sync_state(
 /// 2. 剥离 provider 前缀：`openai/gpt-5.4` → `gpt-5.4`
 /// 3. 剥离 ISO 日期后缀：`gpt-5.4-2026-03-05` → `gpt-5.4`
 /// 4. 剥离紧凑日期后缀：`gpt-5.4-20260305` → `gpt-5.4`
+///
 /// 从会话原始模型串还原上游模型。
 ///
 /// 聚合 slug 顺序随版本变化（`provider/model` 与 `model/provider` 并存），

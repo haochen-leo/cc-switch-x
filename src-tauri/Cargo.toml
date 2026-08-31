@@ -1,10 +1,10 @@
 [package]
-name = "cc-switch"
-version = "3.20.0"
-description = "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
-authors = ["Jason Young"]
+name = "cc-switch-x"
+version = "0.1.0-beta.1"
+description = "Unofficial CC Switch fork with isolated data and an independent release channel"
+authors = ["Jason Young", "haochen-leo"]
 license = "MIT"
-repository = "https://github.com/farion1231/cc-switch"
+repository = "https://github.com/haochen-leo/cc-switch-x"
 edition = "2021"
 rust-version = "1.85.0"
 

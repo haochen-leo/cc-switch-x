@@ -46,8 +46,8 @@
   },
   "firstRunNotice": {
     "title": "歡迎使用 CC Switch X",
-    "bodyDefault": "CC Switch X 可以協助您在 Claude Code / Codex / Gemini CLI 的多個供應商之間一鍵切換。如果您之前已經設定過這些工具，CC Switch X 會自動將現有設定儲存為名為 default 的供應商，確保您的設定不會遺失。",
-    "bodyOfficial": "清單中還預設了「官方 (Official)」供應商，隨時點擊即可切換回官方預設設定。切換前 CC Switch X 會自動將目前設定備份回 default，可以放心來回切換。這就是 CC Switch X 的運作方式。",
+    "bodyDefault": "CC Switch X 可協助您在 Claude Code / Codex / Gemini CLI 的多個供應商之間一鍵切換。既有 CC Switch 資料可匯入獨立的 X 資料目錄，目前的工具設定也會保留為名為 default 的供應商。",
+    "bodyOfficial": "清單中的「官方 (Official)」供應商仍可使用。CC Switch X 是使用獨立資料庫的非官方分支版本，但仍會管理 Claude Code、Codex、Gemini CLI 等工具的實際設定檔。",
     "confirm": "我了解了"
   },
   "apiKeyInput": {
@@ -288,6 +288,7 @@
     "openclawNoModels": "該供應商沒有設定模型",
     "openclawModelNotFound": "所選模型已不存在，請重新整理後再試",
     "backfillWarning": "切換成功，但舊供應商設定回填失敗，您手動修改的設定可能未儲存",
+    "codexAuthCleanupFailed": "切換成功，但未能刪除 auth.json，官方登入憑證仍留在磁碟上；如需徹底移除請手動刪除 Codex 設定目錄中的 auth.json",
     "windowControlFailed": "視窗控制失敗：{{error}}",
     "officialBlockedByProxy": "本地路由模式下不能切換至官方供應商，使用路由存取官方 API 可能導致帳號被封鎖",
     "proxyOfficialWarning": "目前供應商 {{name}} 是官方供應商，建議切換至第三方供應商後再使用本地路由",
@@ -312,7 +313,7 @@
     },
     "unifyCodexHistory": {
       "title": "統一 Codex 會話歷史",
-      "message": "開啟後，官方訂閱與第三方將共用同一個會話歷史清單。注意：跨供應商繼續舊會話時，可能因對方後端無法解密 encrypted_content 推理內容而失敗。\n\n可選擇同時把現有官方會話歷史遷入共享清單（遷移前自動備份到 ~/.cc-switch/backups，關閉開關時可選擇恢復）。",
+      "message": "開啟後，官方訂閱與第三方將共用同一個會話歷史清單。注意：跨供應商繼續舊會話時，可能因對方後端無法解密 encrypted_content 推理內容而失敗。\n\n可選擇同時把現有官方會話歷史遷入共享清單（遷移前自動備份到 ~/.cc-switch-x/backups，關閉開關時可選擇恢復）。",
       "migrateExisting": "同時遷入現有官方會話歷史",
       "confirm": "我已了解，繼續開啟"
     },
@@ -430,9 +431,9 @@
         "title": "應用程式診斷日誌",
         "description": "控制應用程式診斷日誌的輸出層級",
         "enabled": "啟用應用程式診斷日誌",
-        "enabledDescription": "控制 cc-switch.log；關閉後也會停止正文採集，不影響請求用量記錄和 crash.log",
+        "enabledDescription": "控制 cc-switch-x.log；關閉後也會停止正文採集，不影響請求用量記錄和 crash.log",
         "capturePayloads": "持續記錄請求/回應正文",
-        "capturePayloadsDescription": "持續寫入獨立的 cc-switch-payload.log，直到關閉。正文可能包含敏感資訊；診斷日誌總開關關閉時不會記錄。",
+        "capturePayloadsDescription": "持續寫入獨立的 cc-switch-x-payload.log，直到關閉。正文可能包含敏感資訊；診斷日誌總開關關閉時不會記錄。",
         "captureMaxSizeMb": "單一正文日誌大小（MB）",
         "captureMaxSizeMbDescription": "超過大小後輪轉為歸檔檔案，預設 50",
         "captureArchives": "保留歸檔數量",
@@ -554,7 +555,7 @@
         "synologyHint": "請先在 Synology「套件中心」安裝並啟用 WebDAV Server 套件。",
         "custom": "自訂"
       },
-      "remoteRootDefault": "預設: cc-switch-sync",
+      "remoteRootDefault": "預設: cc-switch-x-sync",
       "profileDefault": "預設: default",
       "saveAndTestSuccess": "設定已儲存，連線正常",
       "saveAndTestFailed": "設定已儲存，但連線測試失敗：{{error}}",
@@ -628,7 +629,7 @@
       "endpointHint": "多數 S3 相容服務需要填寫",
       "endpointPlaceholder": "例如 https://s3-compatible.example.com",
       "remoteRoot": "遠端根目錄",
-      "remoteRootDefault": "預設: cc-switch-sync",
+      "remoteRootDefault": "預設: cc-switch-x-sync",
       "profile": "同步設定檔名稱",
       "profileDefault": "預設: default",
       "autoSync": "自動同步",
@@ -738,7 +739,7 @@
       "description": "選擇 CC Switch 存放 Skills 主副本的目錄",
       "ccSwitch": "CC Switch",
       "unified": "~/.agents/skills",
-      "ccSwitchHint": "技能儲存在 ~/.cc-switch/skills/，由 CC Switch 統一管理並同步至各應用程式。",
+      "ccSwitchHint": "技能儲存在 ~/.cc-switch-x/skills/，由 CC Switch X 統一管理並同步至各應用程式。",
       "unifiedHint": "技能儲存在 ~/.agents/skills/，遵循 Agent Skills 開放標準。相容的工具（Claude Code、Codex、Gemini CLI 等）可直接發現此目錄中的技能。",
       "confirmTitle": "遷移技能儲存位置",
       "confirmMessage": "將移動 {{count}} 個技能至新位置，是否繼續？",
@@ -763,6 +764,7 @@
           "alacritty": "Alacritty",
           "kitty": "Kitty",
           "ghostty": "Ghostty",
+          "otty": "Otty",
           "wezterm": "WezTerm",
           "kaku": "Kaku",
           "warp": "Warp"
@@ -784,9 +786,9 @@
     },
     "configDirectoryOverride": "設定目錄覆寫（進階）",
     "configDirectoryDescription": "在 WSL 等環境使用 Claude Code 或 Codex 的時候，可手動指定為 WSL 裡的設定目錄，供應商資料與主環境保持一致。",
-    "appConfigDir": "CC Switch 設定目錄",
-    "appConfigDirDescription": "自訂 CC Switch 的設定儲存位置（指定至雲端同步資料夾即可雲端同步設定）",
-    "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch",
+    "appConfigDir": "CC Switch X 設定目錄",
+    "appConfigDirDescription": "自訂 CC Switch X 的獨立設定儲存位置",
+    "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch-x",
     "claudeConfigDir": "Claude Code 設定目錄",
     "claudeConfigDirDescription": "覆寫 Claude 設定目錄 (settings.json)。真正自訂目錄會在目錄內存放 Claude MCP 的 .claude.json；預設 ~/.claude 目錄仍使用 Claude 預設的 ~/.claude.json。",
     "codexConfigDir": "Codex 設定目錄",
@@ -828,10 +830,12 @@
     "releaseNotes": "更新日誌",
     "viewReleaseNotes": "檢視該版本更新日誌",
     "viewCurrentReleaseNotes": "檢視目前版本更新日誌",
-    "officialUpdatesDisabled": "目前 CC Switch X 版本已停用官方應用程式內升級，避免覆蓋本地安裝。",
+    "officialUpdatesDisabled": "CC Switch X 已停用官方應用程式內升級，避免覆蓋這個獨立安裝。",
     "officialUpdatesDisabledBadge": "官方升級已停用",
     "officialWebsite": "官方網站",
     "github": "GitHub",
+    "unofficialFork": "非官方分支",
+    "inAppUpdatesDisabled": "應用程式內更新未啟用",
     "manualInstallCommands": "手動安裝指令",
     "oneClickInstall": "一鍵安裝",
     "oneClickInstallHint": "安裝或更新 Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes / Pi",
@@ -886,7 +890,7 @@
     "saving": "正在儲存...",
     "globalProxy": {
       "label": "全域代理伺服器",
-      "hint": "代理所有請求（API、Skills 下載等）。開啟本地路由時，應用程式的請求也會經過此代理伺服器。留空表示直連。",
+      "hint": "代理所有請求（API、Skills 下載等）。開啟本地路由時，應用程式的請求也會經過此代理伺服器。留空時會跟隨系統或環境代理；若其指向 CC Switch X 本地路由，則自動略過以避免循環。",
       "username": "使用者名稱（選填）",
       "password": "密碼（選填）",
       "test": "測試連線",
@@ -1567,6 +1571,7 @@
     "addToModelMapping": "加入映射",
     "modelMappingTitle": "模型映射",
     "modelMappingHint": "產生 Codex model_catalog_json，讓 /model 指令顯示這些第三方模型名；表中條目按填寫內容原樣儲存。修改後需要重新啟動 Codex 才能重新整理模型清單。",
+    "catalogAutoManagedHint": "此目錄由多模型來源供應商自動產生。",
     "addCatalogModel": "新增模型",
     "catalogDisplayName": "顯示名稱",
     "catalogModelId": "模型 ID",
@@ -1737,6 +1742,13 @@
       "pi": "Pi"
     },
     "rawInputLabel": "原始",
+    "sessionSync": {
+      "title": "自動掃描工作階段記錄",
+      "description": "定期掃描各用戶端的本機工作階段記錄以統計用量；關閉後僅在手動同步時掃描",
+      "syncNow": "立即同步",
+      "syncCompleted": "同步完成：新增 {{imported}} 筆，掃描 {{files}} 個檔案，錯誤 {{errors}}",
+      "syncFailed": "工作階段用量同步失敗：{{error}}"
+    },
     "rebuildCodex": {
       "title": "Codex 用量維護",
       "description": "從本機 rollout 日誌重新建構 Codex 工作階段用量",
@@ -2834,7 +2846,7 @@
         },
         "listenPort": {
           "label": "監聽連接埠",
-          "placeholder": "15721",
+          "placeholder": "15722",
           "description": "路由伺服器監聽的連接埠號（1024 ~ 65535）"
         },
         "maxRetries": {

@@ -1221,7 +1221,9 @@ export function CodexFormFields({
                   </div>
                   <p className="text-xs leading-relaxed text-muted-foreground">
                     {catalogReadOnly
-                      ? "该目录由多模型来源供应商自动生成。"
+                      ? t("codexConfig.catalogAutoManagedHint", {
+                          defaultValue: "该目录由多模型来源供应商自动生成。",
+                        })
                       : t("codexConfig.modelMappingHint", {
                           defaultValue:
                             "选择模型角色后，CC Switch 会自动生成 Codex 兼容路由；菜单显示名可以填 DeepSeek、Kimi 等品牌模型，实际请求模型按右侧填写内容发送。",
