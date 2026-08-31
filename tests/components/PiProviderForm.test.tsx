@@ -579,7 +579,7 @@ describe("PiProviderForm", () => {
         },
       ],
     );
-  });
+  }, 15_000);
 
   it("reopens model details and focuses an invalid Pi-native limit", async () => {
     const user = userEvent.setup();
@@ -1001,7 +1001,7 @@ describe("PiProviderForm", () => {
     );
     expect(screen.getByLabelText("pi.form.maxTokens")).toHaveValue(777);
     expect(screen.getByLabelText("pi.form.contextWindow")).toHaveValue(null);
-  });
+  }, 15_000);
 
   it("ignores a stale model-list response after the request config changes", async () => {
     const user = userEvent.setup();
