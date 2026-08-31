@@ -4,7 +4,7 @@
 
 > Inoffizieller Fork von [CC Switch](https://github.com/farion1231/cc-switch). Laufzeitdaten werden isoliert unter `~/.cc-switch-x` gespeichert.
 
-### Der All-in-One-Manager für Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw & Hermes Agent
+### Multi-Anbieter-Routing und Kompatibilität für Claude und Codex, auf Basis von CC Switch
 
 [![Version](https://img.shields.io/github/v/release/haochen-leo/cc-switch-x?color=blue&label=version)](https://github.com/haochen-leo/cc-switch-x/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/haochen-leo/cc-switch-x/releases)
@@ -19,19 +19,7 @@
 
 ## Warum CC Switch X?
 
-Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw und Hermes — doch jedes hat sein eigenes Konfigurationsformat. Der Wechsel des API-Anbieters bedeutet, JSON-, TOML- oder `.env`-Dateien von Hand zu bearbeiten, und es gibt keine einheitliche Möglichkeit, MCP und Skills über mehrere Werkzeuge hinweg zu verwalten.
-
-**CC Switch** gibt Ihnen eine einzige Desktop-App, um alle unterstützten KI-Werkzeuge zu verwalten. Statt Konfigurationsdateien von Hand zu bearbeiten, erhalten Sie eine visuelle Oberfläche, um Anbieter mit einem Klick zu importieren und sofort zwischen ihnen zu wechseln — mit 50+ integrierten Anbieter-Presets, einheitlicher MCP- und Skills-Verwaltung und schnellem Umschalten über das System-Tray. Das Ganze gestützt auf eine zuverlässige SQLite-Datenbank mit atomaren Schreibvorgängen, die Ihre Konfigurationen vor Beschädigung schützen.
-
-- **Eine App, acht Werkzeuge** — Verwalten Sie Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw und Hermes über eine einzige Oberfläche
-- **Kein manuelles Bearbeiten mehr** — 50+ Anbieter-Presets einschließlich AWS Bedrock, NVIDIA NIM und Community-Relays; einfach auswählen und umschalten
-- **Einheitliche MCP- & Skills-Verwaltung** — Ein Panel zur Verwaltung von MCP-Servern und Skills für Claude, Codex, Gemini, Grok Build, OpenCode und Hermes mit bidirektionaler Synchronisierung
-- **Schnellumschaltung über System-Tray** — Wechseln Sie Anbieter sofort über das Tray-Menü, ohne die vollständige App öffnen zu müssen
-- **Cloud-Synchronisierung** — Synchronisieren Sie Anbieterdaten geräteübergreifend über Dropbox, OneDrive, iCloud oder WebDAV-Server
-- **Plattformübergreifend** — Native Desktop-App für Windows, macOS und Linux, gebaut mit Tauri 2
-- **Integrierte Hilfsprogramme** — Enthält diverse Hilfsprogramme für die Login-Bestätigung beim Erststart, das Umgehen von Signaturen, die Synchronisierung von Plugin-Erweiterungen und mehr
-
-### Was CC Switch X zusätzlich bietet
+CC Switch X ist ein fokussierter Fork für Nutzer, die Claude und Codex zuverlässig mit mehreren offiziellen und Drittanbieter-Modellanbietern verwenden möchten. Die Desktop-Verwaltungsbasis von [CC Switch](https://github.com/farion1231/cc-switch) bleibt erhalten; die X-Entwicklung konzentriert sich auf Anbieter-Aggregation, Protokollkompatibilität, Modell-Routing und Robustheit.
 
 - **Claude Multi-Anbieter, pro Modellrolle** — Ordnen Sie jeder Claude-Rolle (Sonnet / Opus / Fable / Haiku) Anzeigenamen und Upstream-Modelle zu und routen Sie verschiedene Rollen an verschiedene Anbieter — zum Beispiel Opus von einem Endpunkt, Hintergrund-Haiku von einem günstigeren.
 - **Codex Multi-Anbieter-Aggregation** — Offizielle und Drittanbieter-Codex-Anbieter werden zu einem einzigen Eintrag aggregiert, sodass die Modelle aller Quellen nebeneinander im selben Codex-Modell-Dropdown erscheinen und nahtlos mit den offiziellen Modellen wechseln.
@@ -48,41 +36,11 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 | :-------------------------------------------------------------------------------------------------------------: |
 | ![Codex Modellauswahl mit offiziellen und Drittanbieter-Modellen](assets/screenshots/codex-model-picker-en.png) |
 
-## Funktionen
+## Auf Basis von CC Switch
 
 [Vollständiges Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.1-en.md)
 
-### Anbieterverwaltung
-
-- **8 unterstützte Werkzeuge, 50+ Presets** — Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, Hermes; Schlüssel kopieren und mit einem Klick importieren
-- **Universelle Anbieter** — Eine Konfiguration synchronisiert sich mit Claude Code, Codex und Gemini CLI
-- Umschaltung mit einem Klick, Schnellzugriff über System-Tray, Sortierung per Drag-and-drop, Import/Export
-
-### Proxy & Failover
-
-- **Lokaler Proxy mit Hot-Switching** — Formatkonvertierung, automatisches Failover, Circuit Breaker, Anbieter-Health-Monitoring und Request-Rectifier
-- **Übernahme auf App-Ebene** — Claude, Codex, Gemini oder Grok Build unabhängig über den Proxy leiten, bis hinunter auf einzelne Anbieter
-
-### MCP, Prompts & Skills
-
-- **Einheitliches MCP-Panel** — Verwalten Sie MCP-Server für Claude, Codex, Gemini, Grok Build, OpenCode und Hermes mit bidirektionaler Synchronisierung und Deep-Link-Import
-- **Prompts** — Markdown-Editor mit App-übergreifender Synchronisierung (CLAUDE.md / AGENTS.md / GEMINI.md) und Backfill-Schutz
-- **Skills** — Installation mit einem Klick aus GitHub-Repositorys oder ZIP-Dateien, Verwaltung eigener Repositorys, mit Unterstützung für Symlinks und Dateikopien
-
-### Nutzungs- & Kostenverfolgung
-
-- **Nutzungs-Dashboard** — Verfolgen Sie Ausgaben, Anfragen und Token mit Trenddiagrammen, detaillierten Anfrageprotokollen und eigener Preisgestaltung pro Modell
-
-### Session Manager & Workspace
-
-- Gesprächsverlauf aus unterstützten Sitzungsquellen durchsuchen, suchen und wiederherstellen
-- **Workspace-Editor** (OpenClaw) — Bearbeiten Sie Agent-Dateien (AGENTS.md, SOUL.md usw.) mit Markdown-Vorschau
-
-### System & Plattform
-
-- **Cloud-Synchronisierung** — Eigenes Konfigurationsverzeichnis (Dropbox, OneDrive, iCloud, NAS) und WebDAV-Server-Synchronisierung
-- **Deep Link** (`ccswitchx://`) — Importieren Sie Anbieter, MCP-Server, Prompts und Skills per URL
-- Dunkles / Helles / System-Theme, automatischer Start, automatischer Updater, atomare Schreibvorgänge, automatische Backups, i18n (zh/zh-TW/en/ja)
+CC Switch X übernimmt die umfassenden Desktop-Verwaltungsfunktionen des Upstream-Projekts: Anbieter- und Konfigurationsverwaltung für acht KI-Werkzeuge, MCP / Prompts / Skills, Tray-Umschaltung, Nutzungsverfolgung, Sitzungen, Cloud-Synchronisierung, Import/Export, Backups und plattformübergreifende Unterstützung. Allgemeine Funktionen finden Sie im [Upstream-Projekt](https://github.com/farion1231/cc-switch), Details zur Nutzung im [Benutzerhandbuch](docs/user-manual/en/README.md).
 
 ## FAQ
 

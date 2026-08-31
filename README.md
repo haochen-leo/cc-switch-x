@@ -7,7 +7,7 @@
 See the [CC Switch X fork and maintenance policy](docs/cc-switch-x-maintenance-zh.md)
 for database compatibility, future v19 upgrades, and the Git workflow.
 
-### The All-in-One Manager for Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw & Hermes Agent
+### Multi-provider routing and compatibility for Claude and Codex, built on CC Switch
 
 [![Version](https://img.shields.io/github/v/release/haochen-leo/cc-switch-x?color=blue&label=version)](https://github.com/haochen-leo/cc-switch-x/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/haochen-leo/cc-switch-x/releases)
@@ -22,19 +22,7 @@ English | [中文](README_ZH.md) | [日本語](README_JA.md) | [Deutsch](README_
 
 ## Why CC Switch X?
 
-Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, and Hermes — but each has its own configuration format. Switching API providers means manually editing JSON, TOML, or `.env` files, and there is no unified way to manage MCP and Skills across multiple tools.
-
-**CC Switch** gives you a single desktop app to manage all supported AI tools. Instead of editing config files by hand, you get a visual interface to import providers with one click, switch between them instantly, with 50+ built-in provider presets, unified MCP and Skills management, and system tray quick switching — all backed by a reliable SQLite database with atomic writes that protect your configs from corruption.
-
-- **One App, Eight Tools** — Manage Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, and Hermes from a single interface
-- **No More Manual Editing** — 50+ provider presets including AWS Bedrock, NVIDIA NIM, and community relays; just pick and switch
-- **Unified MCP & Skills Management** — One panel to manage MCP servers and Skills across Claude, Codex, Gemini, Grok Build, OpenCode, and Hermes with bidirectional sync
-- **System Tray Quick Switch** — Switch providers instantly from the tray menu, no need to open the full app
-- **Cloud Sync** — Sync provider data across devices via Dropbox, OneDrive, iCloud, or WebDAV servers
-- **Cross-Platform** — Native desktop app for Windows, macOS, and Linux, built with Tauri 2
-- **Built-in Utilities** — Includes various utilities for first-launch login confirmation, signature bypass, plugin extension sync, and more
-
-### What CC Switch X adds on top
+CC Switch X is a focused fork for users who need Claude and Codex to work reliably across multiple official and third-party model providers. It keeps the desktop management foundation of [CC Switch](https://github.com/farion1231/cc-switch), while concentrating X development on provider aggregation, protocol compatibility, routing, and resilience.
 
 - **Claude multi-provider, per model role** — Map display names and upstream models for each Claude role (Sonnet / Opus / Fable / Haiku), and route different roles to different providers — for example Opus from one endpoint, background Haiku from a cheaper one.
 - **Codex multi-provider aggregation** — Official and third-party Codex providers are aggregated into a single entry, so models from every source appear side by side in the same Codex model dropdown and switch seamlessly with the official ones.
@@ -51,41 +39,11 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 | :------------------------------------------------------------------------------------------------------: |
 | ![Codex model picker with official and third-party models](assets/screenshots/codex-model-picker-en.png) |
 
-## Features
+## Built on CC Switch
 
 [Full Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.1-en.md)
 
-### Provider Management
-
-- **8 supported tools, 50+ presets** — Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, Hermes; copy your key and import with one click
-- **Universal providers** — One config syncs to Claude Code, Codex, and Gemini CLI
-- One-click switching, system tray quick access, drag-and-drop sorting, import/export
-
-### Proxy & Failover
-
-- **Local proxy with hot-switching** — Format conversion, auto-failover, circuit breaker, provider health monitoring, and request rectifier
-- **App-level takeover** — Independently proxy Claude, Codex, Gemini, or Grok Build, down to individual providers
-
-### MCP, Prompts & Skills
-
-- **Unified MCP panel** — Manage MCP servers across Claude, Codex, Gemini, Grok Build, OpenCode, and Hermes with bidirectional sync and Deep Link import
-- **Prompts** — Markdown editor with cross-app sync (CLAUDE.md / AGENTS.md / GEMINI.md) and backfill protection
-- **Skills** — One-click install from GitHub repos or ZIP files, custom repository management, with symlink and file copy support
-
-### Usage & Cost Tracking
-
-- **Usage dashboard** — Track spending, requests, and tokens with trend charts, detailed request logs, and custom per-model pricing
-
-### Session Manager & Workspace
-
-- Browse, search, and restore conversation history across supported session sources
-- **Workspace editor** (OpenClaw) — Edit agent files (AGENTS.md, SOUL.md, etc.) with Markdown preview
-
-### System & Platform
-
-- **Cloud sync** — Custom config directory (Dropbox, OneDrive, iCloud, NAS) and WebDAV server sync
-- **Deep Link** (`ccswitchx://`) — Import providers, MCP servers, prompts, and skills via URL
-- Dark / Light / System theme, auto-launch, auto-updater, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
+CC Switch X retains the upstream project's broad desktop-management capabilities: provider and configuration management for eight AI tools, MCP / Prompts / Skills, tray switching, usage tracking, sessions, cloud sync, import/export, backups, and cross-platform support. See the [upstream project](https://github.com/farion1231/cc-switch) for the general feature set and the [user manual](docs/user-manual/en/README.md) for usage details.
 
 ## FAQ
 
