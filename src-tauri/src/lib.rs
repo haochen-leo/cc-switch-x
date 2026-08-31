@@ -1,6 +1,7 @@
 mod app_config;
 mod app_store;
 mod auto_launch;
+mod brand;
 mod claude_desktop_config;
 mod claude_mcp;
 mod claude_plugin;
@@ -41,12 +42,13 @@ mod usage_script;
 
 pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
 pub use codex_config::{
-    get_codex_auth_path, get_codex_config_path, read_codex_live_settings, write_codex_live_atomic,
+    extract_codex_experimental_bearer_token, get_codex_auth_path, get_codex_config_path,
+    read_codex_live_settings, write_codex_live_atomic,
 };
 pub use commands::open_provider_terminal;
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
-pub use database::{Database, Profile};
+pub use database::{Database, LegacyImportReport, Profile};
 pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
 pub use error::AppError;
 pub use grok_config::get_grok_config_path;
@@ -237,7 +239,7 @@ fn runtime_log_level_allows(level: log::Level, max_level: log::LevelFilter) -> b
     max_level.to_level().is_some_and(|maximum| level <= maximum)
 }
 
-/// 统一处理 ccswitch:// 深链接 URL
+/// 统一处理 ccswitchx:// 深链接 URL
 ///
 /// - 解析 URL
 /// - 向前端发射 `deeplink-import` / `deeplink-error` 事件
@@ -248,7 +250,8 @@ fn handle_deeplink_url(
     focus_main_window: bool,
     source: &str,
 ) -> bool {
-    if !url_str.starts_with("ccswitch://") {
+    let deep_link_prefix = format!("{}://", crate::brand::DEEP_LINK_SCHEME);
+    if !url_str.starts_with(&deep_link_prefix) {
         return false;
     }
 
@@ -340,7 +343,7 @@ fn macos_tray_icon() -> Option<Image<'static>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.cc-switch/crash.log）
+    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.cc-switch-x/crash.log）
     panic_hook::setup_panic_hook();
 
     let mut builder = tauri::Builder::default();
@@ -453,7 +456,7 @@ pub fn run() {
             app_store::refresh_app_config_dir_override(app.handle());
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
 
-            // 初始化日志（输出到 <app_config_dir>/logs/cc-switch.log）
+            // 初始化日志（输出到 <app_config_dir>/logs/cc-switch-x.log）
             {
                 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
@@ -478,7 +481,7 @@ pub fn run() {
                             Target::new(TargetKind::Stdout),
                             Target::new(TargetKind::Folder {
                                 path: log_dir,
-                                file_name: Some("cc-switch".into()),
+                                file_name: Some("cc-switch-x".into()),
                             }),
                         ])
                         // KeepSome(4) 保留 4 个轮转归档，加上当前文件最多约 100 MiB。
@@ -491,7 +494,11 @@ pub fn run() {
 
                 // 用户配置存在数据库中，数据库尚未打开时使用保守的 Info 级别。
                 log::set_max_level(log::LevelFilter::Info);
-                log::info!("=== CC Switch v{} started ===", env!("CARGO_PKG_VERSION"));
+                log::info!(
+                    "=== {} v{} started ===",
+                    crate::brand::APP_NAME,
+                    env!("CARGO_PKG_VERSION")
+                );
             }
 
             // 首次读取覆盖路径时 logger 尚未可用；此处重放一次，
@@ -526,6 +533,12 @@ pub fn run() {
             // 检查是否需要从 config.json 迁移到 SQLite
             let has_json = json_path.exists();
             let has_db = db_path.exists();
+            let official_import_dir = crate::brand::official_app_config_dir();
+            let official_import_db = official_import_dir.join("cc-switch.db");
+            let import_official_data = !has_db
+                && official_import_db.exists()
+                && official_import_db != db_path
+                && show_official_import_dialog(app.handle(), &official_import_dir);
 
             // 如果需要迁移，先验证 config.json 是否可以加载（在创建数据库之前）
             // 这样如果加载失败用户选择退出，数据库文件还没被创建，下次可以正常重试
@@ -606,6 +619,25 @@ pub fn run() {
                     }
                 }
             };
+
+            if import_official_data {
+                match db.import_from_official_data_dir(&official_import_dir) {
+                    Ok(report) => {
+                        log::info!(
+                            "✓ Imported CC Switch data into CC Switch X: source_schema=v{}, rows={}, settings_file={}, skill_files={}",
+                            report.source_schema_version,
+                            report.imported_rows,
+                            report.imported_settings_file,
+                            report.imported_skill_files
+                        );
+                        crate::init_status::set_migration_success();
+                    }
+                    Err(e) => {
+                        log::error!("Failed to import existing CC Switch data: {e}");
+                        show_official_import_failed_dialog(app.handle(), &e.to_string());
+                    }
+                }
+            }
 
             // 数据库可用后立即应用持久化日志级别，避免后续服务初始化
             // 继续使用启动阶段的 Info 回退。损坏配置显式 fail-closed 到 Info。
@@ -1018,12 +1050,12 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 {
                     // Use Tauri's path API to get correct path (includes app identifier)
-                    // tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop
+                    // tauri-plugin-deep-link names the desktop entry from the executable.
                     // Only register if .desktop file doesn't exist to avoid overwriting user customizations
                     let should_register = app
                         .path()
                         .data_dir()
-                        .map(|d| !d.join("applications/cc-switch-handler.desktop").exists())
+                        .map(|d| !d.join("applications/cc-switch-x-handler.desktop").exists())
                         .unwrap_or(true);
 
                     if should_register {
@@ -1066,7 +1098,7 @@ pub fn run() {
                         log::debug!("  URL[{i}]: {}", url_for_log(url_str));
 
                         if handle_deeplink_url(&app_handle, url_str, true, "on_open_url") {
-                            break; // Process only first ccswitch:// URL
+                            break; // Process only first ccswitchx:// URL
                         }
                     }
                 }
@@ -1078,7 +1110,7 @@ pub fn run() {
 
             // 构建托盘
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
-                .tooltip("CC Switch X") // 鼠标悬停提示
+                .tooltip(crate::brand::APP_NAME) // 鼠标悬停提示
                 .on_tray_icon_event(|tray, event| match event {
                     // 鼠标悬停/点击到托盘图标时，后台异步刷新用量缓存，
                     // 让用户下一次（或快速打开菜单的那一刻）看到较新的数字。
@@ -1268,6 +1300,11 @@ pub fn run() {
                     const SESSION_SYNC_INTERVAL_SECS: u64 = 60;
 
                     async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
+                        // 手动扫描模式下跳过定时扫描；backfill 轮（启动首轮）仍进入，
+                        // 费用回填只修补数据库既有行（含代理记账行），不读会话文件
+                        if !backfill && !crate::settings::get_settings().session_auto_sync_enabled {
+                            return;
+                        }
                         let _guard = crate::services::session_usage::session_sync_mutex()
                             .lock()
                             .await;
@@ -1276,6 +1313,9 @@ pub fn run() {
                                 if let Err(error) = db.backfill_missing_usage_costs() {
                                     log::warn!("Usage cost startup backfill failed: {error}");
                                 }
+                            }
+                            if !crate::settings::get_settings().session_auto_sync_enabled {
+                                return crate::services::session_usage::SessionSyncResult::default();
                             }
                             crate::services::session_usage::sync_all_unlocked(&db)
                         });
@@ -1663,6 +1703,7 @@ pub fn run() {
             // Generic managed auth commands
             commands::auth_start_login,
             commands::auth_poll_for_account,
+            commands::auth_cancel_login,
             commands::auth_list_accounts,
             commands::auth_get_status,
             commands::auth_remove_account,
@@ -1790,7 +1831,7 @@ pub fn run() {
                         }
                     }
                 }
-                // 处理通过自定义 URL 协议触发的打开事件（例如 ccswitch://...）
+                // 处理通过自定义 URL 协议触发的打开事件（例如 ccswitchx://...）
                 RunEvent::Opened { urls } => {
                     if let Some(url) = urls.first() {
                         let url_str = url.to_string();
@@ -1799,7 +1840,9 @@ pub fn run() {
                             url_for_log(&url_str)
                         );
 
-                        if url_str.starts_with("ccswitch://") {
+                        let deep_link_prefix =
+                            format!("{}://", crate::brand::DEEP_LINK_SCHEME);
+                        if url_str.starts_with(&deep_link_prefix) {
                             if crate::lightweight::is_lightweight_mode() {
                                 if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle)
                                 {
@@ -2079,6 +2122,66 @@ fn is_chinese_locale() -> bool {
         .or_else(|_| std::env::var("LC_MESSAGES"))
         .map(|lang| lang.starts_with("zh"))
         .unwrap_or(false)
+}
+
+fn show_official_import_dialog(app: &tauri::AppHandle, source_dir: &std::path::Path) -> bool {
+    let (title, message, import_text, skip_text) = if is_chinese_locale() {
+        (
+            "导入现有 CC Switch 数据",
+            format!(
+                "检测到现有配置：\n{}\n\n是否将供应商、MCP、Prompts、Profiles、Skills 和常用设置只读导入到独立的 ~/.cc-switch-x？\n\n原目录不会被修改；代理接管、自动启动、云同步和官方更新设置不会导入。",
+                source_dir.display()
+            ),
+            "导入",
+            "跳过",
+        )
+    } else {
+        (
+            "Import Existing CC Switch Data",
+            format!(
+                "Existing data was found at:\n{}\n\nImport providers, MCP, prompts, profiles, skills, and common settings into the isolated ~/.cc-switch-x directory?\n\nThe source remains untouched. Proxy takeover, auto-start, cloud sync, and official updater settings are not imported.",
+                source_dir.display()
+            ),
+            "Import",
+            "Skip",
+        )
+    };
+
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            import_text.to_string(),
+            skip_text.to_string(),
+        ))
+        .blocking_show()
+}
+
+fn show_official_import_failed_dialog(app: &tauri::AppHandle, error: &str) {
+    let (title, message) = if is_chinese_locale() {
+        (
+            "导入未完成",
+            format!(
+                "现有 CC Switch 数据导入失败：\n\n{error}\n\n原始数据没有被修改。CC Switch X 将使用新的独立数据库启动。"
+            ),
+        )
+    } else {
+        (
+            "Import Not Completed",
+            format!(
+                "Existing CC Switch data could not be imported:\n\n{error}\n\nThe source data was not modified. CC Switch X will continue with a new isolated database."
+            ),
+        )
+    };
+
+    let _ = app
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::Ok)
+        .blocking_show();
 }
 
 /// 显示迁移错误对话框

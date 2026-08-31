@@ -46,8 +46,8 @@
   },
   "firstRunNotice": {
     "title": "欢迎使用 CC Switch X",
-    "bodyDefault": "CC Switch X 可以帮你在 Claude Code / Codex / Gemini CLI 的多个供应商之间一键切换。如果你之前已经配置过这些工具，CC Switch X 会自动把现有设置保存为名为 “default” 的供应商，保证你的配置不会丢失。",
-    "bodyOfficial": "列表里还预置了 “官方（Official）” 供应商，随时点一下即可切回官方默认配置。切换前 CC Switch X 会自动把当前配置备份回 default，可以放心来回切。CC Switch X 就是这样工作的 😊",
+    "bodyDefault": "CC Switch X 可以帮你在 Claude Code / Codex / Gemini CLI 的多个供应商之间一键切换。已有 CC Switch 数据可导入独立的 X 数据目录，当前工具配置也会保留为名为 “default” 的供应商。",
+    "bodyOfficial": "列表里的“官方（Official）”供应商仍可使用。CC Switch X 是使用独立数据库的非官方分叉版本，但仍会管理 Claude Code、Codex、Gemini CLI 等工具的真实配置文件。",
     "confirm": "我知道了"
   },
   "apiKeyInput": {
@@ -288,6 +288,7 @@
     "openclawNoModels": "该供应商没有配置模型",
     "openclawModelNotFound": "所选模型已不存在，请刷新后重试",
     "backfillWarning": "切换成功，但旧供应商配置回填失败，您手动修改的配置可能未保存",
+    "codexAuthCleanupFailed": "切换成功，但未能删除 auth.json，官方登录凭据仍留在磁盘上；如需彻底移除请手动删除 Codex 配置目录中的 auth.json",
     "windowControlFailed": "窗口控制失败：{{error}}",
     "officialBlockedByProxy": "本地路由模式下不能切换到官方供应商，使用路由访问官方 API 可能导致账号被封禁",
     "proxyOfficialWarning": "当前供应商 {{name}} 是官方供应商，建议切换到第三方供应商后再使用本地路由",
@@ -312,7 +313,7 @@
     },
     "unifyCodexHistory": {
       "title": "统一 Codex 会话历史",
-      "message": "开启后，官方订阅与第三方将共用同一个会话历史列表。注意：跨供应商继续旧会话时，可能因对方后端无法解密 encrypted_content 推理内容而失败。\n\n可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份到 ~/.cc-switch/backups，关闭开关时可选择恢复）。",
+      "message": "开启后，官方订阅与第三方将共用同一个会话历史列表。注意：跨供应商继续旧会话时，可能因对方后端无法解密 encrypted_content 推理内容而失败。\n\n可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份到 ~/.cc-switch-x/backups，关闭开关时可选择恢复）。",
       "migrateExisting": "同时迁入现有官方会话历史",
       "confirm": "我已了解，继续开启"
     },
@@ -432,9 +433,9 @@
         "title": "应用诊断日志",
         "description": "控制应用诊断日志的输出级别",
         "enabled": "启用应用诊断日志",
-        "enabledDescription": "控制 cc-switch.log；关闭后也会停止正文采集，不影响请求用量记录和 crash.log",
+        "enabledDescription": "控制 cc-switch-x.log；关闭后也会停止正文采集，不影响请求用量记录和 crash.log",
         "capturePayloads": "持续记录请求/响应正文",
-        "capturePayloadsDescription": "持续写入独立的 cc-switch-payload.log，直到关闭。正文可能包含敏感信息；诊断日志总开关关闭时不会记录。",
+        "capturePayloadsDescription": "持续写入独立的 cc-switch-x-payload.log，直到关闭。正文可能包含敏感信息；诊断日志总开关关闭时不会记录。",
         "captureMaxSizeMb": "单个正文日志大小（MB）",
         "captureMaxSizeMbDescription": "超过大小后轮转为归档文件，默认 50",
         "captureArchives": "保留归档数量",
@@ -556,7 +557,7 @@
         "synologyHint": "请先在群晖「套件中心」安装并启用 WebDAV Server 套件。",
         "custom": "自定义"
       },
-      "remoteRootDefault": "默认: cc-switch-sync",
+      "remoteRootDefault": "默认: cc-switch-x-sync",
       "profileDefault": "默认: default",
       "saveAndTestSuccess": "配置已保存，连接正常",
       "saveAndTestFailed": "配置已保存，但连接测试失败：{{error}}",
@@ -630,7 +631,7 @@
       "endpointHint": "多数 S3 兼容服务需要填写",
       "endpointPlaceholder": "例如 https://s3-compatible.example.com",
       "remoteRoot": "远程根目录",
-      "remoteRootDefault": "默认: cc-switch-sync",
+      "remoteRootDefault": "默认: cc-switch-x-sync",
       "profile": "同步配置名",
       "profileDefault": "默认: default",
       "autoSync": "自动同步",
@@ -740,7 +741,7 @@
       "description": "选择 CC Switch 存放 Skills 主副本的目录",
       "ccSwitch": "CC Switch",
       "unified": "~/.agents/skills",
-      "ccSwitchHint": "技能存储在 ~/.cc-switch/skills/，由 CC Switch 统一管理并同步到各应用。",
+      "ccSwitchHint": "技能存储在 ~/.cc-switch-x/skills/，由 CC Switch X 统一管理并同步到各应用。",
       "unifiedHint": "技能存储在 ~/.agents/skills/，遵循 Agent Skills 开放标准。兼容的工具（Claude Code、Codex、Gemini CLI 等）可直接发现此目录中的技能。",
       "confirmTitle": "迁移技能存储",
       "confirmMessage": "将移动 {{count}} 个技能到新位置，是否继续？",
@@ -765,6 +766,7 @@
           "alacritty": "Alacritty",
           "kitty": "Kitty",
           "ghostty": "Ghostty",
+          "otty": "Otty",
           "wezterm": "WezTerm",
           "kaku": "Kaku",
           "warp": "Warp"
@@ -786,9 +788,9 @@
     },
     "configDirectoryOverride": "配置目录覆盖（高级）",
     "configDirectoryDescription": "在 WSL 等环境使用 Claude Code 或 Codex 的时候，可手动指定为 WSL 里的配置目录，供应商数据与主环境保持一致。",
-    "appConfigDir": "CC Switch 配置目录",
-    "appConfigDirDescription": "自定义 CC Switch 的配置存储位置（指定到云同步文件夹即可云同步配置）",
-    "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch",
+    "appConfigDir": "CC Switch X 配置目录",
+    "appConfigDirDescription": "自定义 CC Switch X 的独立配置存储位置",
+    "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch-x",
     "claudeConfigDir": "Claude Code 配置目录",
     "claudeConfigDirDescription": "覆盖 Claude 配置目录 (settings.json)。真正自定义目录会在目录内存放 Claude MCP 的 .claude.json；默认 ~/.claude 目录仍使用 Claude 默认的 ~/.claude.json。",
     "codexConfigDir": "Codex 配置目录",
@@ -830,10 +832,12 @@
     "releaseNotes": "更新日志",
     "viewReleaseNotes": "查看该版本更新日志",
     "viewCurrentReleaseNotes": "查看当前版本更新日志",
-    "officialUpdatesDisabled": "当前 CC Switch X 版本已禁用官方应用内升级，避免覆盖本地安装。",
+    "officialUpdatesDisabled": "CC Switch X 已禁用官方应用内升级，避免覆盖这个独立安装。",
     "officialUpdatesDisabledBadge": "官方升级已禁用",
     "officialWebsite": "官方网站",
     "github": "GitHub",
+    "unofficialFork": "非官方分叉",
+    "inAppUpdatesDisabled": "应用内更新未启用",
     "manualInstallCommands": "手动安装命令",
     "oneClickInstallHint": "安装或升级 Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes / Pi",
     "localEnvCheck": "本地环境检查",
@@ -887,7 +891,7 @@
     "saving": "正在保存...",
     "globalProxy": {
       "label": "全局代理",
-      "hint": "代理所有请求（API、Skills 下载等）。开启本地路由时，应用的请求也会经过此代理。留空表示直连。",
+      "hint": "代理所有请求（API、Skills 下载等）。开启本地路由时，应用的请求也会经过此代理。留空时跟随系统或环境代理；若其指向 CC Switch X 本地路由，则自动绕过以避免循环。",
       "username": "用户名（可选）",
       "password": "密码（可选）",
       "test": "测试连接",
@@ -1382,6 +1386,8 @@
     "claudeRoutingProxyNotRunning": "本地路由服务未启动，模型路由供应商配置不会生效。",
     "claudeRoutingTakeoverNotEnabled": "Claude 接管未开启，模型路由供应商配置不会生效。",
     "claudeRoutingRectifierSuggested": "已配置“模型路由供应商”；跨供应商继续历史对话时，建议在设置中开启整流器和 Tool Use ID 整流。",
+    "claudeRoutingEffectiveSlotHint": "当前已路由到 {{provider}}，此处展示并使用的是该供应商的 {{role}} 槽位；当前供应商的同名槽位不会生效。",
+    "claudeRoutingMissingSlotHint": "当前已路由到 {{provider}}，但该供应商尚未配置 {{role}} 槽位，请到目标供应商中补齐。",
     "requiredFields": "请填写供应商名称、API 地址、API Key 和模型"
   },
   "copilot": {
@@ -1587,6 +1593,7 @@
     "addToModelMapping": "加入映射",
     "modelMappingTitle": "模型映射",
     "modelMappingHint": "生成 Codex model_catalog_json，让 /model 命令显示这些第三方模型名；表中条目按填写内容原样保存。修改后需要重启 Codex 才能刷新模型列表。",
+    "catalogAutoManagedHint": "该目录由多模型来源供应商自动生成。",
     "addCatalogModel": "添加模型",
     "catalogDisplayName": "显示名称",
     "catalogDisplayNamePlaceholder": "例如: DeepSeek V4 Flash",
@@ -1751,6 +1758,13 @@
       "pi": "Pi"
     },
     "rawInputLabel": "原始",
+    "sessionSync": {
+      "title": "自动扫描会话记录",
+      "description": "定期扫描各客户端的本地会话记录以统计用量；关闭后仅在手动同步时扫描",
+      "syncNow": "立即同步",
+      "syncCompleted": "同步完成：新增 {{imported}} 条，扫描 {{files}} 个文件，错误 {{errors}}",
+      "syncFailed": "会话用量同步失败：{{error}}"
+    },
     "rebuildCodex": {
       "title": "Codex 用量维护",
       "description": "从本地 rollout 日志重新构建 Codex 会话用量",
@@ -2848,7 +2862,7 @@
         },
         "listenPort": {
           "label": "监听端口",
-          "placeholder": "15721",
+          "placeholder": "15722",
           "description": "路由服务器监听的端口号（1024 ~ 65535）"
         },
         "maxRetries": {

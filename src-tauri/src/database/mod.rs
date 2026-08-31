@@ -25,8 +25,10 @@
 
 pub(crate) mod backup;
 mod dao;
+mod legacy_import;
 mod migration;
 mod schema;
+mod x_schema;
 
 #[cfg(test)]
 mod tests;
@@ -42,6 +44,7 @@ pub(crate) use dao::proxy::{
 };
 pub use dao::FailoverQueueItem;
 pub use dao::Profile;
+pub use legacy_import::LegacyImportReport;
 
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
@@ -53,7 +56,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 17;
+pub(crate) const SCHEMA_VERSION: i32 = 18;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -96,7 +99,7 @@ fn register_db_change_hook(conn: &Connection) {
 impl Database {
     /// 初始化数据库连接并创建表
     ///
-    /// 数据库文件位于 `~/.cc-switch/cc-switch.db`
+    /// 数据库文件位于 `~/.cc-switch-x/cc-switch.db`
     pub fn init() -> Result<Self, AppError> {
         let db_path = get_app_config_dir().join("cc-switch.db");
         let db_exists = db_path.exists();
@@ -140,6 +143,7 @@ impl Database {
         }
 
         db.apply_schema_migrations()?;
+        db.apply_x_schema()?;
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
@@ -197,6 +201,7 @@ impl Database {
             conn: Mutex::new(conn),
         };
         db.create_tables()?;
+        db.apply_x_schema()?;
         db.ensure_model_pricing_seeded()?;
 
         Ok(db)

@@ -17,7 +17,7 @@ fn get_macos_app_bundle_path(exe_path: &std::path::Path) -> Option<std::path::Pa
 
 /// 初始化 AutoLaunch 实例
 fn get_auto_launch() -> Result<AutoLaunch, AppError> {
-    let app_name = "CC Switch X";
+    let app_name = crate::brand::APP_NAME;
     let exe_path =
         std::env::current_exe().map_err(|e| AppError::Message(format!("无法获取应用路径: {e}")))?;
 
@@ -76,24 +76,20 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn test_get_macos_app_bundle_path_valid() {
-        let exe_path = std::path::Path::new(
-            "/Applications/CC Switch X.app/Contents/MacOS/CC Switch X",
-        );
+        let exe_path =
+            std::path::Path::new("/Applications/CC Switch X.app/Contents/MacOS/CC Switch X");
         let result = get_macos_app_bundle_path(exe_path);
         assert_eq!(
             result,
-            Some(std::path::PathBuf::from(
-                "/Applications/CC Switch X.app"
-            ))
+            Some(std::path::PathBuf::from("/Applications/CC Switch X.app"))
         );
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn test_get_macos_app_bundle_path_with_spaces() {
-        let exe_path = std::path::Path::new(
-            "/Users/test/My Apps/CC Switch X.app/Contents/MacOS/CC Switch X",
-        );
+        let exe_path =
+            std::path::Path::new("/Users/test/My Apps/CC Switch X.app/Contents/MacOS/CC Switch X");
         let result = get_macos_app_bundle_path(exe_path);
         assert_eq!(
             result,

@@ -5,6 +5,8 @@
 
 use once_cell::sync::OnceCell;
 use reqwest::Client;
+use std::env;
+use std::net::IpAddr;
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -19,16 +21,26 @@ static CC_SWITCH_PROXY_PORT: OnceCell<RwLock<u16>> = OnceCell::new();
 
 /// 设置 CC Switch 代理服务器的监听端口
 ///
-/// 远端启动流程在代理绑定实际端口后会调用这里。
-/// 当前本地实现只需要记录端口，保留“留空表示直连”的现有语义。
+/// 应在代理服务器启动时调用，以便系统代理检测能正确识别自己的端口。
 pub fn set_proxy_port(port: u16) {
     if let Some(lock) = CC_SWITCH_PROXY_PORT.get() {
         if let Ok(mut current_port) = lock.write() {
             *current_port = port;
+            log::debug!("[GlobalProxy] Updated CC Switch X proxy port to {port}");
         }
     } else {
         let _ = CC_SWITCH_PROXY_PORT.set(RwLock::new(port));
+        log::debug!("[GlobalProxy] Initialized CC Switch X proxy port to {port}");
     }
+}
+
+/// 获取 CC Switch X 代理服务器的监听端口。
+fn get_proxy_port() -> u16 {
+    CC_SWITCH_PROXY_PORT
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|port| *port)
+        .unwrap_or(crate::brand::DEFAULT_PROXY_PORT)
 }
 
 /// 初始化全局 HTTP 客户端
@@ -172,7 +184,7 @@ pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 
 /// 获取全局 HTTP 客户端
 ///
-/// 返回配置了代理的客户端（如果已配置代理），否则返回直连客户端。
+/// 返回配置了代理的客户端（如果已配置代理），否则跟随系统代理。
 pub fn get() -> Client {
     GLOBAL_CLIENT
         .get()
@@ -214,7 +226,7 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         .no_deflate()
         .no_zstd();
 
-    // 有代理地址则使用代理，否则强制直连
+    // 有代理地址则使用代理，否则跟随系统代理。
     if let Some(url) = proxy_url {
         // 先验证 URL 格式和 scheme
         let parsed = url::Url::parse(url)
@@ -234,16 +246,67 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         builder = builder.proxy(proxy);
         log::debug!("[GlobalProxy] Proxy configured: {}", mask_url(url));
     } else {
-        // 设置页文案明确约定“留空表示直连”。
-        // 这里必须同时禁用系统代理和环境变量代理，避免 macOS/SystemConfiguration
-        // 或 shell 环境把请求重新导向本地代理，导致运行态和用户配置语义不一致。
-        builder = builder.no_proxy();
-        log::debug!("[GlobalProxy] Direct connection configured, bypassing system proxy");
+        // 未显式配置时让 reqwest 检测系统代理；如果系统代理正指向
+        // CC Switch X 自己的监听端口，则禁用它以避免代理递归。
+        if system_proxy_points_to_loopback() {
+            builder = builder.no_proxy();
+            log::warn!(
+                "[GlobalProxy] System proxy points to CC Switch X, bypassing to avoid recursion"
+            );
+        } else {
+            log::debug!("[GlobalProxy] Following system proxy (no explicit proxy configured)");
+        }
     }
 
     builder
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
+fn system_proxy_points_to_loopback() -> bool {
+    const KEYS: [&str; 6] = [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
+
+    KEYS.iter()
+        .filter_map(|key| env::var(key).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .any(|value| proxy_points_to_loopback(&value))
+}
+
+fn proxy_points_to_loopback(value: &str) -> bool {
+    fn host_is_loopback(host: &str) -> bool {
+        if host.eq_ignore_ascii_case("localhost") {
+            return true;
+        }
+        host.parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+    }
+
+    let is_own_proxy_port = |port: Option<u16>| port == Some(get_proxy_port());
+
+    if let Ok(parsed) = url::Url::parse(value) {
+        if let Some(host) = parsed.host_str() {
+            return host_is_loopback(host) && is_own_proxy_port(parsed.port());
+        }
+        return false;
+    }
+
+    let with_scheme = format!("http://{value}");
+    if let Ok(parsed) = url::Url::parse(&with_scheme) {
+        if let Some(host) = parsed.host_str() {
+            return host_is_loopback(host) && is_own_proxy_port(parsed.port());
+        }
+    }
+
+    false
 }
 
 /// 隐藏 URL 中的敏感信息（用于日志）
@@ -268,6 +331,12 @@ pub fn mask_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_mask_url() {
@@ -315,5 +384,67 @@ mod tests {
         // 使用明确无效的 scheme 来触发错误
         let result = build_client(Some("invalid-scheme://127.0.0.1:7890"));
         assert!(result.is_err(), "Should reject invalid proxy scheme");
+    }
+    #[test]
+    fn test_proxy_points_to_loopback() {
+        let port = crate::brand::DEFAULT_PROXY_PORT;
+        set_proxy_port(port);
+
+        // 只有指向 CC Switch 自己端口的 loopback 地址才返回 true
+        assert!(proxy_points_to_loopback(&format!(
+            "http://127.0.0.1:{port}"
+        )));
+        assert!(proxy_points_to_loopback(&format!(
+            "socks5://localhost:{port}"
+        )));
+        assert!(proxy_points_to_loopback(&format!("127.0.0.1:{port}")));
+
+        // 其他 loopback 端口不应该被跳过（允许使用其他本地代理工具）
+        assert!(!proxy_points_to_loopback("http://127.0.0.1:7890"));
+        assert!(!proxy_points_to_loopback("socks5://localhost:1080"));
+
+        // 非 loopback 地址不应该被跳过
+        assert!(!proxy_points_to_loopback("http://192.168.1.10:7890"));
+        assert!(!proxy_points_to_loopback(&format!(
+            "http://192.168.1.10:{port}"
+        )));
+    }
+
+    #[test]
+    fn test_system_proxy_points_to_loopback() {
+        let _guard = env_lock().lock().unwrap();
+
+        // 设置 CC Switch 代理端口
+        let port = crate::brand::DEFAULT_PROXY_PORT;
+        set_proxy_port(port);
+
+        let keys = [
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ];
+
+        for key in &keys {
+            std::env::remove_var(key);
+        }
+
+        // 指向 CC Switch 端口的代理应该被跳过
+        std::env::set_var("HTTP_PROXY", format!("http://127.0.0.1:{port}"));
+        assert!(system_proxy_points_to_loopback());
+
+        // 指向其他端口的本地代理不应该被跳过
+        std::env::set_var("HTTP_PROXY", "http://127.0.0.1:7890");
+        assert!(!system_proxy_points_to_loopback());
+
+        // 非 loopback 地址不应该被跳过
+        std::env::set_var("HTTP_PROXY", "http://10.0.0.2:7890");
+        assert!(!system_proxy_points_to_loopback());
+
+        for key in &keys {
+            std::env::remove_var(key);
+        }
     }
 }

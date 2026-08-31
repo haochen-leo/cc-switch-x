@@ -1,5 +1,9 @@
 name: WSL2 Nightly
 
+# CC Switch X keeps the inherited nightly suite disabled by default: a 50+
+# minute scheduled run burns private-repo Actions quota every night. Enable it
+# by setting the repository variable X_WSL2_NIGHTLY_ENABLED=true.
+#
 # The full backend suite takes 50+ minutes on a \\wsl.localhost 9P filesystem,
 # so it runs nightly instead of per PR. The per-PR gate in ci.yml only runs the
 # atomic-write contract test against the same WSL2-backed environment.
@@ -11,6 +15,7 @@ on:
 jobs:
   backend-windows-wsl2-full:
     name: Backend Full Suite (Windows + WSL2 home)
+    if: ${{ vars.X_WSL2_NIGHTLY_ENABLED == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 90
     permissions:

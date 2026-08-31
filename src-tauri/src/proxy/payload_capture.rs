@@ -13,7 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-const PAYLOAD_LOG_FILE_NAME: &str = "cc-switch-payload.log";
+const PAYLOAD_LOG_FILE_NAME: &str = "cc-switch-x-payload.log";
 const MB: u64 = 1024 * 1024;
 
 static PAYLOAD_LOG_LOCK: Mutex<()> = Mutex::new(());

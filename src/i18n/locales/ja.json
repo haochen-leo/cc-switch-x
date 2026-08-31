@@ -46,8 +46,8 @@
   },
   "firstRunNotice": {
     "title": "CC Switch X へようこそ",
-    "bodyDefault": "CC Switch X は Claude Code / Codex / Gemini CLI の複数プロバイダーをワンクリックで切り替えられるツールです。すでにこれらのツールを設定済みの場合、CC Switch X は現在の設定を「default」という名前のプロバイダーとして自動的に保存するので、既存の設定が失われることはありません。",
-    "bodyOfficial": "リストには「Official（公式）」プリセットも用意されており、公式バージョンに戻したくなったらクリックするだけで切り替えられます。切り替える前に現在の設定は自動で default にバックアップされるので、自由に行き来できます。これが CC Switch X の仕組みです 😊",
+    "bodyDefault": "CC Switch X は Claude Code / Codex / Gemini CLI の複数プロバイダーをワンクリックで切り替えられます。既存の CC Switch データは独立した X データディレクトリへ取り込め、現在のツール設定も「default」プロバイダーとして保持されます。",
+    "bodyOfficial": "「Official（公式）」プリセットも引き続き利用できます。CC Switch X は独立したデータベースを使う非公式フォークですが、Claude Code、Codex、Gemini CLI などの実設定ファイルは従来どおり管理します。",
     "confirm": "了解しました"
   },
   "apiKeyInput": {
@@ -288,6 +288,7 @@
     "openclawNoModels": "モデルが設定されていません",
     "openclawModelNotFound": "選択したモデルは存在しません。更新してからもう一度お試しください。",
     "backfillWarning": "切り替え成功しましたが、前のプロバイダーへの設定保存に失敗しました",
+    "codexAuthCleanupFailed": "切り替えは成功しましたが、auth.json を削除できませんでした。公式ログイン資格情報がディスクに残っています。完全に削除するには Codex 設定ディレクトリの auth.json を手動で削除してください",
     "windowControlFailed": "ウィンドウ操作に失敗しました: {{error}}",
     "officialBlockedByProxy": "ローカルルーティングモード中は公式プロバイダーに切り替えできません。ルーティング経由で公式 API にアクセスするとアカウントが停止される可能性があります。",
     "proxyOfficialWarning": "現在のプロバイダー {{name}} は公式です。ローカルルーティングを使用する前にサードパーティプロバイダーに切り替えてください。",
@@ -312,7 +313,7 @@
     },
     "unifyCodexHistory": {
       "title": "Codex セッション履歴を統一",
-      "message": "オンにすると、公式サブスクリプションとサードパーティが同じセッション履歴リストを共有します。注意：プロバイダーをまたいで古いセッションを再開すると、encrypted_content を相手のバックエンドが復号できず失敗する場合があります。\n\n既存の公式セッション履歴を共有リストへ移行することもできます（移行前に ~/.cc-switch/backups へ自動バックアップされ、オフにする際に復元を選択できます）。",
+      "message": "オンにすると、公式サブスクリプションとサードパーティが同じセッション履歴リストを共有します。注意：プロバイダーをまたいで古いセッションを再開すると、encrypted_content を相手のバックエンドが復号できず失敗する場合があります。\n\n既存の公式セッション履歴を共有リストへ移行することもできます（移行前に ~/.cc-switch-x/backups へ自動バックアップされ、オフにする際に復元できます）。",
       "migrateExisting": "既存の公式セッション履歴も移行する",
       "confirm": "理解しました、オンにする"
     },
@@ -432,9 +433,9 @@
         "title": "アプリ診断ログ",
         "description": "アプリ診断ログの出力レベルを制御",
         "enabled": "診断ログを有効化",
-        "enabledDescription": "cc-switch.log を制御します。無効にすると本文の記録も停止しますが、リクエスト使用量記録と crash.log には影響しません",
+        "enabledDescription": "cc-switch-x.log を制御します。無効にすると本文の記録も停止しますが、リクエスト使用量記録と crash.log には影響しません",
         "capturePayloads": "リクエスト/レスポンス本文を継続記録",
-        "capturePayloadsDescription": "無効にするまで独立した cc-switch-payload.log にプロキシのリクエストとレスポンス本文を継続的に記録します。本文には機密情報が含まれる可能性があり、診断ログ全体を無効にすると記録も停止します。",
+        "capturePayloadsDescription": "無効にするまで独立した cc-switch-x-payload.log にプロキシのリクエストとレスポンス本文を継続的に記録します。本文には機密情報が含まれる可能性があり、診断ログ全体を無効にすると記録も停止します。",
         "captureMaxSizeMb": "ペイロードログサイズ（MB）",
         "captureMaxSizeMbDescription": "サイズ超過時にアーカイブへローテーション、既定 50",
         "captureArchives": "保持するアーカイブ数",
@@ -556,7 +557,7 @@
         "synologyHint": "Synology の「パッケージセンター」で WebDAV Server パッケージをインストール・有効化してください。",
         "custom": "カスタム"
       },
-      "remoteRootDefault": "デフォルト: cc-switch-sync",
+      "remoteRootDefault": "デフォルト: cc-switch-x-sync",
       "profileDefault": "デフォルト: default",
       "saveAndTestSuccess": "設定を保存しました。接続正常です",
       "saveAndTestFailed": "設定を保存しましたが、接続テストに失敗しました：{{error}}",
@@ -630,7 +631,7 @@
       "endpointHint": "多くの S3 互換サービスでは必須です",
       "endpointPlaceholder": "例: https://s3-compatible.example.com",
       "remoteRoot": "リモートルートディレクトリ",
-      "remoteRootDefault": "デフォルト: cc-switch-sync",
+      "remoteRootDefault": "デフォルト: cc-switch-x-sync",
       "profile": "同期プロファイル名",
       "profileDefault": "デフォルト: default",
       "autoSync": "自動同期",
@@ -740,7 +741,7 @@
       "description": "CC Switch がスキルのマスターコピーを保存するディレクトリを選択します",
       "ccSwitch": "CC Switch",
       "unified": "~/.agents/skills",
-      "ccSwitchHint": "スキルは ~/.cc-switch/skills/ に保存され、シンボリックリンクまたはコピーで各アプリに同期されます。",
+      "ccSwitchHint": "スキルは ~/.cc-switch-x/skills/ に保存され、シンボリックリンクまたはコピーで各アプリに同期されます。",
       "unifiedHint": "スキルは ~/.agents/skills/ に保存されます（Agent Skills オープン標準）。対応ツール（Claude Code、Codex、Gemini CLI など）はこのディレクトリのスキルを直接検出します。",
       "confirmTitle": "スキル保存場所の移行",
       "confirmMessage": "{{count}} 個のスキルを新しい場所に移動します。続行しますか？",
@@ -765,6 +766,7 @@
           "alacritty": "Alacritty",
           "kitty": "Kitty",
           "ghostty": "Ghostty",
+          "otty": "Otty",
           "wezterm": "WezTerm",
           "kaku": "Kaku",
           "warp": "Warp"
@@ -786,9 +788,9 @@
     },
     "configDirectoryOverride": "設定ディレクトリの上書き（詳細）",
     "configDirectoryDescription": "WSL などで Claude Code や Codex を使う場合、ここで設定ディレクトリを WSL 側に合わせるとデータを揃えられます。",
-    "appConfigDir": "CC Switch 設定ディレクトリ",
-    "appConfigDirDescription": "CC Switch の保存場所をカスタマイズします（クラウド同期フォルダを指定すると設定を同期できます）",
-    "browsePlaceholderApp": "例: C:\\\\Users\\\\Administrator\\\\.cc-switch",
+    "appConfigDir": "CC Switch X 設定ディレクトリ",
+    "appConfigDirDescription": "CC Switch X の独立した設定保存場所を指定します",
+    "browsePlaceholderApp": "例: C:\\\\Users\\\\Administrator\\\\.cc-switch-x",
     "claudeConfigDir": "Claude Code 設定ディレクトリ",
     "claudeConfigDirDescription": "Claude の設定ディレクトリ（settings.json）を上書きします。カスタムディレクトリでは .claude.json（MCP）をその中に保存し、既定の ~/.claude では Claude Code の既定どおり ~/.claude.json を使います。",
     "codexConfigDir": "Codex 設定ディレクトリ",
@@ -830,10 +832,12 @@
     "releaseNotes": "リリースノート",
     "viewReleaseNotes": "このバージョンのリリースノートを見る",
     "viewCurrentReleaseNotes": "現在のバージョンのリリースノートを見る",
-    "officialUpdatesDisabled": "CC Switch X ビルドでは、ローカルインストールを上書きしないよう公式のアプリ内更新を無効化しています。",
+    "officialUpdatesDisabled": "CC Switch X では、この独立したインストールを上書きしないよう公式のアプリ内更新を無効化しています。",
     "officialUpdatesDisabledBadge": "公式更新は無効",
     "officialWebsite": "公式サイト",
     "github": "GitHub",
+    "unofficialFork": "非公式フォーク",
+    "inAppUpdatesDisabled": "アプリ内更新は無効",
     "manualInstallCommands": "手動インストールコマンド",
     "oneClickInstallHint": "Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes / Pi をインストールまたは更新",
     "localEnvCheck": "ローカル環境チェック",
@@ -887,7 +891,7 @@
     "saving": "保存中...",
     "globalProxy": {
       "label": "グローバルプロキシ",
-      "hint": "すべてのリクエスト（API、Skills ダウンロードなど）をプロキシ経由で送信します。ローカルルーティング有効時、アプリのリクエストもこのプロキシを経由します。空欄で直接接続。",
+      "hint": "すべてのリクエスト（API、Skills のダウンロードなど）をプロキシ経由で送信します。ローカルルーティング有効時、アプリのリクエストもこのプロキシを経由します。空欄の場合はシステムまたは環境プロキシに従い、CC Switch X 自身を指すプロキシはループ防止のため自動的に迂回します。",
       "username": "ユーザー名（任意）",
       "password": "パスワード（任意）",
       "test": "接続テスト",
@@ -1382,6 +1386,8 @@
     "claudeRoutingProxyNotRunning": "ローカルルーティングサービスが起動していないため、モデルルーティング設定は有効になりません。",
     "claudeRoutingTakeoverNotEnabled": "Claude テイクオーバーが有効になっていないため、モデルルーティング設定は有効になりません。",
     "claudeRoutingRectifierSuggested": "モデルルーティングプロバイダーが設定されています。プロバイダーをまたいで履歴を継続する場合は、設定で整流器と Tool Use ID 整流を有効にすることを推奨します。",
+    "claudeRoutingEffectiveSlotHint": "現在 {{provider}} にルーティングされています。表示・使用されるのはそのプロバイダーの {{role}} スロットです。現在のプロバイダーの同名スロットは適用されません。",
+    "claudeRoutingMissingSlotHint": "現在 {{provider}} にルーティングされていますが、そのプロバイダーには {{role}} スロットが未設定です。対象のプロバイダーで補完してください。",
     "requiredFields": "プロバイダー名、API エンドポイント、API Key、モデルを入力してください"
   },
   "copilot": {
@@ -1587,6 +1593,7 @@
     "addToModelMapping": "マッピングに追加",
     "modelMappingTitle": "モデルマッピング",
     "modelMappingHint": "Codex model_catalog_json を生成し、/model コマンドでこれらの第三者モデル名を表示できるようにします。リストの内容はそのまま保存されます。変更後、モデルリストを更新するには Codex の再起動が必要です。",
+    "catalogAutoManagedHint": "このカタログは、有効なモデルソースプロバイダから自動生成されます。",
     "addCatalogModel": "モデルを追加",
     "catalogDisplayName": "表示名",
     "catalogDisplayNamePlaceholder": "例: DeepSeek V4 Flash",
@@ -1751,6 +1758,13 @@
       "pi": "Pi"
     },
     "rawInputLabel": "原始",
+    "sessionSync": {
+      "title": "セッションログの自動スキャン",
+      "description": "各クライアントのローカルセッションログを定期的にスキャンして使用量を集計します。オフにすると手動同期時のみスキャンします",
+      "syncNow": "今すぐ同期",
+      "syncCompleted": "同期完了：{{imported}} 件追加、{{files}} ファイルをスキャン、エラー {{errors}} 件",
+      "syncFailed": "セッション使用量の同期に失敗しました：{{error}}"
+    },
     "rebuildCodex": {
       "title": "Codex 使用量メンテナンス",
       "description": "ローカルの rollout ログから Codex セッション使用量を再構築します",
@@ -2848,7 +2862,7 @@
         },
         "listenPort": {
           "label": "リッスンポート",
-          "placeholder": "15721",
+          "placeholder": "15722",
           "description": "ルーティングサーバーがリッスンするポート番号（1024 ~ 65535）"
         },
         "maxRetries": {

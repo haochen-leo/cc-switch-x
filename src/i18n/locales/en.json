@@ -46,8 +46,8 @@
   },
   "firstRunNotice": {
     "title": "Welcome to CC Switch X",
-    "bodyDefault": "CC Switch X lets you switch between multiple Claude Code / Codex / Gemini CLI providers with a single click. If you already had these tools configured, CC Switch X has saved your existing setup as a provider named “default” so none of your previous configuration is lost.",
-    "bodyOfficial": "An “Official” preset is also included in the list — click it any time you want to switch back to the official default. CC Switch X automatically backs up your current config to “default” before switching, so you can move back and forth freely. That's how CC Switch X works 😊",
+    "bodyDefault": "CC Switch X lets you switch between multiple Claude Code / Codex / Gemini CLI providers with a single click. Existing CC Switch data can be imported into the isolated CC Switch X data directory, while your existing tool configuration is preserved as a provider named “default”.",
+    "bodyOfficial": "An “Official” preset remains available for switching back to the official defaults. CC Switch X is an unofficial fork with its own database, while continuing to manage the same Claude Code, Codex, Gemini CLI, and other live configuration files.",
     "confirm": "Got it"
   },
   "apiKeyInput": {
@@ -288,6 +288,7 @@
     "openclawNoModels": "No models configured",
     "openclawModelNotFound": "The selected model no longer exists. Refresh and try again.",
     "backfillWarning": "Switched successfully, but failed to save changes back to the previous provider",
+    "codexAuthCleanupFailed": "Switched successfully, but auth.json could not be removed — the official login credentials are still on disk; delete auth.json from the Codex config directory to remove them",
     "windowControlFailed": "Window control failed: {{error}}",
     "officialBlockedByProxy": "Cannot switch to official provider while local routing is active. Using routing with official APIs may cause account bans.",
     "proxyOfficialWarning": "Current provider {{name}} is official. Consider switching to a third-party provider before using local routing.",
@@ -312,7 +313,7 @@
     },
     "unifyCodexHistory": {
       "title": "Unified Codex session history",
-      "message": "When enabled, the official subscription and third-party providers share one session history list. Note: resuming an old session across providers may fail because its encrypted_content reasoning cannot be decrypted by another backend.\n\nYou can also migrate your existing official session history into the shared list (originals are backed up to ~/.cc-switch/backups first and can be restored when you turn this off).",
+      "message": "When enabled, the official subscription and third-party providers share one session history list. Note: resuming an old session across providers may fail because its encrypted_content reasoning cannot be decrypted by another backend.\n\nYou can also migrate your existing official session history into the shared list (originals are backed up to ~/.cc-switch-x/backups first and can be restored when you turn this off).",
       "migrateExisting": "Also migrate existing official session history",
       "confirm": "I understand, enable"
     },
@@ -432,9 +433,9 @@
         "title": "Application Diagnostic Logs",
         "description": "Control the output level for application diagnostic logs",
         "enabled": "Enable Diagnostic Logs",
-        "enabledDescription": "Controls cc-switch.log; disabling it also stops body capture, while request usage records and crash.log are unaffected",
+        "enabledDescription": "Controls cc-switch-x.log; disabling it also stops body capture, while request usage records and crash.log are unaffected",
         "capturePayloads": "Capture Request/Response Bodies",
-        "capturePayloadsDescription": "Continuously write to the separate cc-switch-payload.log until disabled. Bodies may contain sensitive information; capture stops when diagnostic logging is disabled.",
+        "capturePayloadsDescription": "Continuously write to the separate cc-switch-x-payload.log until disabled. Bodies may contain sensitive information; capture stops when diagnostic logging is disabled.",
         "captureMaxSizeMb": "Payload log size (MB)",
         "captureMaxSizeMbDescription": "Rotates to an archive when exceeded, default 50",
         "captureArchives": "Archives to keep",
@@ -556,7 +557,7 @@
         "synologyHint": "Install and enable the WebDAV Server package in Synology Package Center first.",
         "custom": "Custom"
       },
-      "remoteRootDefault": "Default: cc-switch-sync",
+      "remoteRootDefault": "Default: cc-switch-x-sync",
       "profileDefault": "Default: default",
       "saveAndTestSuccess": "Config saved, connection OK",
       "saveAndTestFailed": "Config saved, but connection test failed: {{error}}",
@@ -630,7 +631,7 @@
       "endpointHint": "Required for most S3-compatible services",
       "endpointPlaceholder": "e.g. https://s3-compatible.example.com",
       "remoteRoot": "Remote Root Directory",
-      "remoteRootDefault": "Default: cc-switch-sync",
+      "remoteRootDefault": "Default: cc-switch-x-sync",
       "profile": "Sync Profile Name",
       "profileDefault": "Default: default",
       "autoSync": "Auto Sync",
@@ -740,7 +741,7 @@
       "description": "Choose where CC Switch stores the master copies of your skills",
       "ccSwitch": "CC Switch",
       "unified": "~/.agents/skills",
-      "ccSwitchHint": "Skills are stored in ~/.cc-switch/skills/ and synced to each app via symlink or copy.",
+      "ccSwitchHint": "Skills are stored in ~/.cc-switch-x/skills/ and synced to each app via symlink or copy.",
       "unifiedHint": "Skills are stored in ~/.agents/skills/, the Agent Skills open standard. Compatible tools (Claude Code, Codex, Gemini CLI, etc.) discover skills here natively.",
       "confirmTitle": "Migrate Skill Storage",
       "confirmMessage": "{{count}} skill(s) will be moved to the new location. Continue?",
@@ -765,6 +766,7 @@
           "alacritty": "Alacritty",
           "kitty": "Kitty",
           "ghostty": "Ghostty",
+          "otty": "Otty",
           "wezterm": "WezTerm",
           "kaku": "Kaku",
           "warp": "Warp"
@@ -786,9 +788,9 @@
     },
     "configDirectoryOverride": "Configuration Directory Override (Advanced)",
     "configDirectoryDescription": "When using Claude Code or Codex in environments like WSL, you can manually specify the configuration directory to the one in WSL to keep provider data consistent with the main environment.",
-    "appConfigDir": "CC Switch Configuration Directory",
-    "appConfigDirDescription": "Customize the storage location for CC Switch configuration (point to cloud sync folder to enable config sync)",
-    "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.cc-switch",
+    "appConfigDir": "CC Switch X Configuration Directory",
+    "appConfigDirDescription": "Customize the isolated storage location for CC Switch X configuration",
+    "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.cc-switch-x",
     "claudeConfigDir": "Claude Code Configuration Directory",
     "claudeConfigDirDescription": "Override Claude configuration directory (settings.json). Custom directories store .claude.json (MCP) inside the directory; the default ~/.claude directory keeps Claude Code's split ~/.claude.json path.",
     "codexConfigDir": "Codex Configuration Directory",
@@ -830,10 +832,12 @@
     "releaseNotes": "Release Notes",
     "viewReleaseNotes": "View release notes for this version",
     "viewCurrentReleaseNotes": "View current version release notes",
-    "officialUpdatesDisabled": "Official in-app updates are disabled in the CC Switch X build to avoid overwriting the local installation.",
+    "officialUpdatesDisabled": "Official in-app updates are disabled in CC Switch X to avoid overwriting this independent installation.",
     "officialUpdatesDisabledBadge": "Official updates disabled",
     "officialWebsite": "Official Website",
     "github": "GitHub",
+    "unofficialFork": "Unofficial fork",
+    "inAppUpdatesDisabled": "Updates disabled",
     "manualInstallCommands": "Manual Install Commands",
     "oneClickInstallHint": "Install or upgrade Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes / Pi",
     "localEnvCheck": "Local environment check",
@@ -887,7 +891,7 @@
     "saving": "Saving...",
     "globalProxy": {
       "label": "Global Proxy",
-      "hint": "Proxy all requests (API, Skills download, etc.). When local routing is enabled, app traffic is also routed through this proxy. Leave empty for direct connection.",
+      "hint": "Proxy all requests (API, Skills downloads, etc.). When local routing is enabled, app traffic also uses this proxy. If left empty, the system or environment proxy is used; a proxy pointing to CC Switch X itself is bypassed to prevent a loop.",
       "username": "Username (optional)",
       "password": "Password (optional)",
       "test": "Test Connection",
@@ -1382,6 +1386,8 @@
     "claudeRoutingProxyNotRunning": "Local routing service is not running; model routing settings will not take effect.",
     "claudeRoutingTakeoverNotEnabled": "Claude takeover is not enabled; model routing settings will not take effect.",
     "claudeRoutingRectifierSuggested": "Model routing provider is configured; for continuing history across providers, enable Rectifier and Tool Use ID rectification in Settings.",
+    "claudeRoutingEffectiveSlotHint": "Currently routed to {{provider}} — the displayed and effective {{role}} slot belongs to that provider; this provider's own {{role}} slot does not apply.",
+    "claudeRoutingMissingSlotHint": "Currently routed to {{provider}}, but that provider has no {{role}} slot configured yet — please fill it in on the target provider.",
     "requiredFields": "Please fill in provider name, API endpoint, API Key and model"
   },
   "copilot": {
@@ -1587,6 +1593,7 @@
     "addToModelMapping": "Add to mapping",
     "modelMappingTitle": "Model Mapping",
     "modelMappingHint": "Generates Codex model_catalog_json so /model can show these third-party model names; entries are saved exactly as listed. Codex must be restarted to refresh the model list after changes.",
+    "catalogAutoManagedHint": "This catalog is generated automatically from the enabled model source providers.",
     "addCatalogModel": "Add Model",
     "catalogDisplayName": "Display Name",
     "catalogDisplayNamePlaceholder": "e.g., DeepSeek V4 Flash",
@@ -1751,6 +1758,13 @@
       "pi": "Pi"
     },
     "rawInputLabel": "Raw",
+    "sessionSync": {
+      "title": "Auto-Scan Session Logs",
+      "description": "Periodically scans each client's local session logs to track usage; when off, logs are only scanned on manual sync",
+      "syncNow": "Sync Now",
+      "syncCompleted": "Sync completed: {{imported}} imported, {{files}} files scanned, {{errors}} errors",
+      "syncFailed": "Session usage sync failed: {{error}}"
+    },
     "rebuildCodex": {
       "title": "Codex Usage Maintenance",
       "description": "Rebuild Codex session usage from local rollout logs",
@@ -2848,7 +2862,7 @@
         },
         "listenPort": {
           "label": "Listen Port",
-          "placeholder": "15721",
+          "placeholder": "15722",
           "description": "Port number the routing server listens on (1024 ~ 65535)"
         },
         "maxRetries": {

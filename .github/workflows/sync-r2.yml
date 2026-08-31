@@ -1,7 +1,6 @@
-# Mirror release assets to Cloudflare R2 so ccswitch.io/download can serve
-# them directly (dl.ccswitch.io), and mirror the Tauri updater manifest and
-# artifacts so in-app updates avoid GitHub too (the updater verifies minisign
-# signatures client-side, so the mirror is untrusted).
+# Inherited upstream workflow. CC Switch X keeps the R2 mirror disabled until an
+# X-owned bucket and download domain exist. Enable it by setting the repository
+# variable X_R2_MIRROR_ENABLED=true and configuring X-owned R2 secrets.
 #
 # Triggered on release promotion (`released` fires when a prerelease is
 # flipped to a full release, or a release is published as stable directly) —
@@ -26,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to sync (e.g. v3.18.0)'
+        description: "Release tag to sync (e.g. v3.18.0)"
         required: true
         type: string
 
@@ -42,11 +41,14 @@ concurrency:
 
 jobs:
   sync-to-r2:
+    if: ${{ vars.X_R2_MIRROR_ENABLED == 'true' }}
     name: Sync release to R2
     runs-on: ubuntu-22.04
     env:
-      R2_BUCKET: cc-switch-releases
-      R2_PUBLIC_BASE_URL: https://dl.ccswitch.io
+      # Placeholders only. Replace with X-owned infrastructure before enabling
+      # X_R2_MIRROR_ENABLED for a real release.
+      R2_BUCKET: cc-switch-x-releases
+      R2_PUBLIC_BASE_URL: https://downloads.ccswitchx.example
       KEEP_VERSIONS: "5"
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -56,6 +58,7 @@ jobs:
       AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
       R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      X_R2_MIRROR_ENABLED: ${{ vars.X_R2_MIRROR_ENABLED }}
     steps:
       - name: Check R2 secrets
         id: r2
@@ -68,11 +71,8 @@ jobs:
           fi
           if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
-          elif [ "$GITHUB_REPOSITORY" = "farion1231/cc-switch" ]; then
-            # A silently stale mirror strands updater users on old versions
-            # (the R2 endpoint wins as long as its manifest parses), so the
-            # official repo must never skip this sync.
-            echo "::error::R2 secrets (R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY) are missing on the official repo; refusing to skip the mirror sync."
+          elif [ "$GITHUB_REPOSITORY" = "haochen-leo/cc-switch-x" ] && [ "${X_R2_MIRROR_ENABLED:-}" = "true" ]; then
+            echo "::error::R2 secrets (R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY) are missing while X_R2_MIRROR_ENABLED=true."
             exit 1
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"

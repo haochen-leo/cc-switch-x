@@ -208,7 +208,7 @@ async fn download_and_verify(
 /// Build the S3 object key for a given artifact.
 ///
 /// Format: `{remote_root}/v{PROTOCOL_VERSION}/db-v{DB_COMPAT_VERSION}/{profile}/{artifact}`
-/// Example: `cc-switch-sync/v2/db-v6/default/manifest.json`
+/// Example: `cc-switch-x-sync/v2/db-v6/default/manifest.json`
 fn s3_key(settings: &S3SyncSettings, artifact: &str) -> String {
     format!(
         "{}/v{}/db-v{}/{}/{}",

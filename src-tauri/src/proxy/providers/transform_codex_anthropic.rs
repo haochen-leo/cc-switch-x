@@ -1068,7 +1068,7 @@ fn message_has_content(message: &Value) -> bool {
 /// Removes replayed thinking blocks that carry no upstream signature. Strict
 /// Anthropic upstreams reject unsigned thinking in tool history with a 400;
 /// lenient endpoints keep these blocks untouched (they neither sign nor verify).
-fn strip_unsigned_thinking_blocks(messages: &mut Vec<Value>) {
+fn strip_unsigned_thinking_blocks(messages: &mut [Value]) {
     for message in messages.iter_mut() {
         if message.get("role").and_then(Value::as_str) != Some("assistant") {
             continue;

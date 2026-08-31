@@ -129,8 +129,6 @@ impl Database {
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
             max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-            retry_429_enabled INTEGER NOT NULL DEFAULT 1, retry_429_max_retries INTEGER NOT NULL DEFAULT 2,
-            retry_429_initial_delay_ms INTEGER NOT NULL DEFAULT 2000,
             streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
             circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
             circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
@@ -299,12 +297,20 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         // 18. Session Log Sync 表 (会话日志同步状态)
+        //
+        // last_byte_offset：Claude 路径的字节游标（seek 增量读）；NULL 表示
+        // 尚无字节游标（旧行号游标或非 Claude 路径行），此时回退全量读。
+        // last_tail_fingerprint：游标边界前尾部字节的指纹，用于识别文件被
+        // 外部重写（同尺寸/更大的替换无法靠 size 检测）；NULL 表示无指纹
+        // 可校验，按纯追加处理。
         conn.execute(
             "CREATE TABLE IF NOT EXISTS session_log_sync (
                 file_path TEXT PRIMARY KEY,
                 last_modified INTEGER NOT NULL,
                 last_line_offset INTEGER NOT NULL DEFAULT 0,
-                last_synced_at INTEGER NOT NULL
+                last_synced_at INTEGER NOT NULL,
+                last_byte_offset INTEGER,
+                last_tail_fingerprint INTEGER
             )",
             [],
         )
@@ -534,11 +540,14 @@ impl Database {
                         Self::set_user_version(conn, 16)?;
                     }
                     16 => {
-                        log::info!(
-                            "迁移数据库从 v16 到 v17（补充 429 限流重试配置列并添加会话用量持久去重账本）"
-                        );
+                        log::info!("迁移数据库从 v16 到 v17（添加会话用量持久去重账本）");
                         Self::migrate_v16_to_v17(conn)?;
                         Self::set_user_version(conn, 17)?;
+                    }
+                    17 => {
+                        log::info!("迁移数据库从 v17 到 v18（会话日志字节游标列）");
+                        Self::migrate_v17_to_v18(conn)?;
+                        Self::set_user_version(conn, 18)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -689,24 +698,6 @@ impl Database {
                 "proxy_config",
                 "non_streaming_timeout",
                 "INTEGER NOT NULL DEFAULT 600",
-            )?;
-            Self::add_column_if_missing(
-                conn,
-                "proxy_config",
-                "retry_429_enabled",
-                "INTEGER NOT NULL DEFAULT 1",
-            )?;
-            Self::add_column_if_missing(
-                conn,
-                "proxy_config",
-                "retry_429_max_retries",
-                "INTEGER NOT NULL DEFAULT 2",
-            )?;
-            Self::add_column_if_missing(
-                conn,
-                "proxy_config",
-                "retry_429_initial_delay_ms",
-                "INTEGER NOT NULL DEFAULT 2000",
             )?;
         }
 
@@ -894,8 +885,6 @@ impl Database {
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
             max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-            retry_429_enabled INTEGER NOT NULL DEFAULT 1, retry_429_max_retries INTEGER NOT NULL DEFAULT 2,
-            retry_429_initial_delay_ms INTEGER NOT NULL DEFAULT 2000,
             streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
             circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
             circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
@@ -1461,9 +1450,6 @@ impl Database {
                 enabled INTEGER NOT NULL DEFAULT 0,
                 auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
                 max_retries INTEGER NOT NULL DEFAULT 3,
-                retry_429_enabled INTEGER NOT NULL DEFAULT 1,
-                retry_429_max_retries INTEGER NOT NULL DEFAULT 2,
-                retry_429_initial_delay_ms INTEGER NOT NULL DEFAULT 2000,
                 streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
                 streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
                 non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
@@ -1491,9 +1477,6 @@ impl Database {
             ("enabled", "0"),
             ("auto_failover_enabled", "0"),
             ("max_retries", "3"),
-            ("retry_429_enabled", "1"),
-            ("retry_429_max_retries", "2"),
-            ("retry_429_initial_delay_ms", "2000"),
             ("streaming_first_byte_timeout", "60"),
             ("streaming_idle_timeout", "120"),
             ("non_streaming_timeout", "600"),
@@ -1525,7 +1508,6 @@ impl Database {
             "INSERT INTO proxy_config_v14 (
                 app_type, proxy_enabled, listen_address, listen_port, enable_logging,
                 enabled, auto_failover_enabled, max_retries,
-                retry_429_enabled, retry_429_max_retries, retry_429_initial_delay_ms,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests,
@@ -1579,30 +1561,8 @@ impl Database {
         crate::services::session_usage_codex::reset_codex_usage_on_conn(conn, &codex_dir)
     }
 
-    /// v16 -> v17: add 429 retry columns and preserve session request identities
-    /// after detail rollup.
+    /// v16 -> v17: preserve session request identities after detail rollup.
     fn migrate_v16_to_v17(conn: &Connection) -> Result<(), AppError> {
-        if Self::table_exists(conn, "proxy_config")? {
-            Self::add_column_if_missing(
-                conn,
-                "proxy_config",
-                "retry_429_enabled",
-                "INTEGER NOT NULL DEFAULT 1",
-            )?;
-            Self::add_column_if_missing(
-                conn,
-                "proxy_config",
-                "retry_429_max_retries",
-                "INTEGER NOT NULL DEFAULT 2",
-            )?;
-            Self::add_column_if_missing(
-                conn,
-                "proxy_config",
-                "retry_429_initial_delay_ms",
-                "INTEGER NOT NULL DEFAULT 2000",
-            )?;
-        }
-
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS session_usage_dedup (
                 data_source TEXT NOT NULL,
@@ -1614,7 +1574,28 @@ impl Database {
              CREATE INDEX IF NOT EXISTS idx_session_usage_dedup_semantic
              ON session_usage_dedup(data_source, semantic_id, has_entry_id);",
         )
-        .map_err(|error| AppError::Database(format!("创建会话用量去重账本失败: {error}")))?;
+        .map_err(|error| AppError::Database(format!("创建会话用量去重账本失败: {error}")))
+    }
+
+    /// v17 -> v18: Claude 会话日志的字节游标列与尾部指纹列。
+    ///
+    /// 独立成版而非搭 v17 车：v17 已在开发库上执行过（迁移不会重跑，
+    /// `CREATE TABLE IF NOT EXISTS` 也不补列），追加进 v17 会让这些库
+    /// 永远缺列。存量行保持 NULL，首轮扫描按旧行号游标转换为字节位置
+    /// 后继续增量；之后写入字节偏移走 seek 增量，并记录游标边界前的
+    /// 尾部指纹用于识别外部重写（截断由 size 检测，同尺寸/更大的替换
+    /// 只有指纹能发现）。
+    fn migrate_v17_to_v18(conn: &Connection) -> Result<(), AppError> {
+        // 缺表的库（异常/测试夹具）跳过：create_tables 会以含列的新 DDL 建表。
+        if Self::table_exists(conn, "session_log_sync")? {
+            Self::add_column_if_missing(conn, "session_log_sync", "last_byte_offset", "INTEGER")?;
+            Self::add_column_if_missing(
+                conn,
+                "session_log_sync",
+                "last_tail_fingerprint",
+                "INTEGER",
+            )?;
+        }
         Ok(())
     }
 
@@ -3446,45 +3427,6 @@ mod tests {
     }
 
     #[test]
-    fn migrate_v16_to_v17_adds_retry_429_columns() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute(
-            "CREATE TABLE proxy_config (
-                app_type TEXT PRIMARY KEY,
-                enabled INTEGER NOT NULL DEFAULT 0,
-                auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3
-            )",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO proxy_config (app_type, max_retries) VALUES ('codex', 3)",
-            [],
-        )?;
-        Database::set_user_version(&conn, 16)?;
-
-        Database::apply_schema_migrations_on_conn(&conn)?;
-
-        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        for column in [
-            "retry_429_enabled",
-            "retry_429_max_retries",
-            "retry_429_initial_delay_ms",
-        ] {
-            assert!(Database::has_column(&conn, "proxy_config", column)?);
-        }
-        let defaults: (i64, i64, i64) = conn.query_row(
-            "SELECT retry_429_enabled, retry_429_max_retries, retry_429_initial_delay_ms
-             FROM proxy_config WHERE app_type = 'codex'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        assert_eq!(defaults, (1, 2, 2000));
-        assert!(Database::table_exists(&conn, "session_usage_dedup")?);
-        Ok(())
-    }
-
-    #[test]
     fn migrate_v16_to_v17_creates_session_usage_dedup_ledger() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         Database::set_user_version(&conn, 16)?;
@@ -3499,6 +3441,46 @@ mod tests {
              VALUES ('pi_session', 'request', 'semantic', 1)",
             [],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v17_to_v18_adds_byte_cursor_to_existing_sync_table() -> Result<(), AppError> {
+        // 真实升级路径：v17 库带旧 DDL 的 session_log_sync（无字节游标列，
+        // 字节游标曾短暂搭 v17 车、已执行过 v17 的开发库正是这个形状）
+        // 与存量游标行，迁移后列补上、存量行保持 NULL（首轮按行号转换）
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE session_log_sync (
+                file_path TEXT PRIMARY KEY,
+                last_modified INTEGER NOT NULL,
+                last_line_offset INTEGER NOT NULL DEFAULT 0,
+                last_synced_at INTEGER NOT NULL
+             );
+             INSERT INTO session_log_sync VALUES ('/tmp/a.jsonl', 5, 3, 1);",
+        )?;
+        Database::set_user_version(&conn, 17)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert!(Database::has_column(
+            &conn,
+            "session_log_sync",
+            "last_byte_offset"
+        )?);
+        assert!(Database::has_column(
+            &conn,
+            "session_log_sync",
+            "last_tail_fingerprint"
+        )?);
+        let (byte_offset, fingerprint): (Option<i64>, Option<i64>) = conn.query_row(
+            "SELECT last_byte_offset, last_tail_fingerprint
+             FROM session_log_sync WHERE file_path = '/tmp/a.jsonl'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(byte_offset, None, "存量行的字节游标必须为 NULL");
+        assert_eq!(fingerprint, None, "存量行的尾部指纹必须为 NULL");
         Ok(())
     }
 }

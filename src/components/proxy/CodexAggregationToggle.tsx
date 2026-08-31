@@ -242,8 +242,7 @@ export function CodexAggregationToggle({
                 key={source.providerId}
                 checked={source.selected}
                 disabled={
-                  busy ||
-                  (source.selected && selectedProviderIds.length <= 1)
+                  busy || (source.selected && selectedProviderIds.length <= 1)
                 }
                 onCheckedChange={(checked) =>
                   updateSource(source.providerId, checked === true)

@@ -1878,6 +1878,7 @@ async fn handle_codex_responses_namespace_restore(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_codex_apply_patch_input_sanitize(
     response: super::hyper_client::ProxyResponse,
     ctx: &RequestContext,

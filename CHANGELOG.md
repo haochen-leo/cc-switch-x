@@ -1,9 +1,114 @@
 # Changelog
 
-All notable changes to CC Switch will be documented in this file.
+All notable changes to CC Switch X will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Entries at 3.20.1 and below describe the upstream CC Switch baseline that CC
+Switch X is built from. CC Switch X uses an independent version line starting
+at 0.1.0-beta.1.
+
+## [0.1.0-beta.1] - 2026-08-31
+
+CC Switch X begins as an unofficial, independently branded fork of CC Switch,
+based on upstream `d8065cc6` (CC Switch 3.20.1). This first beta keeps the
+local Codex/proxy feature set and establishes a separate runtime identity so it
+can coexist with the official application without sharing its database.
+
+### Added
+
+- **Independent CC Switch X Identity**: The app now builds as `CC Switch X`
+  with package name `cc-switch-x`, bundle identifier
+  `io.github.haochen-leo.ccswitchx`, deep-link scheme `ccswitchx://`, default
+  proxy port `15722`, and cloud-sync root `cc-switch-x-sync`.
+- **Isolated Runtime Database**: Runtime data lives under `~/.cc-switch-x` and
+  no longer shares `~/.cc-switch/cc-switch.db` with the official app. Upstream
+  tables and `PRAGMA user_version` keep official migration semantics, while X
+  extension state is stored in `x_` tables tracked by `x_schema_meta`.
+- **First-Run Legacy Import**: When no X database exists, the app can import
+  compatible providers, endpoints, MCP servers, prompts, skills metadata,
+  profiles, and common settings from the official `~/.cc-switch` database in
+  read-only mode. The source directory is left untouched.
+- **Fork Maintenance Policy**: Added `docs/cc-switch-x-maintenance-zh.md`
+  documenting the isolation boundary, database rules, future upstream v19
+  handling, and the Git branch strategy.
+
+### Changed
+
+- **Release Channel Separation**: Updater endpoints and official release asset
+  generation are disabled until CC Switch X has its own signing and release
+  infrastructure. The initial beta is distributed as source and manually built
+  packages.
+- **Deep-Link Compatibility**: CC Switch X registers `ccswitchx://`; the parser
+  also accepts legacy `ccswitch://` imports so existing shared configuration
+  links remain usable.
+- **Public Repository Metadata**: Repository ownership, issue links, security
+  reporting, release links, and user-manual download guidance now point to
+  `haochen-leo/cc-switch-x` instead of the upstream project.
+
+### Upgrade notes
+
+- Existing official CC Switch data is not modified. X imports a logical copy on
+  first run and keeps the original `~/.cc-switch` directory available for
+  rollback.
+- Official CC Switch releases remain available from the upstream project. CC
+  Switch X does not use the official updater channel and should only be
+  downloaded from `https://github.com/haochen-leo/cc-switch-x/releases`.
+- The beta macOS package is not yet notarized. If Gatekeeper blocks it, verify
+  the source and package provenance before choosing to open it.
+
+## [3.20.1] - 2026-08-28
+
+This release is dominated by two Codex storylines. The first is an urgent compatibility break: Codex CLI 0.149 stopped letting custom providers inherit ambient credentials from `auth.json`, turning third-party switches made in the old default mode into 401 errors (#6744). Rather than patching around it, cc-switch now switches Codex providers config-only — the key travels in the provider's own `config.toml` table, `auth.json` returns to being purely the official ChatGPT login file — and a whole family of legacy config shapes 0.149 refuses to load is repaired on every switch, with a new preflight refusing unloadable shapes instead of reporting a "successful" switch Codex cannot start from. The second is account safety: two members of the same ChatGPT Team workspace no longer overwrite each other in the Auth Center (#6780, fixes #2245) — existing managed accounts need one re-login (see upgrade notes). Around them: provider edits now always reach the live config file (#6779), the Codex edit dialog no longer shows another provider's key (#6534), restores no longer wipe hand-written prompt files (#6810), the usage dashboard gains an auto/manual session-scan toggle plus an incremental byte-cursor scanner (a 12 MB active session file: 6.04 s → 9.3 ms) behind this release's schema migration (v17 → v18), and Otty joins the macOS terminal picker (#6620).
+
+**Stats**: 26 commits | 66 files changed | +7,474 insertions | -1,000 deletions
+
+### Added
+
+- **Otty Terminal Support on macOS**: "Otty" joins the macOS terminal picker for session resume, provider terminals and tool commands. Launching first attempts a new tab in the existing Otty window via the Otty CLI, then a new Otty window; provider terminals and tool commands additionally fall back to Terminal.app on failure, while a failed session resume reports the error — including an explicit install hint when the Otty CLI is missing — and copies the command to the clipboard. CLI discovery probes the app bundle (system and per-user), Homebrew paths and PATH. The user manual's macOS terminal tables were corrected along the way — Kaku and Warp were already supported but missing from the lists. (#6620)
+- **OpenCode Go Subscription Usage**: The usage-script Token Plan query now recognizes OpenCode Go and shows its 5-hour / weekly / monthly usage percentages with reset times in the usage card and tray, reusing the existing quota tiers. The endpoint is Bearer-auth only (the opposite of the inference side, which only accepts `x-api-key`); a valid key without a Go subscription reports a distinct message (HTTP 403) instead of a generic auth failure, a zero-percent window drops the upstream's placeholder reset time, and an unrecognized response shape reports an error instead of an empty card. Newly added OpenCode Go providers in Claude Code, Claude Desktop, Codex, OpenCode and Pi enable the query automatically. OpenCode Zen pay-as-you-go is deliberately not covered — that plan has no usage API upstream.
+- **Auto/Manual Mode for Session-Log Scanning**: The usage dashboard gains an "Auto-Scan Session Logs" card with a switch (on by default, so existing behavior is unchanged). Turning it off stops all background session-log scanning, including the startup pass, and a "Sync Now" button appears as the manual entry point, reporting imported entries, files scanned and an error count in a toast. Proxy-takeover request accounting is real-time and never reads session files, so it keeps recording either way, and the startup cost backfill (which only patches existing rows) still runs in manual mode.
+
+### Changed
+
+- **Codex Third-Party Switching Is Config-Only**: Switching to a third-party Codex provider now writes the API key into the provider's own `[model_providers.*]` table in `config.toml` (as `experimental_bearer_token`, honored since Codex 0.48) and never writes the key into `auth.json`, which returns to being purely the official ChatGPT login file — Codex 0.149 stopped letting custom providers inherit ambient auth from `auth.json`, which had broken third-party switches made in the default mode (key written only to `auth.json`) with a 401. The "Keep official login for direct switches" toggle now has exactly one meaning: ON leaves the ChatGPT login completely untouched across third-party switches; OFF deletes `auth.json` instead of overwriting it with the API key (a failed deletion surfaces a warning that the official login is still on disk in the Codex config directory). Two safety gates now run on every third-party switch, not just in preservation mode: a key with no provider table to hold it, and a keyless config that would fall back to the official login (`requires_openai_auth = true` without its own credentials, or a bare `openai_base_url` reroute), are both refused up front with actionable errors — including third-party cards with an empty config, which previously rode silently in `auth.json`. `requires_openai_auth` on the active keyed third-party table is stamped on each direct switch to match the preservation toggle, so Codex's login screen agrees with what is actually on disk. (#6744, #6746)
+- **TeamoRouter Presets Move to teamorouter.cn**: All eight app presets now point at `api.teamorouter.cn`, with the old `.com` endpoint registered as a selectable/speed-testable fallback candidate for Claude Code, Claude Desktop, Codex and Grok Build. Existing saved TeamoRouter providers keep whatever base URL they were saved with.
+
+### Fixed
+
+- **Same-Workspace ChatGPT Accounts No Longer Merge in the Auth Center**: Managed Codex OAuth accounts were keyed by `chatgpt_account_id`, which identifies a ChatGPT workspace rather than a person — two members of one Team workspace collapsed onto a single record, with the later login silently overwriting the earlier one's tokens and provider bindings pointing at whoever logged in last. Accounts are now identified locally with the OIDC subject kept as proof of user identity, so same-workspace logins coexist as separate rows. Requests routed through takeover are additionally validated against the live token of the bound account: a Codex session still holding a different member's login is refused with a "restart Codex" error instead of being forwarded under the wrong identity, and the outgoing workspace header always comes from the account binding rather than the client. Adopting a CLI-rotated refresh token and deleting `auth.json` on account removal both require provable ownership now, so cc-switch can no longer adopt or delete another workspace member's login. Every account row offers in-place re-login (bindings preserved), and cancelling or superseding a device login drops the pending flow inside cc-switch — an abandoned browser authorization can no longer be committed minutes later and silently overwrite an account. An id_token that is not a well-formed JWT yields no identity at all, so a malformed or truncated token can never stand in for a user. (#6780, #6831; fixes #2245)
+- **Codex 0.149 Compatibility Repairs for Existing Configs**: A family of config shapes that made Codex 0.149 refuse to load — reported as "cc-switch says switched, Codex won't start" — are now repaired on every provider switch and takeover projection. Leftover `[model_providers.openai]` / `.ollama` / `.lmstudio` tables (written by older takeover projections; overriding a reserved id fails validation) are renamed losslessly to a cc-switch-owned id and normalized into a loadable shape; provider tables with no `name` are backfilled (0.149 rejects the whole config over any of them — Bedrock tables are deliberately left nameless because naming them breaks their built-in merge); legacy top-level `openai_base_url` reroutes carrying a usable API key are migrated into a proper custom provider table (a keyless reroute is refused by the switch-time safety gate instead); and a new preflight rejects table field combinations 0.149 cannot load, naming the offending table, instead of writing them out as a "successful" switch. Proxy takeover of a card routed at the built-in `openai` provider now uses the supported top-level knob instead of creating a reserved table, and takeover of `ollama`/`lmstudio`-routed cards fails with an explicit error. The reserved-id list now matches upstream exactly (case-sensitive; `amazon-bedrock-runtime` added, legacy `oss`/`ollama-chat` recognized as ordinary custom providers so their keys finally reach their tables), and inline `model_providers` tables receive the injected token instead of a dead top-level field.
+- **A Refused Codex Switch No Longer Corrupts the Rejected Card**: Live-write validation now runs as a preflight before the current-provider pointer moves. Previously a write-layer refusal landed after `current` had already been committed, so the next switch backfilled the old live config into the refused provider's saved settings.
+- **Provider Edits Always Reach the Live Config File** (#6779): A stale proxy-restore backup row — left behind by a crash or failed restore — made saves of the active provider (Claude Desktop excepted) take the takeover path, updating only the database and the backup row while the real config file silently kept the old endpoint and key, indefinitely. Ownership is now decided by a single predicate requiring actual evidence of takeover (a placeholder in the live file, or the proxy enabled and running with a backup, or an in-flight switch holding the per-app lock alongside a backup row); stale backup rows are refreshed to match the edited provider instead of hijacking the write. Universal provider saves now also re-project each generated child into the live config of any app where it is the active provider, and report per-app failures by name instead of claiming success.
+- **Codex Edit Dialog No Longer Shows Another Provider's Key** (#6534; fixes #6414): With official-login preservation enabled, `auth.json` is a shared slot with no provider identity, and the edit dialog preferred it when seeding the form — so editing the active Codex provider could display, and on save persist, a key left behind by a different provider, making keys converge across cards sharing a base URL ("model not found" errors). The dialog now rebuilds the key from the provider's own bearer token in `config.toml`; official-category and OAuth-only providers are untouched, and a card whose `config.toml` carries no bearer token of its own — an older or hand-maintained shape, now that every third-party switch writes one — keeps seeding from the live `auth.json`, manual edits included, exactly as before.
+- **Restores No Longer Wipe Unmanaged Prompt Files** (#6810; fixes #6778): A WebDAV/S3 download or backup import whose snapshot had no enabled prompt for an app truncated that app's live prompt file (`CLAUDE.md` / `AGENTS.md` / `GEMINI.md` / `SOUL.md`) to empty — destroying hand-written local content that was never part of the sync payload. Such a restore now leaves the file untouched; disabling the last prompt from the Prompts panel still clears it as before.
+- **Recovery-Screen Exit Buttons Actually Quit the App**: The `process:allow-exit` capability was missing, so on v3.20.0 the Quit button on the "database version too new" recovery screen and the exit after a config-load failure were silently rejected by the IPC layer: the Quit button did nothing (closing the window still quit the app), and after a config-load failure the app carried on into the normal UI instead of exiting as intended. This was independently discovered and fixed first by SaladDay in #6567.
+- **Claude Session-Log Scanning Correctness**: Three data-accuracy fixes landed with the incremental Claude scanner. A log line caught mid-write was permanently skipped by the old line-number cursor (the unfinished tail advanced the cursor, so the completed message was never imported) — the byte cursor only commits past complete lines, so the message is picked up next round. An externally truncated or rewritten session file is never replayed: re-importing entries whose detail rows the 30-day rollup has already pruned would permanently inflate totals, so the cursor is pinned at the new end of file and the skipped range is reported in the sync errors instead of silently dropped (truncation is caught by the cursor overrunning the file; same-size rewrites by a fingerprint of the bytes before the cursor). Mid-file read errors now keep committed progress, resume from the same spot next round, and are reported instead of returning a clean success; a failed cursor prefetch aborts the round instead of behaving like a first-ever scan and double-importing history.
+
+### Performance
+
+- **Incremental Byte-Cursor Scanning for Claude Session Logs**: Each scan round now seeks to the last committed byte offset and reads only what was appended, instead of re-reading changed files end to end — per the change's benchmark, a 12 MB active session file drops from a 6.04 s full parse to a 9.3 ms incremental read. Per-file cursors for Claude, Gemini, OpenCode, Grok Build and Pi are prefetched with a single table read per importer each round instead of one row lookup per file, and on the Claude path each file's imports plus its cursor advance now commit in one transaction. A frozen-snapshot replay over 1,017 session files (409 MB) produced aggregates identical to the old scanner. Requires a schema migration (v17 → v18) adding two nullable columns — the byte cursor and a tail fingerprint; existing line-number cursors are converted in place on the first scan without re-importing anything.
+- **Pi Session Dedup Lookups Use the Identity Indexes** (#6667): The combined dedup query (an OR across two identity columns) could only constrain the data-source prefix, scanning the entire Pi portion of the ledger for every parsed record — so Pi imports got slower as usage history grew. It is now split into indexed point lookups with identical results, so import time no longer degrades with history size.
+
+### Internal
+
+- **CI: WSL2 Contract Test Runs From a Prebuilt Binary** (#6472): The Windows + WSL2 job now compiles the test binary once under a native TEMP and executes it directly with TEMP pointed at the WSL UNC path, so the run step can no longer trigger a re-link where `link.exe`/`mt.exe` fail to create manifest temp files (LNK1327). The scheduled nightly full-suite workflow is deliberately unchanged until it can be validated independently.
+
+### Upgrade notes
+
+- **Codex OAuth accounts need one re-login**: Every managed ChatGPT (Codex OAuth) account added before this release is quarantined until you click 重新登录 / Re-login on its row in the Auth Center — older records used the ChatGPT workspace ID as the account key and carry no separately recorded per-user identity, and an ordinary token refresh cannot prove which user an old record belongs to. Provider bindings are preserved; re-login updates the account in place. Use the row's Re-login button: signing in again through "Add account" creates a second row (logins no longer merge by workspace) and leaves the old row — and any provider bound to it — still quarantined. (#6780)
+- **Codex releases older than 0.48 lose third-party authentication** under config-only switching: they never read the provider-table token field. Upgrade Codex if you are on a pre-0.48 build.
+- With the "Keep official login for direct switches" toggle **OFF (the default), switching to a third-party Codex provider now deletes `auth.json`** rather than overwriting it with the API key. To get the ChatGPT login back, switch to an official provider bound to an Auth Center account (its login is written back from the stored account) — a card that follows the CLI's own login needs `codex login`. Turn the toggle ON to keep the official login across third-party switches.
+- **Some previously "working" Codex cards are now refused at switch time**: third-party cards with an empty config (no table to hold the key), and keyless cards relying on `requires_openai_auth = true` or a bare `openai_base_url` reroute to borrow the official login. Add a proper `[model_providers.<id>]` entry or an API key to such cards.
+- **Codex configs are rewritten on the next live write** where needed for 0.149: legacy `openai_base_url` reroutes with a usable key become a `[model_providers.cc-switch]` table, stale reserved tables are renamed to a cc-switch id, missing `name` fields are filled in, and `requires_openai_auth` on the active keyed third-party table is overridden on each switch to match the preservation toggle (a hand-set value on that table does not survive a switch).
+- **Database schema migrates v17 → v18** on first launch (a byte-cursor and a tail-fingerprint column on `session_log_sync`). Downgrading afterwards hits the schema-too-new guard. Usage entries the old half-line bug had already skipped are not retroactively recovered — replaying them cannot be distinguished from re-importing already-rolled-up history.
+- **Truncated or externally rewritten Claude session logs are skipped, permanently and by design**: the rewritten range is not replayed (that would double-count against pruned rollups) and the skip is reported in the sync result's error list.
+- **Keys already cross-contaminated before the #6534 fix are not repaired automatically**: if Codex providers sharing a base URL converged on one key, re-enter the correct key on each affected card once.
+- **Restore behavior change** (#6810): restoring a snapshot in which an app has no enabled prompt now preserves that app's live prompt file — the client keeps loading its old content even though the Prompts panel shows everything disabled. Enable and then disable a prompt from the panel (or edit the file yourself) if you want it cleared.
+- **Universal provider saves can now fail loudly**: if a live config file cannot be written for an app whose active provider is the generated child, the save reports an error naming the app; the database record is still saved — retry the sync or switch that app's provider once.
+- **Existing TeamoRouter providers keep `api.teamorouter.com`**: re-add from the preset or edit the base URL to move to `.cn`.
+- **OpenCode Go usage auto-enables only for providers added after this release**: for an existing card, open its usage-script settings and pick the Token Plan template → OpenCode Go once.
 
 ## [3.20.0] - 2026-08-18
 
@@ -237,11 +342,11 @@ Development since v3.18.0 is headlined by a security-hardening wave and a proxy 
 
 ### Security
 
-- **Gemini Common Config No Longer Leaks Credentials, With a One-Time Cleanup**: The Gemini common-config extractor stripped only `GEMINI_API_KEY` and `GOOGLE_GEMINI_BASE_URL` from the shared snippet and copied every other `env` entry verbatim — but `GOOGLE_API_KEY` is a first-class Gemini credential, so one account's key (along with anything else credential-shaped) was deep-merged into every other Gemini provider using the common config and sent to that provider's base URL, which may be a third-party relay. The extractor now skips any key matching the same credential-pattern matcher the Claude extractor already uses, and the frontend snippet validator was aligned so a hand-edited snippet cannot put a key straight back. Because a Gemini snippet is never re-extracted once it exists, a one-time startup cleanup also scrubs credentials that already leaked — from the snippet, from every provider they were merged into, and from `~/.gemini/.env`, matching by key *and* value so a provider's own same-named key with a different value survives. (#5811)
+- **Gemini Common Config No Longer Leaks Credentials, With a One-Time Cleanup**: The Gemini common-config extractor stripped only `GEMINI_API_KEY` and `GOOGLE_GEMINI_BASE_URL` from the shared snippet and copied every other `env` entry verbatim — but `GOOGLE_API_KEY` is a first-class Gemini credential, so one account's key (along with anything else credential-shaped) was deep-merged into every other Gemini provider using the common config and sent to that provider's base URL, which may be a third-party relay. The extractor now skips any key matching the same credential-pattern matcher the Claude extractor already uses, and the frontend snippet validator was aligned so a hand-edited snippet cannot put a key straight back. Because a Gemini snippet is never re-extracted once it exists, a one-time startup cleanup also scrubs credentials that already leaked — from the snippet, from every provider they were merged into, and from `~/.gemini/.env`, matching by key _and_ value so a provider's own same-named key with a different value survives. (#5811)
 - **Skill Repository Install Hardening**: Installing or browsing skills from a GitHub repository could write files outside the intended directory: archive entries were joined onto the destination path without normalisation (zip-slip), and repository coordinates were never validated, so a branch like `../../../releases/download/v1/evil` retargeted the download at an arbitrary release asset — and since skill repositories can arrive via an untrusted `ccswitch://` deeplink and are enabled by default, merely opening the Skills panel could trigger the download. Skill `directory` values from restored backups, sync snapshots, and import-from-apps were likewise joined raw, letting uninstall `remove_dir_all` outside the managed skills directory. Every sink now validates the directory name, repository owner/name/branch are whitelisted at the single download convergence point, and extraction is capped (10,000 entries, 512 MB written, 128 MB download, 4 KB symlink targets, self-referential symlinks rejected), with the new errors localized in all four languages. (#5811)
 - **Deep-Link Import Confirmations Show the Whole Payload (Credentials Masked) and Flag Risky Values**: The `ccswitch://` MCP import confirmation previously rendered a single truncated `Command:` line and showed neither `args`, `url`, nor `env` — so a link carrying `command: "sh"` with `args: ["-c", "curl …|sh"]` and an `LD_PRELOAD` variable displayed as a harmless `sh`, yet was written to the live MCP files on confirm. The dialog now renders command, each argument, URL, and env vars on separate lines that wrap instead of truncating, so nothing is clipped out of view (env values whose name contains TOKEN, KEY, SECRET, or PASSWORD are shown masked, as a prefix plus asterisks), and highlights values that warrant a second look: shell interpreters invoked with inline-command flags, env vars that change how a process loads code (`LD_*`, `DYLD_*`, `NODE_OPTIONS`, `PYTHONPATH`, `PATH`, proxy vars), and endpoints pointing at loopback, private-range, or cloud-metadata addresses. The markers are advisory and never block an import — a local Ollama endpoint is ordinary usage. The provider confirmation gains the same treatment, and the "will be written immediately" warning is now shown unconditionally instead of being gated on a link-controlled field.
 - **Usage Scripts From Deep Links Arrive Disabled and Their Code Is Shown**: A usage-query script imported through a deep link is JavaScript that runs on every usage query, and it was previously possible to acquire one without ever seeing it: the backend treated the mere presence of code as a decision to enable it, and the dialog showed only an Enabled/Disabled badge. Scripts now default to disabled — a link must explicitly carry `usageEnabled=true` — and the confirmation displays the complete decoded script in a scrollable code block with a warning that it will execute once enabled. Decoding failures fall back to displaying the raw payload, so a malformed script can never read as "there is no script".
-- **URL-Safe Base64 Payloads Could Blank the Confirmation Dialog Entirely**: The two entries above make the confirmation show more; this one is about the confirmation showing *nothing*. The backend accepts four Base64 variants including the URL-safe alphabet (RFC 4648 §5), while the frontend's `atob` accepts only the standard one and, on failure, returned its input unchanged instead of signalling an error — so for the same payload the backend decoded and imported successfully while the frontend held an undecodable string. Usage scripts and system prompts rendered as opaque Base64, and MCP configs were worse: `JSON.parse` threw, the component swallowed it, and the dialog rendered **"0 servers" with an empty list while the backend wrote the real entry into the live MCP files**. Substituting a single `/` for `_` in the payload was enough — the dialog went blank, the import stayed fully functional, and the complete-payload display added above was defeated along with it. The frontend decoder now normalises the URL-safe alphabet before decoding, so the confirmation always matches what will be imported, and the shared decoder gained its first unit tests — with in-test preconditions asserting each sample really exercises the URL-safe path rather than happening to encode identically under both alphabets. Affected every release from v3.8.0 onward; see Upgrade notes for what to check.
+- **URL-Safe Base64 Payloads Could Blank the Confirmation Dialog Entirely**: The two entries above make the confirmation show more; this one is about the confirmation showing _nothing_. The backend accepts four Base64 variants including the URL-safe alphabet (RFC 4648 §5), while the frontend's `atob` accepts only the standard one and, on failure, returned its input unchanged instead of signalling an error — so for the same payload the backend decoded and imported successfully while the frontend held an undecodable string. Usage scripts and system prompts rendered as opaque Base64, and MCP configs were worse: `JSON.parse` threw, the component swallowed it, and the dialog rendered **"0 servers" with an empty list while the backend wrote the real entry into the live MCP files**. Substituting a single `/` for `_` in the payload was enough — the dialog went blank, the import stayed fully functional, and the complete-payload display added above was defeated along with it. The frontend decoder now normalises the URL-safe alphabet before decoding, so the confirmation always matches what will be imported, and the shared decoder gained its first unit tests — with in-test preconditions asserting each sample really exercises the URL-safe path rather than happening to encode identically under both alphabets. Affected every release from v3.8.0 onward; see Upgrade notes for what to check.
 - **SQL Import Rejects Statements That Reach Outside the Import Database**: Importing a database backup validated only the file's header comment and then handed the entire text to `execute_batch`, so a crafted backup could `ATTACH DATABASE` and create a SQLite file anywhere the user can write — a side effect that landed even when the import as a whole failed, and one reachable through WebDAV/S3 sync snapshots too. A SQLite authorizer is now installed for the duration of the external batch only, denying `ATTACH`/`DETACH`, `VACUUM`, virtual-table creation, and any action SQLite reports as unknown (fail-closed), with PRAGMAs limited to the two the exporter actually emits.
 - **Prototype Pollution in Common-Config Snippet Handling**: The three walkers that apply, remove, and compare common-config snippets all followed `__proto__` into the global `Object.prototype`, so a malicious snippet — reachable via WebDAV/S3 sync, since the `settings` table is overwritten by whatever the remote sends — could write attacker-chosen values onto the global prototype the moment a provider form was opened. All three walkers now skip `__proto__`, `constructor`, and `prototype`; the "common config applied" comparison also now requires own properties, fixing a visible quirk where `{"__proto__":{}}` counted as a subset of every config.
 - **Command Substitution via Project Directory Names on Terminal Launch**: Resuming a session in an external terminal built the `cd` line with double-quote escaping, which stops spaces but not `$(…)`, backticks, or `$VAR` — and the value is the real project path recorded in the CLI's session history, which may legitimately contain those characters. Any project folder named that way executed the embedded command in the user's terminal on Resume. The three launchers that build a shell line — Terminal.app, iTerm, and kitty — now use POSIX single-quote escaping, where nothing expands, including through the AppleScript quoting layer; Ghostty, WezTerm/Kaku, and Alacritty were already safe because they pass the directory as its own argument.
@@ -683,7 +788,7 @@ Development since v3.15.0 focuses on making third-party Codex providers work lik
 - **22 Codex Third-Party Provider Presets with Chat Routing**: Enabled Chat Completions routing with explicit model catalogs for major Chinese/Asian providers — DeepSeek, Zhipu GLM (+ en), Kimi, MiniMax (+ en), StepFun (+ en), Baidu Qianfan Coding Plan, Bailian, ModelScope, Longcat, BaiLing, Xiaomi MiMo (+ Token Plan), Volcengine Agentplan, BytePlus, DouBao Seed, SiliconFlow (+ en), Novita AI, and Nvidia. Each preset declares its context window so the UI can size the model-mapping rows.
 - **Codex Model Mapping Table**: Codex provider forms now expose a model catalog (model + display name + context window per row) that is the single source of truth for the upstream model list, projected to `~/.codex/cc-switch-model-catalog.json`.
 - **Codex Chat Providers in Stream Check**: Stream Check now probes Chat-format Codex providers against `/chat/completions` with a Chat-shaped body instead of `/v1/responses`, and aligns its URL fallback order with the production `CodexAdapter` (origin-only base URLs hit `/v1/<endpoint>` first) so a non-404 error on the bare path no longer flags a working provider as down.
-- **Codex Chat Reasoning Auto-Detection**: When a Codex provider is served through Chat Completions routing, CC Switch now auto-detects the upstream's reasoning interface from its name, base URL, and model — injecting the correct thinking parameter (`thinking:{type}`, `enable_thinking`, `reasoning_split`, top-level `reasoning_effort`, or OpenRouter's native `reasoning:{effort}` object) with no manual setup. Aggregator/hosting platforms (OpenRouter, SiliconFlow) are matched platform-first, since the same model can expose different reasoning controls on different platforms. Providers that only expose a thinking on/off switch (Kimi, GLM, Qwen, MiniMax, MiMo, SiliconFlow) drop the effort *level* instead of forwarding an unsupported field — so changing Codex's reasoning effort has no effect for them — while providers with real effort tiers (DeepSeek, OpenRouter, and StepFun's `step-3.5-flash-2603` only) pass the level through. OpenRouter specifically uses the native `reasoning:{effort}` object, clamps `max` to `xhigh` (its enum has no `max`), and forwards an explicit `effort:"none"` so reasoning can be turned off.
+- **Codex Chat Reasoning Auto-Detection**: When a Codex provider is served through Chat Completions routing, CC Switch now auto-detects the upstream's reasoning interface from its name, base URL, and model — injecting the correct thinking parameter (`thinking:{type}`, `enable_thinking`, `reasoning_split`, top-level `reasoning_effort`, or OpenRouter's native `reasoning:{effort}` object) with no manual setup. Aggregator/hosting platforms (OpenRouter, SiliconFlow) are matched platform-first, since the same model can expose different reasoning controls on different platforms. Providers that only expose a thinking on/off switch (Kimi, GLM, Qwen, MiniMax, MiMo, SiliconFlow) drop the effort _level_ instead of forwarding an unsupported field — so changing Codex's reasoning effort has no effect for them — while providers with real effort tiers (DeepSeek, OpenRouter, and StepFun's `step-3.5-flash-2603` only) pass the level through. OpenRouter specifically uses the native `reasoning:{effort}` object, clamps `max` to `xhigh` (its enum has no `max`), and forwards an explicit `effort:"none"` so reasoning can be turned off.
 - **Codex Goal Mode and Remote Compaction Controls**: Codex config editing now exposes a Goal Mode toggle and a Remote Compaction toggle for third-party providers; new Codex templates default to `disable_response_storage = true` while still allowing explicit goal support.
 - **Xiaomi MiMo Token Plan Presets**: Added Xiaomi MiMo Token Plan presets with specs aligned to the official documentation (#2803).
 - **Claude Desktop Official Preset**: Added a Claude Desktop Official preset that restores the native Claude Desktop login, plus a localized Claude Desktop user guide (en / zh / ja).
@@ -980,7 +1085,7 @@ Development since v3.13.0 focuses on onboarding Hermes Agent as a first-class ma
 - **Skills Import Sync**: Imported Skills are now immediately synced into enabled app directories instead of only being recorded in the database, so the UI no longer shows "installed" while the target app directory is missing the skill.
 - **Ghostty Session Restore**: Fixed Ghostty session restore launch by using shell execution with `--working-directory`, avoiding `cwd` escaping issues when the path contains spaces or special characters.
 - **Hermes Health Check Borrowing OpenClaw Schema**: Hermes providers were routed through `check_additive_app_stream` (the OpenClaw dispatcher), which reads camelCase `baseUrl` / `apiKey` / `api` and surfaced "OpenClaw provider is missing baseUrl" even when every Hermes field was filled. Introduced `check_hermes_stream` with Hermes-specific extractors that map `api_mode` (`chat_completions` / `anthropic_messages` / `codex_responses`) to the matching `check_claude_stream` `api_format`, and returns `bedrock_converse` as unsupported. `api_mode` is now resolved before URL / API key extraction, so `bedrock_converse` users see the real cause rather than a misleading "missing base_url".
-- **Usage Query Modal for Hermes & OpenClaw**: `getProviderCredentials` now reads flat `settingsConfig` fields for Hermes (snake_case `base_url` / `api_key`) and OpenClaw (camelCase `baseUrl` / `apiKey`), so the "official balance" template auto-selects for matching providers like SiliconFlow. Also refactored the BALANCE and TOKEN_PLAN test paths to reuse the precomputed `providerCredentials` instead of re-reading `env.ANTHROPIC_*` directly, fixing the "empty key" error for non-Claude apps even when the key was configured.
+- **Usage Query Modal for Hermes & OpenClaw**: `getProviderCredentials` now reads flat `settingsConfig` fields for Hermes (snake*case `base_url` / `api_key`) and OpenClaw (camelCase `baseUrl` / `apiKey`), so the "official balance" template auto-selects for matching providers like SiliconFlow. Also refactored the BALANCE and TOKEN_PLAN test paths to reuse the precomputed `providerCredentials` instead of re-reading `env.ANTHROPIC*\*` directly, fixing the "empty key" error for non-Claude apps even when the key was configured.
 
 ### Docs
 
@@ -1781,23 +1886,28 @@ Third beta release with important bug fixes for Windows compatibility, UI improv
 ### Fixed
 
 #### Windows
+
 - Wrap npx/npm commands with `cmd /c` for MCP export
 - Prevent terminal windows from appearing during version check
 
 #### macOS
+
 - Use .app bundle path for autostart to prevent terminal window popup
 
 #### UI
+
 - Resolve Dialog/Modal not opening on first click (#492)
 - Improve dark mode text contrast for form labels
 - Reduce header spacing and fix layout shift on view switch
 - Prevent header layout shift when switching views
 
 #### Database & Schema
+
 - Add missing base columns migration for proxy_config
 - Add backward compatibility check for proxy_config seed insert
 
 #### Other
+
 - Use local timezone and robust DST handling in usage stats (#500)
 - Remove deprecated `sync_enabled_to_codex` call
 - Gracefully handle invalid Codex config.toml during MCP sync
@@ -1856,28 +1966,33 @@ This beta release introduces the **Local API Proxy** feature, along with Skills 
 ### Major Features
 
 #### Local Proxy Server
+
 - **Local HTTP Proxy** - High-performance proxy server built on Axum framework
 - **Multi-app Support** - Unified proxy for Claude Code, Codex, and Gemini CLI API requests
 - **Per-app Takeover** - Independent control over which apps route through the proxy
 - **Live Config Takeover** - Automatically backs up and redirects CLI configurations to local proxy
 
 #### Auto Failover
+
 - **Circuit Breaker** - Automatically detects provider failures and triggers protection
 - **Smart Failover** - Automatically switches to backup provider when current one is unavailable
 - **Health Tracking** - Real-time monitoring of provider availability
 - **Independent Failover Queues** - Each app maintains its own failover queue
 
 #### Monitoring
+
 - **Request Logging** - Detailed logging of all proxy requests
 - **Usage Statistics** - Token consumption, latency, success rate metrics
 - **Real-time Status** - Frontend displays proxy status and statistics
 
 #### Skills Multi-App Support
+
 - **Multi-app Support** - Skills now support both Claude and Codex (#365)
 - **Multi-app Migration** - Existing Skills auto-migrate to multi-app structure (#378)
 - **Installation Path Fix** - Use directory basename for skill installation path (#358)
 
 ### Added
+
 - **Provider Icon Colors** - Customize provider icon colors (#385)
 - **Deeplink Usage Config** - Import usage query config via deeplink (#400)
 - **Error Request Logging** - Detailed logging for proxy requests (#401)
@@ -1887,6 +2002,7 @@ This beta release introduces the **Local API Proxy** feature, along with Skills 
 ### Fixed
 
 #### Proxy Related
+
 - Takeover Codex base_url via model_provider
 - Harden crash recovery with fallback detection
 - Sync UI when active provider differs from current setting
@@ -1904,17 +2020,20 @@ This beta release introduces the **Local API Proxy** feature, along with Skills 
 - Resolve 404 error and auto-setup proxy targets
 
 #### MCP Related
+
 - Skip sync when target CLI app is not installed
 - Improve upsert and import robustness
 - Use browser-compatible platform detection for MCP presets
 
 #### UI Related
+
 - Restore fade transition for Skills button
 - Add close button to all success toasts
 - Prevent card jitter when health badge appears
 - Update SettingsPage tab styles (#342)
 
 #### Other
+
 - Fix Azure website link (#407)
 - Add fallback to provider config for usage credentials (#360)
 - Fix Windows black screen on startup (use system titlebar)
@@ -1923,11 +2042,13 @@ This beta release introduces the **Local API Proxy** feature, along with Skills 
 - Security fixes for JavaScript executor and usage script (#151)
 
 ### Improved
+
 - **Proxy Active Theme** - Apply emerald theme when proxy takeover is active
 - **Card Animation** - Improved provider card hover animation
 - **Remove Restart Prompt** - No longer prompts restart when switching providers
 
 ### Technical
+
 - Implement per-app takeover mode
 - Proxy module contains 20+ Rust files with complete layered architecture
 - Add 5 new database tables for proxy functionality
@@ -1935,6 +2056,7 @@ This beta release introduces the **Local API Proxy** feature, along with Skills 
 - Remove is_proxy_target in favor of failover_queue
 
 ### Stats
+
 - 55 commits since v3.8.2
 - 164 files changed
 - +22,164 / -570 lines
