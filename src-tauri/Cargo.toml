@@ -1,7 +1,7 @@
 [package]
 name = "cc-switch-x"
 version = "0.1.0-beta.1"
-description = "Unofficial CC Switch fork with isolated data and an independent release channel"
+description = "Multi-provider routing, model aggregation, and protocol compatibility for Claude and Codex, built on CC Switch"
 authors = ["Jason Young", "haochen-leo"]
 license = "MIT"
 repository = "https://github.com/haochen-leo/cc-switch-x"

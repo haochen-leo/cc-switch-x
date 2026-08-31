@@ -18,6 +18,14 @@ can coexist with the official application without sharing its database.
 
 ### Added
 
+- **Claude Multi-Provider Routing**: Model roles can be mapped independently
+  across providers.
+- **Codex Multi-Provider Aggregation**: Official and third-party models appear
+  in one picker and can be switched without changing workflows.
+- **Responses Compatibility Hardening**: Provider-specific deviations from
+  Codex Responses semantics are normalized for broader endpoint compatibility.
+- **Long-Session Resilience**: 429 rate-limit handling and provider failover
+  improve continuity when an upstream degrades.
 - **Independent CC Switch X Identity**: The app now builds as `CC Switch X`
   with package name `cc-switch-x`, bundle identifier
   `io.github.haochen-leo.ccswitchx`, deep-link scheme `ccswitchx://`, default

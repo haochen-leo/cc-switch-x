@@ -45,9 +45,9 @@ The bundled WebView renderer is treated as a trusted component. This is a **scop
 
 **它排除什么、不排除什么。** 不在范围内的是：抵达 IPC 接口的**唯一途径**为**从 DevTools 或本地改造过的前端直接调用**的报告。处于该位置的人已经控制了这台机器。
 
-**Still in scope:** any complete, demonstrable chain in which an _untrusted_ source — a `ccswitch://` deep link, a remote sync payload, remote data, an inbound proxy request, or an XSS — reaches a high-privilege IPC command. The trust placed in the renderer covers the code we ship, not arbitrary values that flow through it.
+**Still in scope:** any complete, demonstrable chain in which an _untrusted_ source — a `ccswitchx://` deep link (or an accepted legacy `ccswitch://` import), a remote sync payload, remote data, an inbound proxy request, or an XSS — reaches a high-privilege IPC command. The trust placed in the renderer covers the code we ship, not arbitrary values that flow through it.
 
-**仍在范围内**：任何完整、可演示的利用链，其中**不可信来源**——`ccswitch://` deeplink、远程同步载荷、远程数据、代理入站请求或 XSS——抵达高权限 IPC 命令。对渲染进程的信任覆盖的是我们发布的代码，而非流经其中的任意值。
+**仍在范围内**：任何完整、可演示的利用链，其中**不可信来源**——`ccswitchx://` deeplink（或兼容接收的旧 `ccswitch://` 导入）、远程同步载荷、远程数据、代理入站请求或 XSS——抵达高权限 IPC 命令。对渲染进程的信任覆盖的是我们发布的代码，而非流经其中的任意值。
 
 ### Invalidation triggers / 声明失效条件
 

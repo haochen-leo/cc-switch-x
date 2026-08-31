@@ -40,14 +40,14 @@ CC Switch X ist ein fokussierter Fork für Nutzer, die Claude und Codex zuverlä
 
 [Vollständiges Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.1-en.md)
 
-CC Switch X übernimmt die umfassenden Desktop-Verwaltungsfunktionen des Upstream-Projekts: Anbieter- und Konfigurationsverwaltung für acht KI-Werkzeuge, MCP / Prompts / Skills, Tray-Umschaltung, Nutzungsverfolgung, Sitzungen, Cloud-Synchronisierung, Import/Export, Backups und plattformübergreifende Unterstützung. Allgemeine Funktionen finden Sie im [Upstream-Projekt](https://github.com/farion1231/cc-switch), Details zur Nutzung im [Benutzerhandbuch](docs/user-manual/en/README.md).
+CC Switch X übernimmt die umfassenden Desktop-Verwaltungsfunktionen des Upstream-Projekts: Anbieter- und Konfigurationsverwaltung für neun KI-Werkzeuge, MCP / Prompts / Skills, Tray-Umschaltung, Nutzungsverfolgung, Sitzungen, Cloud-Synchronisierung, Import/Export, Backups und plattformübergreifende Unterstützung. Allgemeine Funktionen finden Sie im [Upstream-Projekt](https://github.com/farion1231/cc-switch), Details zur Nutzung im [Benutzerhandbuch](docs/user-manual/en/README.md).
 
 ## FAQ
 
 <details>
 <summary><strong>Welche KI-Werkzeuge unterstützt CC Switch?</strong></summary>
 
-CC Switch unterstützt acht Werkzeuge: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Grok Build**, **OpenCode**, **OpenClaw** und **Hermes**. Jedes Werkzeug verfügt über dedizierte Anbieter-Presets und Konfigurationsverwaltung.
+CC Switch unterstützt neun Werkzeuge: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Grok Build**, **OpenCode**, **OpenClaw**, **Hermes** und **Pi**. Jedes Werkzeug verfügt über dedizierte Anbieter-Presets und Konfigurationsverwaltung.
 
 </details>
 
@@ -367,4 +367,4 @@ Eröffnen Sie für neue Funktionen bitte vor dem Einreichen eines PR ein Issue z
 
 ## Lizenz
 
-MIT © Jason Young
+MIT © Jason Young; CC Switch X-Erweiterungen © haochen-leo

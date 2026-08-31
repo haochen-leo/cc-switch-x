@@ -1,7 +1,7 @@
 {
   "name": "cc-switch-x",
   "version": "0.1.0-beta.1",
-  "description": "Unofficial CC Switch fork with isolated data and an independent release channel",
+  "description": "Multi-provider routing, model aggregation, and protocol compatibility for Claude and Codex, built on CC Switch",
   "type": "module",
   "scripts": {
     "dev": "pnpm tauri dev",
@@ -15,7 +15,14 @@
     "test:unit": "vitest run",
     "test:unit:watch": "vitest watch"
   },
-  "keywords": [],
+  "keywords": [
+    "codex",
+    "claude-code",
+    "multi-provider",
+    "api-proxy",
+    "responses-api",
+    "tauri"
+  ],
   "author": "haochen-leo",
   "license": "MIT",
   "packageManager": "pnpm@10.12.3",

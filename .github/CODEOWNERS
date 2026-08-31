@@ -1,9 +1,8 @@
 # Code owners for CC Switch X
 #
-# Branch protection on `main` has "Require review from Code Owners" enabled.
-# With this file present, a PR cannot merge to `main` without an approval from
-# the owner below. This closes the gap where two collaborators could approve
-# each other's malicious PRs (a single non-owner approval is no longer enough).
+# Once branch protection is enabled on public `main`, configure it to require
+# review from Code Owners. With that rule active, a PR cannot merge without an
+# approval from the owner below.
 
 # Global fallback: every PR needs owner approval before merging to main.
 *                 @haochen-leo

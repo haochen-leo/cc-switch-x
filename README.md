@@ -43,14 +43,14 @@ CC Switch X is a focused fork for users who need Claude and Codex to work reliab
 
 [Full Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.1-en.md)
 
-CC Switch X retains the upstream project's broad desktop-management capabilities: provider and configuration management for eight AI tools, MCP / Prompts / Skills, tray switching, usage tracking, sessions, cloud sync, import/export, backups, and cross-platform support. See the [upstream project](https://github.com/farion1231/cc-switch) for the general feature set and the [user manual](docs/user-manual/en/README.md) for usage details.
+CC Switch X retains the upstream project's broad desktop-management capabilities: provider and configuration management for nine AI tools, MCP / Prompts / Skills, tray switching, usage tracking, sessions, cloud sync, import/export, backups, and cross-platform support. See the [upstream project](https://github.com/farion1231/cc-switch) for the general feature set and the [user manual](docs/user-manual/en/README.md) for usage details.
 
 ## FAQ
 
 <details>
 <summary><strong>Which AI tools does CC Switch support?</strong></summary>
 
-CC Switch supports eight tools: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Grok Build**, **OpenCode**, **OpenClaw**, and **Hermes**. Each tool has dedicated provider presets and configuration management.
+CC Switch supports nine tools: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Grok Build**, **OpenCode**, **OpenClaw**, **Hermes**, and **Pi**. Each tool has dedicated provider presets and configuration management.
 
 </details>
 
@@ -370,4 +370,4 @@ For new features, please open an issue for discussion before submitting a PR. PR
 
 ## License
 
-MIT © Jason Young
+MIT © Jason Young; CC Switch X additions © haochen-leo

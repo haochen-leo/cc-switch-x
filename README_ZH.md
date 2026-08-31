@@ -43,14 +43,14 @@ CC Switch X 面向需要在多个官方及第三方模型供应商之间稳定�
 
 [完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v0.1.0-beta.1-zh.md)
 
-CC Switch X 继承上游的完整桌面管理能力，包括八类 AI 工具的供应商与配置管理、MCP / Prompts / Skills、托盘切换、用量统计、会话管理、云同步、导入导出、备份和跨平台支持。通用功能请参考[上游项目](https://github.com/farion1231/cc-switch)，具体使用方法见[用户手册](docs/user-manual/README.md)。
+CC Switch X 继承上游的完整桌面管理能力，包括九类 AI 工具的供应商与配置管理、MCP / Prompts / Skills、托盘切换、用量统计、会话管理、云同步、导入导出、备份和跨平台支持。通用功能请参考[上游项目](https://github.com/farion1231/cc-switch)，具体使用方法见[用户手册](docs/user-manual/README.md)。
 
 ## 常见问题
 
 <details>
 <summary><strong>CC Switch 支持哪些 AI 工具？</strong></summary>
 
-CC Switch 支持八个工具：**Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**Grok Build**、**OpenCode**、**OpenClaw** 和 **Hermes**。每个工具都有专属的供应商预设和配置管理。
+CC Switch 支持九个工具：**Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**Grok Build**、**OpenCode**、**OpenClaw**、**Hermes** 和 **Pi**。每个工具都有专属的供应商预设和配置管理。
 
 </details>
 
@@ -372,4 +372,4 @@ pnpm test:unit --coverage
 
 ## License
 
-MIT © Jason Young
+MIT © Jason Young；CC Switch X 新增部分 © haochen-leo
