@@ -144,7 +144,7 @@ Ausführliche Anleitungen zu jeder Funktion finden Sie im **[Benutzerhandbuch](d
 
 ### Windows-Nutzer
 
-Laden Sie das neueste Installationsprogramm `CC-Switch-X-v{version}-Windows.msi` oder die portable Version `CC-Switch-X-v{version}-Windows-Portable.zip` von der Seite [Releases](../../releases) herunter.
+Laden Sie das neueste Installationsprogramm `CC-Switch-X-v{version}-Windows.msi` oder die portable Version `CC-Switch-X-v{version}-Windows-Portable.zip` von der Seite [Releases](https://github.com/haochen-leo/cc-switch-x/releases) herunter.
 
 ### macOS-Nutzer
 
@@ -154,7 +154,7 @@ CC Switch X hat noch kein eigenes Homebrew-Cask. Verwenden Sie den manuellen Dow
 
 **Methode 2: Manueller Download**
 
-Laden Sie `CC-Switch-X-v{version}-macOS.dmg` (empfohlen) oder `.zip` von der Seite [Releases](../../releases) herunter.
+Laden Sie `CC-Switch-X-v{version}-macOS.dmg` (empfohlen) oder `.zip` von der Seite [Releases](https://github.com/haochen-leo/cc-switch-x/releases) herunter.
 
 > **Hinweis**: CC Switch-X-Beta-Builds sind noch nicht signiert oder notarisiert. Prüfen Sie die Download-Quelle und rechnen Sie mit einer Gatekeeper-Warnung.
 
@@ -164,7 +164,7 @@ CC Switch X hat noch kein eigenes AUR-Paket. Das Upstream-Paket `cc-switch-bin` 
 
 ### Linux-Nutzer
 
-Laden Sie den neuesten Linux-Build von der Seite [Releases](../../releases) herunter:
+Laden Sie den neuesten Linux-Build von der Seite [Releases](https://github.com/haochen-leo/cc-switch-x/releases) herunter:
 
 - `CC-Switch-X-v{version}-Linux-x86_64.deb` (Debian/Ubuntu)
 - `CC-Switch-X-v{version}-Linux-x86_64.rpm` (Fedora/RHEL/openSUSE)

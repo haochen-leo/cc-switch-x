@@ -1,8 +1,9 @@
 name: Release
 
 # CC Switch X keeps the inherited release pipeline disabled until X-specific
-# signing, notarization, updater, and artifact naming are configured. Enable it
-# by setting the repository variable X_RELEASE_PIPELINE_ENABLED=true.
+# signing and notarization are configured. Enable builds with
+# X_RELEASE_PIPELINE_ENABLED=true. Keep X_UPDATER_ENABLED=false until X has a
+# dedicated signed updater channel.
 on:
   push:
     tags:
@@ -291,10 +292,6 @@ jobs:
             fi
           done
 
-          if [ -z "$TAR_GZ" ]; then
-            echo "❌ No macOS .tar.gz updater artifact found" >&2
-            exit 1
-          fi
           if [ -z "$APP_PATH" ]; then
             echo "❌ No .app found" >&2
             exit 1
@@ -304,11 +301,15 @@ jobs:
           xcrun stapler staple "$APP_PATH"
           echo "✅ .app stapled"
 
-          # 1) Collect .tar.gz (updater artifact)
-          NEW_TAR_GZ="CC-Switch-X-${VERSION}-macOS.tar.gz"
-          cp "$TAR_GZ" "release-assets/$NEW_TAR_GZ"
-          [ -f "$TAR_GZ.sig" ] && cp "$TAR_GZ.sig" "release-assets/$NEW_TAR_GZ.sig" || echo ".sig for macOS not found yet"
-          echo "macOS updater artifact copied: $NEW_TAR_GZ"
+          # 1) Collect .tar.gz only when updater artifacts are enabled.
+          if [ -n "$TAR_GZ" ]; then
+            NEW_TAR_GZ="CC-Switch-X-${VERSION}-macOS.tar.gz"
+            cp "$TAR_GZ" "release-assets/$NEW_TAR_GZ"
+            [ -f "$TAR_GZ.sig" ] && cp "$TAR_GZ.sig" "release-assets/$NEW_TAR_GZ.sig" || echo ".sig for macOS not found yet"
+            echo "macOS updater artifact copied: $NEW_TAR_GZ"
+          else
+            echo "Updater artifacts are disabled; publishing DMG and ZIP only."
+          fi
 
           # 2) Collect .app as zip
           NEW_ZIP="CC-Switch-X-${VERSION}-macOS.zip"
@@ -622,8 +623,6 @@ jobs:
             - **Linux (x86_64)**: `CC-Switch-X-${{ github.ref_name }}-Linux-x86_64.AppImage` / `.deb` / `.rpm`
             - **Linux (ARM64)**: `CC-Switch-X-${{ github.ref_name }}-Linux-arm64.AppImage` / `.deb` / `.rpm`
 
-            > `.tar.gz` 为 Tauri updater 自动更新专用，无需手动下载。
-
             ---
             CC Switch X 的首个 Beta 尚未启用独立的自动更新通道。发布流水线默认跳过；配置 X 自有签名、公证和 updater 后再启用。
           files: release-assets/*
@@ -631,7 +630,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   assemble-latest-json:
-    if: ${{ vars.X_RELEASE_PIPELINE_ENABLED == 'true' }}
+    if: ${{ vars.X_RELEASE_PIPELINE_ENABLED == 'true' && vars.X_UPDATER_ENABLED == 'true' }}
     name: Assemble latest.json
     runs-on: ubuntu-22.04
     needs: publish-release

@@ -149,7 +149,7 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 
 ### Windows 用户
 
-从 [Releases](../../releases) 页面下载最新版本的 `CC-Switch-X-v{版本号}-Windows.msi` 安装包或 `CC-Switch-X-v{版本号}-Windows-Portable.zip` 绿色版。
+从 [Releases](https://github.com/haochen-leo/cc-switch-x/releases) 页面下载最新版本的 `CC-Switch-X-v{版本号}-Windows.msi` 安装包或 `CC-Switch-X-v{版本号}-Windows-Portable.zip` 绿色版。
 
 ### macOS 用户
 
@@ -159,7 +159,7 @@ CC Switch X 尚未发布独立 Homebrew Cask。请使用下面的手动下载方
 
 **方式二：手动下载**
 
-从 [Releases](../../releases) 页面下载 `CC-Switch-X-v{版本号}-macOS.dmg`（推荐）或 `.zip`。
+从 [Releases](https://github.com/haochen-leo/cc-switch-x/releases) 页面下载 `CC-Switch-X-v{版本号}-macOS.dmg`（推荐）或 `.zip`。
 
 > **注意**：CC Switch X Beta 构建尚未签名和公证。请确认下载来源，并预期首次打开可能出现 Gatekeeper 警告。
 
@@ -169,7 +169,7 @@ CC Switch X 尚未发布独立 AUR 包。上游 `cc-switch-bin` 安装的是官�
 
 ### Linux 用户
 
-从 [Releases](../../releases) 页面下载最新版本的 Linux 安装包：
+从 [Releases](https://github.com/haochen-leo/cc-switch-x/releases) 页面下载最新版本的 Linux 安装包：
 
 - `CC-Switch-X-v{版本号}-Linux-x86_64.deb`（Debian/Ubuntu）
 - `CC-Switch-X-v{版本号}-Linux-x86_64.rpm`（Fedora/RHEL/openSUSE）

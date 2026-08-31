@@ -4,7 +4,7 @@
 
 > Unofficial fork of [CC Switch](https://github.com/farion1231/cc-switch), based on upstream `d8065cc6` (CC Switch 3.20.1). CC Switch X uses an isolated `~/.cc-switch-x` database and does not share the official runtime database.
 
-See the [CC Switch X fork and maintenance policy](docs/cc-switch-x-maintenance-zh.md)
+See the [CC Switch X fork and maintenance policy](docs/cc-switch-x-maintenance.md)
 for database compatibility, future v19 upgrades, and the Git workflow.
 
 ### Multi-provider routing and compatibility for Claude and Codex, built on CC Switch
@@ -147,7 +147,7 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 
 ### Windows Users
 
-Download the latest `CC-Switch-X-v{version}-Windows.msi` installer or `CC-Switch-X-v{version}-Windows-Portable.zip` portable version from the [Releases](../../releases) page.
+Download the latest `CC-Switch-X-v{version}-Windows.msi` installer or `CC-Switch-X-v{version}-Windows-Portable.zip` portable version from the [Releases](https://github.com/haochen-leo/cc-switch-x/releases) page.
 
 ### macOS Users
 
@@ -157,7 +157,7 @@ CC Switch X does not have a dedicated Homebrew Cask yet. Use the manual download
 
 **Method 2: Manual Download**
 
-Download `CC-Switch-X-v{version}-macOS.dmg` (recommended) or `.zip` from the [Releases](../../releases) page.
+Download `CC-Switch-X-v{version}-macOS.dmg` (recommended) or `.zip` from the [Releases](https://github.com/haochen-leo/cc-switch-x/releases) page.
 
 > **Note**: CC Switch X beta builds are not signed or notarized yet. Verify the download source and expect a Gatekeeper warning.
 
@@ -167,7 +167,7 @@ CC Switch X does not have a dedicated AUR package yet. The upstream `cc-switch-b
 
 ### Linux Users
 
-Download the latest Linux build from the [Releases](../../releases) page:
+Download the latest Linux build from the [Releases](https://github.com/haochen-leo/cc-switch-x/releases) page:
 
 - `CC-Switch-X-v{version}-Linux-x86_64.deb` (Debian/Ubuntu)
 - `CC-Switch-X-v{version}-Linux-x86_64.rpm` (Fedora/RHEL/openSUSE)
