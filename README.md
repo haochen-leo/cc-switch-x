@@ -43,10 +43,6 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 
 ## Screenshots
 
-|                  Main Interface                   |                  Add Provider                  |
-| :-----------------------------------------------: | :--------------------------------------------: |
-| ![Main Interface](assets/screenshots/main-en.png) | ![Add Provider](assets/screenshots/add-en.png) |
-
 |                  Claude per-role model mapping & routing                  |                 Codex model source aggregation                 |
 | :-----------------------------------------------------------------------: | :------------------------------------------------------------: |
 | ![Claude per-role model mapping](assets/screenshots/claude-models-en.png) | ![Codex model sources](assets/screenshots/codex-models-en.png) |
