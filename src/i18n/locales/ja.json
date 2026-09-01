@@ -2918,6 +2918,25 @@
       "restartRequired": "アドレスまたはポートの変更を反映するにはルーティングサービスの再起動が必要です"
     },
     "switchFailed": "切り替えに失敗しました: {{error}}",
+    "codexAggregation": {
+      "enabledToast": "{{providerCount}} 個のプロバイダーと {{modelCount}} 個のモデルを集約しました。Codex を完全に終了して再起動すると、ドロップダウンから選択できます。",
+      "disabledToast": "Codex のマルチモデル集約を無効にし、有効化前のプロバイダーへ戻しました。",
+      "toggleFailed": "Codex のマルチモデル集約に失敗しました: {{error}}",
+      "sourcesUpdatedToast": "マルチモデルのソースを更新しました: {{providerCount}} プロバイダー、{{modelCount}} モデル。",
+      "sourcesSavedToast": "{{providerCount}} 個のマルチモデルソースプロバイダーを保存しました。",
+      "sourcesUpdateFailed": "マルチモデルソースの更新に失敗しました: {{error}}",
+      "warningSeparator": "；",
+      "tooltipEnabled": "Codex Multi Provider 有効: {{providerCount}} プロバイダー、{{modelCount}} モデル",
+      "tooltipInactive": "OpenAI Official とサードパーティの Codex モデルを 1 つのドロップダウンに集約します",
+      "atLeastOneSource": "Codex のマルチモデルプロバイダーを少なくとも 1 つ選択してください",
+      "shortTitle": "マルチモデル",
+      "switchAria": "Codex マルチモデル集約",
+      "sourceSettingsTitle": "マルチモデルのソースプロバイダーを選択",
+      "groupLabel": "マルチモデル集約",
+      "sourceProvidersLabel": "モデルソースプロバイダー",
+      "conversionRequired": "ルーティングが必要",
+      "official": "公式"
+    },
     "takeover": {
       "hint": "ルーティングするアプリを選択します。有効にすると、そのアプリのリクエストはローカルルーティング経由で転送されます",
       "enabled": "{{app}} ルーティング有効",
