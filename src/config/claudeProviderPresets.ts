@@ -358,6 +358,27 @@ export const providerPresets: ProviderPreset[] = [
     icon: "apikeyfun",
   },
   {
+    name: "9527CODE",
+    websiteUrl: "https://9527.codes",
+    apiKeyUrl: "https://9527.codes/register?aff=e5zI",
+    settingsConfig: {
+      env: {
+        ANTHROPIC_BASE_URL: "https://9527.codes",
+        ANTHROPIC_AUTH_TOKEN: "",
+      },
+    },
+    endpointCandidates: [
+      "https://9527.codes",
+      "https://api.9527.codes",
+      "https://cdn.9527.codes",
+    ],
+    category: "aggregator",
+    isPartner: true,
+    partnerPromotionKey: "9527code",
+    icon: "9527code",
+    iconColor: "#4F46E5",
+  },
+  {
     name: "ClaudeAPI",
     websiteUrl: "https://www.apito.ai",
     apiKeyUrl: "https://console.apito.ai/agent/register/pQBql2buaqiX3dDS",
