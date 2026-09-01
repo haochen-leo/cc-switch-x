@@ -1474,6 +1474,27 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     icon: "pipellm",
   },
   {
+    name: "AICodeWith",
+    providerKey: "cc-switch-aicode-with",
+    websiteUrl: "https://aicodewith.ai",
+    apiKeyUrl: "https://aicodewith.ai/login?tab=register",
+    settingsConfig: {
+      name: "AICodeWith",
+      baseUrl: "https://api.aicodewith.ai/chatgpt/v1",
+      api: "openai-responses",
+      apiKey: "",
+      models: [
+        piModel("openai/gpt-5.6-sol", {
+          id: "gpt-5.6-sol",
+          name: "gpt-5.6-sol",
+        }),
+      ],
+    },
+    category: "aggregator",
+    icon: "aicodewith",
+    iconColor: "#3A3B40",
+  },
+  {
     name: "E-FlowCode",
     providerKey: "cc-switch-e-flow-code",
     websiteUrl: "https://e-flowcode.cc",

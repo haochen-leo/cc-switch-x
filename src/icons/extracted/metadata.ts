@@ -9,6 +9,22 @@ export const iconMetadata: Record<string, IconMetadata> = {
     keywords: ["a6api", "a6", "aggregator", "relay", "gateway", "claude"],
     defaultColor: "#3B82F6",
   },
+  aicodewith: {
+    name: "aicodewith",
+    displayName: "AICodeWith",
+    category: "ai-provider",
+    keywords: [
+      "aicodewith",
+      "ai code with",
+      "aggregator",
+      "relay",
+      "gateway",
+      "claude",
+      "codex",
+      "gemini",
+    ],
+    defaultColor: "#3A3B40",
+  },
   aigocode: {
     name: "aigocode",
     displayName: "AIGoCode",
