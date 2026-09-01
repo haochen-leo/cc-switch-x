@@ -423,6 +423,34 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     icon: "apikeyfun",
   },
   {
+    name: "9527CODE",
+    providerKey: "cc-switch-9527-code",
+    websiteUrl: "https://9527.codes",
+    apiKeyUrl: "https://9527.codes/register?aff=e5zI",
+    settingsConfig: {
+      name: "9527CODE",
+      baseUrl: "https://9527.codes",
+      api: "anthropic-messages",
+      apiKey: "",
+      models: [
+        piModel("anthropic/claude-opus-5", {
+          id: "claude-opus-5",
+        }),
+        piModel("anthropic/claude-sonnet-5", {
+          id: "claude-sonnet-5",
+        }),
+        piModel("anthropic/claude-haiku-4.5", {
+          id: "claude-haiku-4-5",
+        }),
+      ],
+    },
+    category: "aggregator",
+    isPartner: true,
+    partnerPromotionKey: "9527code",
+    icon: "9527code",
+    iconColor: "#4F46E5",
+  },
+  {
     name: "Code0",
     providerKey: "cc-switch-code0",
     websiteUrl: "https://code0.ai",
