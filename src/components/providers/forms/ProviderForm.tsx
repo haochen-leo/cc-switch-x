@@ -204,11 +204,26 @@ function hasClaudeModelRoutingValues(
 ): boolean {
   if (!routing) return false;
   return [
+    routing.defaultProviderId,
     routing.haikuProviderId,
     routing.sonnetProviderId,
     routing.opusProviderId,
     routing.fableProviderId,
   ].some((value) => typeof value === "string" && value.trim().length > 0);
+}
+
+export function normalizeClaudeModelRoutingForSave(
+  routing?: ClaudeModelRouting | null,
+): ClaudeModelRouting | undefined {
+  if (!routing) return undefined;
+  const normalized: ClaudeModelRouting = {
+    defaultProviderId: routing.defaultProviderId?.trim(),
+    haikuProviderId: routing.haikuProviderId?.trim(),
+    sonnetProviderId: routing.sonnetProviderId?.trim(),
+    opusProviderId: routing.opusProviderId?.trim(),
+    fableProviderId: routing.fableProviderId?.trim(),
+  };
+  return hasClaudeModelRoutingValues(normalized) ? normalized : undefined;
 }
 
 function getPresetProviderType(
@@ -1909,16 +1924,7 @@ function ProviderFormFull({
 
     const normalizedClaudeModelRouting: ClaudeModelRouting | undefined =
       appId === "claude" && claudeModelRoutingEnabled
-        ? (() => {
-            const normalized: ClaudeModelRouting = {
-              haikuProviderId: claudeModelRouting.haikuProviderId?.trim(),
-              sonnetProviderId: claudeModelRouting.sonnetProviderId?.trim(),
-              opusProviderId: claudeModelRouting.opusProviderId?.trim(),
-              fableProviderId: claudeModelRouting.fableProviderId?.trim(),
-            };
-            const hasAny = hasClaudeModelRoutingValues(normalized);
-            return hasAny ? normalized : undefined;
-          })()
+        ? normalizeClaudeModelRoutingForSave(claudeModelRouting)
         : undefined;
 
     // 确定 providerType（新建时从预设获取，编辑时从现有数据获取）
