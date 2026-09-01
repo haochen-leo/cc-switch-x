@@ -1776,4 +1776,19 @@ export const providerPresets: ProviderPreset[] = [
     icon: "jiekou",
     iconColor: "#000000",
   },
+  {
+    name: "AICodeWith",
+    websiteUrl: "https://aicodewith.ai",
+    apiKeyUrl: "https://aicodewith.ai/login?tab=register",
+    settingsConfig: {
+      env: {
+        ANTHROPIC_BASE_URL: "https://api.aicodewith.ai",
+        ANTHROPIC_AUTH_TOKEN: "",
+      },
+    },
+    category: "aggregator",
+    endpointCandidates: ["https://api.aicodewith.ai"],
+    icon: "aicodewith",
+    iconColor: "#3A3B40",
+  },
 ];

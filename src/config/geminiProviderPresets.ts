@@ -489,6 +489,24 @@ export const geminiProviderPresets: GeminiProviderPreset[] = [
     endpointCandidates: ["https://api.therouter.ai"],
   },
   {
+    name: "AICodeWith",
+    websiteUrl: "https://aicodewith.ai",
+    apiKeyUrl: "https://aicodewith.ai/login?tab=register",
+    settingsConfig: {
+      env: {
+        GOOGLE_GEMINI_BASE_URL: "https://api.aicodewith.ai/gemini_cli",
+        GEMINI_MODEL: "gemini-3.1-pro-preview",
+      },
+    },
+    baseURL: "https://api.aicodewith.ai/gemini_cli",
+    model: "gemini-3.1-pro-preview",
+    description: "AICodeWith",
+    category: "aggregator",
+    endpointCandidates: ["https://api.aicodewith.ai/gemini_cli"],
+    icon: "aicodewith",
+    iconColor: "#3A3B40",
+  },
+  {
     name: "自定义",
     websiteUrl: "",
     settingsConfig: {
