@@ -2735,4 +2735,20 @@ base_url = "https://cc-api.pipellm.ai/v1"`,
     icon: "jiekou",
     iconColor: "#000000",
   },
+  {
+    name: "AICodeWith",
+    websiteUrl: "https://aicodewith.ai",
+    apiKeyUrl: "https://aicodewith.ai/login?tab=register",
+    auth: generateThirdPartyAuth(""),
+    // 官方 Codex 专用端点，不能用通用 /v1（协议不同）
+    config: generateThirdPartyConfig(
+      "aicodewith",
+      "https://api.aicodewith.ai/chatgpt/v1",
+      "gpt-5.6-sol",
+    ),
+    endpointCandidates: ["https://api.aicodewith.ai/chatgpt/v1"],
+    category: "aggregator",
+    icon: "aicodewith",
+    iconColor: "#3A3B40",
+  },
 ];

@@ -1946,4 +1946,27 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       model: { default: "claude-fable-5", provider: "jiekou" },
     },
   },
+  {
+    name: "AICodeWith",
+    websiteUrl: "https://aicodewith.ai",
+    apiKeyUrl: "https://aicodewith.ai/login?tab=register",
+    settingsConfig: {
+      name: "aicodewith",
+      base_url: "https://api.aicodewith.ai/chatgpt/v1",
+      api_key: "",
+      api_mode: "codex_responses",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+        },
+      ],
+    },
+    category: "aggregator",
+    icon: "aicodewith",
+    iconColor: "#3A3B40",
+    suggestedDefaults: {
+      model: { default: "gpt-5.6-sol", provider: "aicodewith" },
+    },
+  },
 ];
