@@ -131,7 +131,10 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
         };
 
         let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
-        if !id.is_empty() && id.starts_with(required_prefix) {
+        if !id.is_empty()
+            && id.starts_with(required_prefix)
+            && is_canonical_responses_item_id_charset(id)
+        {
             continue;
         }
 
@@ -253,7 +256,7 @@ fn normalize_item_id_with_state(
     state: &mut ResponseOutputIdNormalizationState,
 ) -> Option<(String, String)> {
     let old_id = item.get("id").and_then(Value::as_str)?.to_string();
-    if old_id.starts_with(required_prefix) {
+    if old_id.starts_with(required_prefix) && is_canonical_responses_item_id_charset(&old_id) {
         return None;
     }
     let new_id = state
@@ -270,6 +273,17 @@ fn normalized_responses_item_id(required_prefix: &str, old_id: &str) -> String {
         "{required_prefix}ccswitch_{}",
         short_sha256_hex(old_id.as_bytes())
     )
+}
+
+/// Responses item id charset whitelist: strict gateways accept only letters,
+/// digits, underscores, and dashes. Upstream tool_call ids and replayed
+/// history ids have been observed carrying non-ASCII model output or
+/// whitespace, so a matching prefix alone must not count as canonical.
+fn is_canonical_responses_item_id_charset(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn response_output_item_required_id_prefix(item_type: &str) -> Option<&'static str> {
@@ -2275,9 +2289,22 @@ pub(crate) fn response_tool_call_item_id_from_chat_name(
     tool_context: &CodexToolContext,
 ) -> String {
     if tool_context.is_custom_tool_chat_name(chat_name) {
-        format!("ctc_{call_id}")
+        responses_item_id_from_call_id("ctc_", call_id)
     } else {
-        format!("fc_{call_id}")
+        responses_item_id_from_call_id("fc_", call_id)
+    }
+}
+
+/// Stamp a Responses item id from an upstream chat call_id at bridge entry.
+/// Upstream tool_call ids are not trustworthy: serving stacks have been
+/// observed leaking non-ASCII model output into the id slot. Keep the
+/// readable form when the charset is canonical; otherwise fall back to the
+/// hashed ccswitch form so dirty ids never enter Codex history.
+fn responses_item_id_from_call_id(prefix: &str, call_id: &str) -> String {
+    if is_canonical_responses_item_id_charset(call_id) {
+        format!("{prefix}{call_id}")
+    } else {
+        normalized_responses_item_id(prefix, call_id)
     }
 }
 
@@ -6236,5 +6263,54 @@ mod tests {
         assert_eq!(result["output"][0]["id"], "ctc_call_exec");
         assert_eq!(result["output"][0]["name"], "exec");
         assert_eq!(result["output"][0]["input"], "pwd");
+    }
+
+    #[test]
+    fn entry_sanitizes_dirty_chat_call_ids_into_hashed_item_ids() {
+        assert_eq!(
+            responses_item_id_from_call_id("fc_", "call_abc-123_"),
+            "fc_call_abc-123_"
+        );
+        let dirty_call_id = "mcp__node_repl__js_高圆圆\nwait";
+        assert_eq!(
+            responses_item_id_from_call_id("fc_", dirty_call_id),
+            format!(
+                "fc_ccswitch_{}",
+                short_sha256_hex(dirty_call_id.as_bytes())
+            )
+        );
+    }
+
+    #[test]
+    fn replay_normalizer_rewrites_prefix_correct_but_charset_dirty_ids() {
+        let dirty_id = "fc_mcp__node_repl__js_高圆圆\nwait";
+        let mut body = json!({
+            "input": [
+                {
+                    "type": "function_call",
+                    "id": dirty_id,
+                    "call_id": "mcp__node_repl__js_高圆圆\nwait",
+                    "name": "js",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_clean_call",
+                    "call_id": "clean_call",
+                    "name": "js",
+                    "arguments": "{}"
+                }
+            ]
+        });
+
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            1
+        );
+        assert_eq!(
+            body["input"][0]["id"],
+            format!("fc_ccswitch_{}", short_sha256_hex(dirty_id.as_bytes()))
+        );
+        assert_eq!(body["input"][1]["id"], "fc_clean_call");
     }
 }
