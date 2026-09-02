@@ -6,7 +6,7 @@
 
 ### CC Switch を基盤に、Claude と Codex のマルチプロバイダルーティングと互換性を強化
 
-[![Version](https://img.shields.io/github/v/release/haochen-leo/cc-switch-x?color=blue&label=version)](https://github.com/haochen-leo/cc-switch-x/releases)
+[![Version](https://img.shields.io/github/v/release/haochen-leo/cc-switch-x?include_prereleases&color=blue&label=version)](https://github.com/haochen-leo/cc-switch-x/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/haochen-leo/cc-switch-x/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/haochen-leo/cc-switch-x/total)](https://github.com/haochen-leo/cc-switch-x/releases/latest)
