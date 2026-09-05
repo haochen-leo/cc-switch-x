@@ -12,7 +12,8 @@
 
 use super::transform_codex_chat::{
     build_codex_tool_context_from_request, response_tool_call_item_from_chat_name,
-    response_tool_call_item_id_from_chat_name, CodexToolContext,
+    response_tool_call_item_id_from_chat_name, synthesize_named_function_call_output_pairs,
+    CodexToolContext,
 };
 use super::transform_responses::{sanitize_anthropic_tool_use_input, TOOL_RESULT_ERROR_MARKER};
 use crate::proxy::error::ProxyError;
@@ -347,10 +348,19 @@ pub fn responses_request_to_anthropic_with_policy(
 /// Convert a request whose user-role context normalization decision has already
 /// been made by the forwarder. This keeps the optimizer sub-switch authoritative.
 pub(crate) fn responses_request_to_anthropic_prepared(
-    body: Value,
+    mut body: Value,
     default_max_tokens: u64,
     thinking_policy: AnthropicThinkingPolicy,
 ) -> Result<Value, ProxyError> {
+    if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
+        let repaired = synthesize_named_function_call_output_pairs(input);
+        if repaired > 0 {
+            log::debug!(
+                "[Codex] Synthesized {repaired} standalone function call replay item(s) before Anthropic bridge"
+            );
+        }
+    }
+
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);
     let model = body
@@ -2104,6 +2114,41 @@ mod tests {
         assert_eq!(content[0]["tool_use_id"], "c1");
         assert_eq!(content[0]["content"], "A");
         assert_eq!(content[1]["tool_use_id"], "c2");
+    }
+
+    #[test]
+    fn test_request_named_standalone_function_output_gets_valid_tool_turn() {
+        let input = json!({
+            "model": "c",
+            "max_output_tokens": 100,
+            "input": [{
+                "type": "function_call_output",
+                "id": "fco_automation_update",
+                "name": "automation_update",
+                "namespace": "codex_app",
+                "output": "Automation: 每日投资策略"
+            }]
+        });
+
+        let result = responses_request_to_anthropic(input, 4096).unwrap();
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_use");
+        assert_eq!(
+            messages[1]["content"][0]["name"],
+            "codex_app__automation_update"
+        );
+        let tool_use_id = messages[1]["content"][0]["id"].as_str().unwrap();
+        assert!(!tool_use_id.is_empty());
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[2]["content"][0]["tool_use_id"], tool_use_id);
+        assert_eq!(
+            messages[2]["content"][0]["content"],
+            "Automation: 每日投资策略"
+        );
     }
 
     #[test]
