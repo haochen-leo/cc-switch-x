@@ -88,7 +88,7 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
         return 0;
     };
 
-    let mut changed = 0;
+    let mut changed = synthesize_delegation_function_call_pairs(input);
     for (index, item) in input.iter_mut().enumerate() {
         let item_type = item.get("type").and_then(Value::as_str);
         if item_type == Some("reasoning")
@@ -157,6 +157,116 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
     }
 
     changed
+}
+
+/// Codex App cross-thread delegation can seed a receiver thread with only the
+/// `function_call_output` half of `send_message_to_thread` / `create_thread`.
+/// Strict upstreams then see a tool result whose `call_id` has no preceding
+/// function call. Repair only those delegation envelopes at the request
+/// boundary; do not rewrite normal tool history.
+fn synthesize_delegation_function_call_pairs(input: &mut Vec<Value>) -> usize {
+    let mut changed = 0;
+    let mut seen_function_call_ids: HashSet<String> = HashSet::new();
+    let mut repaired = Vec::with_capacity(input.len());
+
+    for (index, mut item) in std::mem::take(input).into_iter().enumerate() {
+        if item.get("type").and_then(Value::as_str) == Some("function_call") {
+            if let Some(call_id) = response_call_id(&item) {
+                seen_function_call_ids.insert(call_id);
+            }
+            repaired.push(item);
+            continue;
+        }
+
+        if is_codex_delegation_function_call_output(&item) {
+            let existing_call_id = item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let needs_pair = existing_call_id
+                .as_ref()
+                .is_none_or(|call_id| !seen_function_call_ids.contains(call_id));
+
+            if needs_pair {
+                let seed = function_call_output_pair_seed(&item, index);
+                let call_id = existing_call_id.unwrap_or_else(|| {
+                    format!("call_ccswitch_{}", short_sha256_hex(seed.as_bytes()))
+                });
+                if item.get("call_id").and_then(Value::as_str) != Some(call_id.as_str()) {
+                    item["call_id"] = json!(call_id);
+                    changed += 1;
+                }
+
+                let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+                let namespace = item.get("namespace").and_then(Value::as_str);
+                let synthetic_id = format!(
+                    "fc_ccswitch_{}",
+                    short_sha256_hex(format!("synthetic_function_call:{seed}").as_bytes())
+                );
+                repaired.push(response_function_call_item_with_namespace(
+                    &synthetic_id,
+                    "completed",
+                    item.get("call_id").and_then(Value::as_str).unwrap_or(""),
+                    name,
+                    namespace,
+                    "{}",
+                    None,
+                ));
+                if let Some(call_id) = response_call_id(repaired.last().unwrap()) {
+                    seen_function_call_ids.insert(call_id);
+                }
+                changed += 1;
+            }
+        }
+
+        repaired.push(item);
+    }
+
+    *input = repaired;
+    changed
+}
+
+fn response_call_id(item: &Value) -> Option<String> {
+    item.get("call_id")
+        .or_else(|| item.get("id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn function_call_output_pair_seed(item: &Value, index: usize) -> String {
+    item.get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "function_call_output:input[{index}]:{}",
+                canonical_json_string(item)
+            )
+        })
+}
+
+fn is_codex_delegation_function_call_output(item: &Value) -> bool {
+    if item.get("type").and_then(Value::as_str) != Some("function_call_output") {
+        return false;
+    }
+    if item.get("namespace").and_then(Value::as_str) != Some("codex_app") {
+        return false;
+    }
+    let Some(name) = item.get("name").and_then(Value::as_str) else {
+        return false;
+    };
+    if !matches!(name, "create_thread" | "send_message_to_thread") {
+        return false;
+    }
+    item.get("output")
+        .map(|output| match output {
+            Value::String(output) => output.contains("<codex_delegation>"),
+            other => canonical_json_string(other).contains("<codex_delegation>"),
+        })
+        .unwrap_or(false)
 }
 
 /// Normalize third-party native Responses output before Codex records it as
@@ -1027,7 +1137,14 @@ fn append_responses_input_as_chat_messages(
             }));
         }
         Value::Array(items) => {
-            for item in items {
+            let mut repaired_items = items.clone();
+            let repaired = synthesize_delegation_function_call_pairs(&mut repaired_items);
+            if repaired > 0 {
+                log::debug!(
+                    "[Codex] Synthesized {repaired} delegation function call replay item(s) before Chat bridge"
+                );
+            }
+            for item in &repaired_items {
                 append_responses_item_as_chat_message(
                     item,
                     messages,
@@ -2902,6 +3019,63 @@ mod tests {
     }
 
     #[test]
+    fn responses_upstream_synthesizes_pair_for_delegation_output_without_call_id() {
+        let orphan_id = "fco_01a06d0e-8951-7b63-9df9-51d972092286";
+        let mut body = json!({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "id": orphan_id,
+                    "name": "send_message_to_thread",
+                    "namespace": "codex_app",
+                    "output": "<codex_delegation><input>do it</input></codex_delegation>"
+                }
+            ]
+        });
+
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            2
+        );
+        assert_eq!(body["input"][0]["type"], "function_call");
+        assert_eq!(body["input"][0]["name"], "send_message_to_thread");
+        assert_eq!(body["input"][0]["namespace"], "codex_app");
+        assert_eq!(body["input"][0]["arguments"], "{}");
+        assert_eq!(
+            body["input"][0]["call_id"],
+            format!("call_ccswitch_{}", short_sha256_hex(orphan_id.as_bytes()))
+        );
+        assert_eq!(body["input"][1]["type"], "function_call_output");
+        assert_eq!(body["input"][1]["call_id"], body["input"][0]["call_id"]);
+        assert_eq!(
+            body["input"][1]["output"],
+            "<codex_delegation><input>do it</input></codex_delegation>"
+        );
+    }
+
+    #[test]
+    fn responses_upstream_does_not_synthesize_pair_for_non_delegation_output() {
+        let mut body = json!({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "id": "fco_plain",
+                    "name": "send_message_to_thread",
+                    "namespace": "codex_app",
+                    "output": "plain tool result"
+                }
+            ]
+        });
+
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            0
+        );
+        assert_eq!(body["input"].as_array().unwrap().len(), 1);
+        assert!(body["input"][0].get("call_id").is_none());
+    }
+
+    #[test]
     fn responses_upstream_normalizes_message_id_used_by_web_search_call() {
         let source_id = "msg_ddd6f038-4842-48ae-8764-1dd35de686c4";
         let mut body = json!({
@@ -4463,6 +4637,40 @@ mod tests {
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
         assert_eq!(messages[0]["reasoning_content"], "tool call");
         assert_eq!(messages[1]["role"], "tool");
+    }
+
+    #[test]
+    fn responses_request_to_chat_synthesizes_pair_for_delegation_output_without_call_id() {
+        let orphan_id = "fco_01a06d0e-8951-7b63-9df9-51d972092286";
+        let input = json!({
+            "model": "kimi-k3",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "id": orphan_id,
+                    "name": "send_message_to_thread",
+                    "namespace": "codex_app",
+                    "output": "<codex_delegation><input>do it</input></codex_delegation>"
+                }
+            ]
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        let messages = result["messages"].as_array().unwrap();
+        let expected_call_id = format!("call_ccswitch_{}", short_sha256_hex(orphan_id.as_bytes()));
+
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], expected_call_id);
+        assert_eq!(
+            messages[0]["tool_calls"][0]["function"]["name"],
+            "codex_app__send_message_to_thread"
+        );
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], expected_call_id);
+        assert_eq!(
+            messages[1]["content"],
+            "<codex_delegation><input>do it</input></codex_delegation>"
+        );
     }
 
     #[test]
@@ -6274,10 +6482,7 @@ mod tests {
         let dirty_call_id = "mcp__node_repl__js_高圆圆\nwait";
         assert_eq!(
             responses_item_id_from_call_id("fc_", dirty_call_id),
-            format!(
-                "fc_ccswitch_{}",
-                short_sha256_hex(dirty_call_id.as_bytes())
-            )
+            format!("fc_ccswitch_{}", short_sha256_hex(dirty_call_id.as_bytes()))
         );
     }
 
