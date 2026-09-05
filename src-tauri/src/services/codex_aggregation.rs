@@ -534,6 +534,7 @@ fn read_official_catalog_models() -> Result<Vec<Value>, String> {
                 &["base_instructions", "baseInstructions"],
                 "baseInstructions",
             );
+            copy_official_reasoning_metadata(entry, &mut normalized);
             models.push(Value::Object(normalized));
         }
     }
@@ -554,6 +555,43 @@ fn copy_first_field(
     if let Some(value) = candidates.iter().find_map(|key| source.get(*key)).cloned() {
         target.insert(target_key.to_string(), value);
     }
+}
+
+fn copy_official_reasoning_metadata(source: &Value, target: &mut Map<String, Value>) {
+    if let Some(levels) = official_reasoning_levels(source) {
+        target.insert("reasoningLevels".to_string(), Value::Array(levels));
+    }
+    copy_first_field(
+        source,
+        target,
+        &["default_reasoning_level", "defaultReasoningLevel"],
+        "defaultReasoningLevel",
+    );
+}
+
+fn official_reasoning_levels(source: &Value) -> Option<Vec<Value>> {
+    let levels = source
+        .get("supported_reasoning_levels")
+        .or_else(|| source.get("supportedReasoningLevels"))
+        .or_else(|| source.get("reasoningLevels"))
+        .and_then(Value::as_array)?;
+
+    let mut seen = HashSet::new();
+    let normalized = levels
+        .iter()
+        .filter_map(|level| {
+            level
+                .as_str()
+                .or_else(|| level.get("effort").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|effort| !effort.is_empty())
+                .map(str::to_string)
+        })
+        .filter(|effort| seen.insert(effort.clone()))
+        .map(Value::String)
+        .collect::<Vec<_>>();
+
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn normalize_catalog_entry(
@@ -780,6 +818,102 @@ mod tests {
         .expect("catalog entry");
         assert_eq!(model, "qwen3.8-max");
         assert_eq!(entry["contextWindow"], json!(262_144));
+    }
+
+    #[test]
+    fn official_reasoning_metadata_is_normalized_for_aggregate_catalog() {
+        let source = json!({
+            "slug": "gpt-5.6-sol",
+            "supported_reasoning_levels": [
+                { "effort": "low", "description": "Fast responses" },
+                { "effort": "medium", "description": "Balanced" },
+                { "effort": "high", "description": "Deep" },
+                { "effort": "xhigh", "description": "Extra deep" },
+                { "effort": "max", "description": "Maximum" },
+                { "effort": "ultra", "description": "Ultra" }
+            ],
+            "default_reasoning_level": "low"
+        });
+        let mut target = Map::new();
+
+        copy_official_reasoning_metadata(&source, &mut target);
+
+        assert_eq!(
+            target.get("reasoningLevels"),
+            Some(&json!(["low", "medium", "high", "xhigh", "max", "ultra"]))
+        );
+        assert_eq!(target.get("defaultReasoningLevel"), Some(&json!("low")));
+    }
+
+    #[test]
+    fn official_reasoning_metadata_accepts_string_levels_and_deduplicates() {
+        let source = json!({
+            "reasoningLevels": [" high ", "", "max", "high"],
+            "defaultReasoningLevel": "max"
+        });
+        let mut target = Map::new();
+
+        copy_official_reasoning_metadata(&source, &mut target);
+
+        assert_eq!(target.get("reasoningLevels"), Some(&json!(["high", "max"])));
+        assert_eq!(target.get("defaultReasoningLevel"), Some(&json!("max")));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn official_catalog_read_preserves_reasoning_metadata_from_cache() {
+        let dir = tempfile::tempdir().expect("create isolated home");
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).expect("create codex dir");
+        std::fs::write(
+            codex_dir.join("models_cache.json"),
+            serde_json::to_string(&json!({
+                "models": [
+                    {
+                        "slug": "gpt-5.6-sol",
+                        "display_name": "GPT-5.6-Sol",
+                        "supported_reasoning_levels": [
+                            { "effort": "low" },
+                            { "effort": "medium" },
+                            { "effort": "high" },
+                            { "effort": "xhigh" },
+                            { "effort": "max" },
+                            { "effort": "ultra" }
+                        ],
+                        "default_reasoning_level": "low",
+                        "base_instructions": "official sol instructions"
+                    },
+                    {
+                        "slug": "kimi-k3",
+                        "display_name": "Kimi K3",
+                        "supported_reasoning_levels": [{ "effort": "max" }]
+                    }
+                ]
+            }))
+            .expect("serialize models cache"),
+        )
+        .expect("write models cache");
+
+        let original_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+        let _ = crate::settings::reload_settings();
+
+        let models = read_official_catalog_models().expect("read official models");
+
+        match &original_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let _ = crate::settings::reload_settings();
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["model"], "gpt-5.6-sol");
+        assert_eq!(
+            models[0]["reasoningLevels"],
+            json!(["low", "medium", "high", "xhigh", "max", "ultra"])
+        );
+        assert_eq!(models[0]["defaultReasoningLevel"], "low");
+        assert_eq!(models[0]["baseInstructions"], "official sol instructions");
     }
 
     #[test]
