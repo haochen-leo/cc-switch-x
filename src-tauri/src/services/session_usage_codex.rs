@@ -3039,6 +3039,9 @@ mod tests {
     /// ```
     #[test]
     #[ignore]
+    // serial：本测试会改写进程级 CC_SWITCH_TEST_HOME；手动 --ignored 与其他
+    // 测试混跑时必须与 TempHome 系测试互斥，避免 env 竞争逃逸到真实 home。
+    #[serial_test::serial]
     fn replay_real_codex_corpus() -> Result<(), AppError> {
         let Some(real_home) = dirs::home_dir() else {
             eprintln!("[REPLAY] no home dir, skipping");

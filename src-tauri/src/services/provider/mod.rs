@@ -307,6 +307,10 @@ mod tests {
     }
 
     #[test]
+    // serial：with_test_home 读写进程级 CC_SWITCH_TEST_HOME/HOME，必须与
+    // TempHome 系 takeover 测试互斥，否则恢复 env 时会把并发测试的写入
+    // 逃逸到真实 ~/.codex / ~/.cc-switch（已在真实机器上发生过一次）。
+    #[serial]
     fn updating_codex_source_refreshes_enabled_aggregate_catalog() {
         with_test_home(|state, _home| {
             let db = state.db.as_ref();
