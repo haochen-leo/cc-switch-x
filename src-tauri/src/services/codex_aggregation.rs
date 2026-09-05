@@ -6,12 +6,22 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use sha2::{Digest, Sha256};
 
 pub const CODEX_AGGREGATE_PROVIDER_ID: &str = "codex-multi-provider";
 pub const CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING: &str = "codex_aggregate_previous_provider";
 pub const CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING: &str = "codex_aggregate_previous_takeover";
 pub const CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING: &str = "codex_aggregate_source_providers";
 pub const CODEX_AGGREGATE_UPSTREAM_MODEL_KEY: &str = "codexAggregateUpstreamModel";
+pub const CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING: &str = "codex_aggregate_models_cache_hash";
+
+/// 聚合目录成功重建后，把当前 `models_cache.json` 的 hash 记到 DB，
+/// 作为下次启动时的基线。读取失败时静默跳过（不影响聚合功能）。
+pub fn record_models_cache_hash(db: &Database) {
+    if let Some(hash) = models_cache_hash() {
+        let _ = db.set_setting(CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING, &hash);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -435,6 +445,68 @@ async fn load_provider_models(provider: Provider) -> LoadedProviderModels {
             models: Vec::new(),
             default_context_window,
         },
+    }
+}
+
+/// 计算 `models_cache.json` 的 SHA-256，用于启动时检测官方缓存是否变化。
+fn models_cache_hash() -> Option<String> {
+    let path = crate::codex_config::get_codex_config_dir().join("models_cache.json");
+    let data = std::fs::read(&path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// 启动时检测 `models_cache.json` 是否变化，若聚合已启用且 hash 不同则自动 refresh。
+///
+/// Codex 升级或官方更新模型后 `models_cache.json` 会重写，但聚合 catalog 是上次
+/// 生成时的快照，不会自动同步。此函数在 App 启动时比较当前 hash 与上次记录值，
+/// 不同就触发 `refresh_codex_aggregation_if_enabled` 重建聚合目录。
+pub async fn refresh_if_models_cache_changed(
+    proxy_service: &crate::services::ProxyService,
+    db: &Database,
+) {
+    let current_hash = match models_cache_hash() {
+        Some(h) => h,
+        None => return, // models_cache.json 不存在，跳过
+    };
+    let stored_hash = db
+        .get_setting(CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING)
+        .unwrap_or(None)
+        .filter(|s| !s.is_empty());
+
+    if stored_hash.as_deref() == Some(current_hash.as_str()) {
+        return; // 无变化
+    }
+
+    log::info!(
+        "models_cache.json hash 变化 ({} -> {})，尝试刷新 Codex 聚合目录",
+        stored_hash.as_deref().unwrap_or("(空)"),
+        &current_hash
+    );
+
+    match proxy_service.refresh_codex_aggregation_if_enabled().await {
+        Ok(Some(status)) => {
+            log::info!(
+                "Codex 聚合目录已自动刷新: {} 模型, {} 来源",
+                status.model_count, status.source_provider_count
+            );
+            let _ = db.set_setting(
+                CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING,
+                &current_hash,
+            );
+        }
+        Ok(None) => {
+            // 聚合未启用，仍记录当前 hash 以便下次启用时基线正确
+            let _ = db.set_setting(
+                CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING,
+                &current_hash,
+            );
+        }
+        Err(error) => {
+            log::warn!("启动时自动刷新 Codex 聚合目录失败: {error}");
+            // 不更新 hash，下次启动再试
+        }
     }
 }
 
