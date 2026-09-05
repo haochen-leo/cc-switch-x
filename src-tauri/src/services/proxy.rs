@@ -3503,7 +3503,8 @@ impl ProxyService {
         &self,
     ) -> Result<Option<crate::services::codex_aggregation::CodexAggregationStatus>, String> {
         use crate::services::codex_aggregation::{
-            build_codex_aggregate_provider, CodexAggregationStatus, CODEX_AGGREGATE_PROVIDER_ID,
+            build_codex_aggregate_provider, record_models_cache_hash, CodexAggregationStatus,
+            CODEX_AGGREGATE_PROVIDER_ID,
         };
 
         if !self.get_codex_aggregation_status().await?.enabled {
@@ -3539,6 +3540,8 @@ impl ProxyService {
             }
             return Err(format!("刷新 Codex 聚合供应商失败: {error}"));
         }
+
+        record_models_cache_hash(self.db.as_ref());
 
         Ok(Some(CodexAggregationStatus {
             enabled: true,
@@ -3603,9 +3606,9 @@ impl ProxyService {
         enabled: bool,
     ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
         use crate::services::codex_aggregation::{
-            build_codex_aggregate_provider, CodexAggregationStatus,
-            CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING, CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING,
-            CODEX_AGGREGATE_PROVIDER_ID,
+            build_codex_aggregate_provider, record_models_cache_hash, CodexAggregationStatus,
+            CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING,
+            CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING, CODEX_AGGREGATE_PROVIDER_ID,
         };
 
         let app_type = AppType::Codex;
@@ -3672,6 +3675,8 @@ impl ProxyService {
                     .delete_provider(app_type_str, CODEX_AGGREGATE_PROVIDER_ID);
                 return Err(format!("启用 Codex 聚合供应商失败: {error}"));
             }
+
+            record_models_cache_hash(self.db.as_ref());
 
             return Ok(CodexAggregationStatus {
                 enabled: true,
