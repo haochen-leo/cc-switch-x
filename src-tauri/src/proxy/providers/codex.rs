@@ -511,6 +511,9 @@ pub fn resolve_codex_catalog_tool_profile(
     if is_codex_official_provider(provider) {
         return CodexCatalogToolProfile::NativeResponses;
     }
+    if provider.is_codex_aggregate() {
+        return CodexCatalogToolProfile::NativeResponses;
+    }
     // xAI OAuth pins the native Responses profile regardless of editable
     // api_format, mirroring the Claude-side managed-provider invariant.
     if provider.is_xai_oauth() {
@@ -1658,6 +1661,16 @@ wire_api = "anthropic"
         });
         assert_eq!(
             resolve_codex_catalog_tool_profile(&native),
+            CodexCatalogToolProfile::NativeResponses
+        );
+
+        let mut aggregate = create_provider(json!({ "auth": {}, "config": "" }));
+        aggregate.meta = Some(crate::provider::ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(
+            resolve_codex_catalog_tool_profile(&aggregate),
             CodexCatalogToolProfile::NativeResponses
         );
 
