@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CC Switch For IdeaLAB",
+  "productName": "CC Switch X",
   "version": "3.20.0",
-  "identifier": "com.ccswitch.idealab",
+  "identifier": "com.ccswitch.x",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",

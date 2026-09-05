@@ -56,7 +56,7 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
     if handle.config().identifier != OFFICIAL_APP_IDENTIFIER {
-        return Err("当前 IdeaLAB 版本已禁用官方应用内升级，避免覆盖本地安装。".to_string());
+        return Err("当前 CC Switch X 版本已禁用官方应用内升级，避免覆盖本地安装。".to_string());
     }
 
     handle

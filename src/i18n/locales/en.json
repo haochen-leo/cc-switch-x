@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "CC Switch For IdeaLAB",
+    "title": "CC Switch X",
     "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
   },
   "common": {
@@ -45,9 +45,9 @@
     "notSet": "Not Set"
   },
   "firstRunNotice": {
-    "title": "Welcome to CC Switch For IdeaLAB",
-    "bodyDefault": "CC Switch For IdeaLAB lets you switch between multiple Claude Code / Codex / Gemini CLI providers with a single click. If you already had these tools configured, CC Switch For IdeaLAB has saved your existing setup as a provider named “default” so none of your previous configuration is lost.",
-    "bodyOfficial": "An “Official” preset is also included in the list — click it any time you want to switch back to the official default. CC Switch For IdeaLAB automatically backs up your current config to “default” before switching, so you can move back and forth freely. That's how CC Switch For IdeaLAB works 😊",
+    "title": "Welcome to CC Switch X",
+    "bodyDefault": "CC Switch X lets you switch between multiple Claude Code / Codex / Gemini CLI providers with a single click. If you already had these tools configured, CC Switch X has saved your existing setup as a provider named “default” so none of your previous configuration is lost.",
+    "bodyOfficial": "An “Official” preset is also included in the list — click it any time you want to switch back to the official default. CC Switch X automatically backs up your current config to “default” before switching, so you can move back and forth freely. That's how CC Switch X works 😊",
     "confirm": "Got it"
   },
   "apiKeyInput": {
@@ -830,7 +830,7 @@
     "releaseNotes": "Release Notes",
     "viewReleaseNotes": "View release notes for this version",
     "viewCurrentReleaseNotes": "View current version release notes",
-    "officialUpdatesDisabled": "Official in-app updates are disabled in the IdeaLAB build to avoid overwriting the local installation.",
+    "officialUpdatesDisabled": "Official in-app updates are disabled in the CC Switch X build to avoid overwriting the local installation.",
     "officialUpdatesDisabledBadge": "Official updates disabled",
     "officialWebsite": "Official Website",
     "github": "GitHub",
