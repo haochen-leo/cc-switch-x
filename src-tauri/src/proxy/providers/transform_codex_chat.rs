@@ -57,6 +57,7 @@ pub(crate) fn normalize_replayed_item_ids_for_responses_upstream(body: &mut Valu
     normalize_replayed_item_ids_for_responses_upstream_with_policy(
         body,
         ReplayedReasoningIdPolicy::Canonicalize,
+        true,
     )
 }
 
@@ -71,6 +72,7 @@ pub(crate) fn normalize_official_replayed_item_ids_for_responses_upstream(
     normalize_replayed_item_ids_for_responses_upstream_with_policy(
         body,
         ReplayedReasoningIdPolicy::StripPlainReasoningIdentity,
+        false,
     )
 }
 
@@ -83,12 +85,17 @@ enum ReplayedReasoningIdPolicy {
 fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
     body: &mut Value,
     reasoning_policy: ReplayedReasoningIdPolicy,
+    synthesize_standalone_function_outputs: bool,
 ) -> usize {
     let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
         return 0;
     };
 
-    let mut changed = synthesize_codex_app_function_call_pairs(input);
+    let mut changed = if synthesize_standalone_function_outputs {
+        synthesize_named_function_call_output_pairs(input)
+    } else {
+        0
+    };
     for (index, item) in input.iter_mut().enumerate() {
         let item_type = item.get("type").and_then(Value::as_str);
         if item_type == Some("reasoning")
@@ -159,12 +166,14 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
     changed
 }
 
-/// Codex App can start or steer a turn with a standalone `function_call_output`,
-/// including automation and cross-thread delegation inputs. Strict upstreams
-/// require every tool result to have a `call_id` with a preceding function call.
-/// Repair only named `codex_app` outputs that lack that pair at the request
-/// boundary; do not rewrite already-paired or non-app tool history.
-fn synthesize_codex_app_function_call_pairs(input: &mut Vec<Value>) -> usize {
+/// Codex can start or steer a turn with a named standalone
+/// `function_call_output`. App-server intentionally emits these without a
+/// `call_id`, and namespaces are open-ended and optional (`codex_app`,
+/// `codex_tui`, MCP integrations, etc.). Strict third-party upstreams require
+/// every tool result to have a `call_id` with a preceding function call.
+/// Repair only named outputs that lack that pair at the request boundary; do
+/// not rewrite already-paired or unnamed tool history.
+pub(crate) fn synthesize_named_function_call_output_pairs(input: &mut Vec<Value>) -> usize {
     let mut changed = 0;
     let mut seen_function_call_ids: HashSet<String> = HashSet::new();
     let mut repaired = Vec::with_capacity(input.len());
@@ -178,7 +187,7 @@ fn synthesize_codex_app_function_call_pairs(input: &mut Vec<Value>) -> usize {
             continue;
         }
 
-        if is_codex_app_function_call_output(&item) {
+        if is_named_function_call_output(&item) {
             let existing_call_id = item
                 .get("call_id")
                 .and_then(Value::as_str)
@@ -248,11 +257,8 @@ fn function_call_output_pair_seed(item: &Value, index: usize) -> String {
         })
 }
 
-fn is_codex_app_function_call_output(item: &Value) -> bool {
+fn is_named_function_call_output(item: &Value) -> bool {
     if item.get("type").and_then(Value::as_str) != Some("function_call_output") {
-        return false;
-    }
-    if item.get("namespace").and_then(Value::as_str) != Some("codex_app") {
         return false;
     }
     item.get("name")
@@ -1129,10 +1135,10 @@ fn append_responses_input_as_chat_messages(
         }
         Value::Array(items) => {
             let mut repaired_items = items.clone();
-            let repaired = synthesize_codex_app_function_call_pairs(&mut repaired_items);
+            let repaired = synthesize_named_function_call_output_pairs(&mut repaired_items);
             if repaired > 0 {
                 log::debug!(
-                    "[Codex] Synthesized {repaired} Codex App function call replay item(s) before Chat bridge"
+                    "[Codex] Synthesized {repaired} standalone function call replay item(s) before Chat bridge"
                 );
             }
             for item in &repaired_items {
@@ -3102,7 +3108,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_app_pair_synthesis_keeps_existing_pair() {
+    fn named_pair_synthesis_keeps_existing_pair() {
         let mut input = vec![
             json!({
                 "type": "function_call",
@@ -3123,12 +3129,12 @@ mod tests {
         ];
         let original = input.clone();
 
-        assert_eq!(synthesize_codex_app_function_call_pairs(&mut input), 0);
+        assert_eq!(synthesize_named_function_call_output_pairs(&mut input), 0);
         assert_eq!(input, original);
     }
 
     #[test]
-    fn codex_app_pair_synthesis_reuses_unpaired_existing_call_id() {
+    fn named_pair_synthesis_reuses_unpaired_existing_call_id() {
         let mut input = vec![json!({
             "type": "function_call_output",
             "id": "fco_existing_call_id",
@@ -3138,7 +3144,7 @@ mod tests {
             "output": "Automation: 每日投资策略"
         })];
 
-        assert_eq!(synthesize_codex_app_function_call_pairs(&mut input), 1);
+        assert_eq!(synthesize_named_function_call_output_pairs(&mut input), 1);
         assert_eq!(input.len(), 2);
         assert_eq!(input[0]["type"], "function_call");
         assert_eq!(input[0]["call_id"], "call_existing");
@@ -3146,7 +3152,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_app_pair_synthesis_is_deterministic_and_idempotent() {
+    fn named_pair_synthesis_is_deterministic_and_idempotent() {
         let mut first = vec![json!({
             "type": "function_call_output",
             "name": "automation_update",
@@ -3155,25 +3161,53 @@ mod tests {
         })];
         let mut second = first.clone();
 
-        assert_eq!(synthesize_codex_app_function_call_pairs(&mut first), 2);
-        assert_eq!(synthesize_codex_app_function_call_pairs(&mut second), 2);
+        assert_eq!(synthesize_named_function_call_output_pairs(&mut first), 2);
+        assert_eq!(synthesize_named_function_call_output_pairs(&mut second), 2);
         assert_eq!(first, second);
 
         let repaired = first.clone();
-        assert_eq!(synthesize_codex_app_function_call_pairs(&mut first), 0);
+        assert_eq!(synthesize_named_function_call_output_pairs(&mut first), 0);
         assert_eq!(first, repaired);
     }
 
     #[test]
-    fn codex_app_pair_synthesis_ignores_other_namespaces_and_missing_names() {
+    fn named_pair_synthesis_supports_open_and_optional_namespaces() {
         let mut input = vec![
             json!({
                 "type": "function_call_output",
-                "id": "fco_other_namespace",
-                "name": "automation_update",
-                "namespace": "other_app",
-                "output": "result"
+                "id": "fco_codex_tui",
+                "name": "send_message_to_thread",
+                "namespace": "codex_tui",
+                "output": "tui result"
             }),
+            json!({
+                "type": "function_call_output",
+                "id": "fco_slack",
+                "name": "notifications",
+                "namespace": "slack",
+                "output": "slack result"
+            }),
+            json!({
+                "type": "function_call_output",
+                "id": "fco_no_namespace",
+                "name": "local_tool",
+                "output": "local result"
+            }),
+        ];
+
+        assert_eq!(synthesize_named_function_call_output_pairs(&mut input), 6);
+        assert_eq!(input.len(), 6);
+        assert_eq!(input[0]["namespace"], "codex_tui");
+        assert_eq!(input[1]["call_id"], input[0]["call_id"]);
+        assert_eq!(input[2]["namespace"], "slack");
+        assert_eq!(input[3]["call_id"], input[2]["call_id"]);
+        assert!(input[4].get("namespace").is_none());
+        assert_eq!(input[5]["call_id"], input[4]["call_id"]);
+    }
+
+    #[test]
+    fn named_pair_synthesis_ignores_missing_or_blank_names() {
+        let mut input = vec![
             json!({
                 "type": "function_call_output",
                 "id": "fco_missing_name",
@@ -3190,7 +3224,7 @@ mod tests {
         ];
         let original = input.clone();
 
-        assert_eq!(synthesize_codex_app_function_call_pairs(&mut input), 0);
+        assert_eq!(synthesize_named_function_call_output_pairs(&mut input), 0);
         assert_eq!(input, original);
     }
 
@@ -3450,6 +3484,26 @@ mod tests {
             body["input"][0]["id"],
             format!("ws_ccswitch_{}", short_sha256_hex(source_id.as_bytes()))
         );
+    }
+
+    #[test]
+    fn official_responses_upstream_preserves_named_standalone_function_output() {
+        let mut body = json!({
+            "input": [{
+                "id": "fco_automation_update",
+                "type": "function_call_output",
+                "name": "automation_update",
+                "namespace": "codex_app",
+                "output": "Automation: 每日投资策略"
+            }]
+        });
+        let original = body.clone();
+
+        assert_eq!(
+            normalize_official_replayed_item_ids_for_responses_upstream(&mut body),
+            0
+        );
+        assert_eq!(body, original);
     }
 
     #[test]
