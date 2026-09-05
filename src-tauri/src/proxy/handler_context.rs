@@ -99,6 +99,34 @@ impl RequestContext {
         tag: &'static str,
         app_type_str: &'static str,
     ) -> Result<Self, ProxyError> {
+        Self::new_inner(state, body, headers, app_type, tag, app_type_str, false).await
+    }
+
+    /// 创建 Codex compact 请求上下文。
+    ///
+    /// 与普通请求的区别仅在于：聚合历史模型路由已经失效时，允许从当前启用的
+    /// 聚合模型中自动选择一个替代模型完成这次压缩。
+    pub async fn new_for_compact(
+        state: &ProxyState,
+        body: &serde_json::Value,
+        headers: &HeaderMap,
+        app_type: AppType,
+        tag: &'static str,
+        app_type_str: &'static str,
+    ) -> Result<Self, ProxyError> {
+        Self::new_inner(state, body, headers, app_type, tag, app_type_str, true).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn new_inner(
+        state: &ProxyState,
+        body: &serde_json::Value,
+        headers: &HeaderMap,
+        app_type: AppType,
+        tag: &'static str,
+        app_type_str: &'static str,
+        is_compact: bool,
+    ) -> Result<Self, ProxyError> {
         let start_time = Instant::now();
         let request_id = uuid::Uuid::new_v4().to_string();
 
@@ -138,17 +166,39 @@ impl RequestContext {
 
         // 使用共享的 ProviderRouter 选择 Provider（熔断器状态跨请求保持）
         // 注意：只在这里调用一次，结果传递给 forwarder，避免重复消耗 HalfOpen 名额
-        let (providers, model_route_applied) = state
-            .provider_router
-            .select_providers_for_request(app_type_str, body)
-            .await
-            .map_err(|e| match e {
+        let route_result = if is_compact {
+            state
+                .provider_router
+                .select_providers_for_compact_request(app_type_str, body)
+                .await
+        } else {
+            state
+                .provider_router
+                .select_providers_for_request(app_type_str, body)
+                .await
+        };
+        let (providers, model_route_applied) = route_result.map_err(|e| {
+            let message = e.to_string();
+            log::error!(
+                "[{}] Provider 路由失败: app={}, model={}, compact={}, session={}, error={}",
+                tag,
+                app_type_str,
+                request_model,
+                is_compact,
+                session_id,
+                message
+            );
+            match e {
                 crate::error::AppError::AllProvidersCircuitOpen => {
                     ProxyError::AllProvidersCircuitOpen
                 }
                 crate::error::AppError::NoProvidersConfigured => ProxyError::NoProvidersConfigured,
-                _ => ProxyError::DatabaseError(e.to_string()),
-            })?;
+                crate::error::AppError::Config(_)
+                | crate::error::AppError::InvalidInput(_)
+                | crate::error::AppError::Message(_) => ProxyError::InvalidRequest(message),
+                _ => ProxyError::DatabaseError(message),
+            }
+        })?;
 
         let provider = providers
             .first()

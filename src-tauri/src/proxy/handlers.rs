@@ -1545,8 +1545,15 @@ async fn handle_responses_compact_for_app(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
+    let mut ctx = RequestContext::new_for_compact(
+        &state,
+        &body,
+        &headers,
+        app_type.clone(),
+        tag,
+        app_type_str,
+    )
+    .await?;
     let endpoint = endpoint_with_query(&uri, "/responses/compact");
     ctx.endpoint = endpoint.clone();
     payload_capture::PayloadCaptureContext::from_request(&state, &ctx).record_request(&body_bytes);
@@ -1561,27 +1568,46 @@ async fn handle_responses_compact_for_app(
         transform_codex_responses_toolsearch::tool_search_namespace_restore_map(&body);
 
     let forwarder = ctx.create_forwarder(&state);
-    let mut result = match forwarder
-        .forward_with_retry(
-            &app_type,
-            method,
-            &endpoint,
-            body,
-            headers,
-            extensions,
-            ctx.get_providers(),
-        )
-        .await
-    {
-        Ok(result) => result,
-        Err(mut err) => {
-            if let Some(provider) = err.provider.take() {
-                ctx.provider = provider;
+    let providers = ctx.get_providers();
+    let provider_count = providers.len();
+    let mut forward_result = None;
+    for (index, provider) in providers.into_iter().enumerate() {
+        match forwarder
+            .forward_with_retry(
+                &app_type,
+                method.clone(),
+                &endpoint,
+                body.clone(),
+                headers.clone(),
+                extensions.clone(),
+                vec![provider],
+            )
+            .await
+        {
+            Ok(result) => {
+                forward_result = Some(result);
+                break;
             }
-            log_forward_error(&state, &ctx, is_stream, &err.error);
-            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
+            Err(mut err) => {
+                if let Some(provider) = err.provider.take() {
+                    ctx.provider = provider;
+                }
+                let has_next = index + 1 < provider_count;
+                if has_next && compact_fallback_error_is_retryable(&err.error) {
+                    log::warn!(
+                        "[{}] Compact 降级候选失败，继续下一个模型: provider={}, error={}",
+                        tag,
+                        ctx.provider.name,
+                        err.error
+                    );
+                    continue;
+                }
+                log_forward_error(&state, &ctx, is_stream, &err.error);
+                return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
+            }
         }
-    };
+    }
+    let mut result = forward_result.ok_or(ProxyError::NoAvailableProvider)?;
 
     let connection_guard = result.connection_guard.take();
     ctx.outbound_model = result.outbound_model.take();
@@ -1672,6 +1698,20 @@ async fn handle_responses_compact_for_app(
         restore_map,
     )
     .await
+}
+
+fn compact_fallback_error_is_retryable(error: &ProxyError) -> bool {
+    matches!(
+        error,
+        ProxyError::ForwardFailed(_)
+            | ProxyError::ProviderUnhealthy(_)
+            | ProxyError::UpstreamError { .. }
+            | ProxyError::ConfigError(_)
+            | ProxyError::TransformError(_)
+            | ProxyError::Timeout(_)
+            | ProxyError::StreamIdleTimeout(_)
+            | ProxyError::AuthError(_)
+    )
 }
 
 /// Response handler for the native Responses passthrough to a strict gateway
@@ -3687,9 +3727,9 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, chat_sse_to_response_value, classify_body_for_diagnostics,
-        codex_proxy_error_json, responses_sse_stream_to_anthropic_message,
-        responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
-        upstream_body_parse_error,
+        codex_proxy_error_json, compact_fallback_error_is_retryable,
+        responses_sse_stream_to_anthropic_message, responses_sse_to_response_value,
+        should_use_claude_transform_streaming, transform, upstream_body_parse_error,
     };
     use crate::proxy::ProxyError;
     use bytes::Bytes;
@@ -4401,6 +4441,20 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert!(message.contains("upstream gateway failed"));
         assert_eq!(body["error"]["code"], 2013);
         assert_eq!(body["error"]["upstream_status"], 502);
+    }
+
+    #[test]
+    fn compact_fallback_retries_model_specific_upstream_errors() {
+        assert!(compact_fallback_error_is_retryable(
+            &ProxyError::UpstreamError {
+                status: 404,
+                body: Some("Not Found".to_string()),
+                retry_after_ms: None,
+            }
+        ));
+        assert!(!compact_fallback_error_is_retryable(
+            &ProxyError::InvalidRequest("invalid compact history".to_string())
+        ));
     }
 
     #[test]
