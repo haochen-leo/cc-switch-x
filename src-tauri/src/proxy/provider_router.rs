@@ -9,7 +9,7 @@ use crate::provider::Provider;
 use crate::proxy::circuit_breaker::{AllowResult, CircuitBreaker, CircuitBreakerConfig};
 use crate::proxy::model_mapper::ModelMapping;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -144,6 +144,116 @@ impl ProviderRouter {
     /// - 其它非 Claude：等同 `select_providers`，不做模型映射
     /// - Claude 无路由配置：回退默认链路
     pub async fn select_providers_for_request(
+        &self,
+        app_type: &str,
+        request_body: &Value,
+    ) -> Result<(Vec<Provider>, bool), AppError> {
+        self.select_providers_for_request_inner(app_type, request_body)
+            .await
+    }
+
+    /// 为 Codex `/responses/compact` 选择供应商。
+    ///
+    /// 历史会话可能引用已经从聚合来源中移除的模型。仅对 compact 请求允许从当前
+    /// 聚合路由中自动选择一个替代模型，普通采样请求仍保持严格路由语义。
+    pub async fn select_providers_for_compact_request(
+        &self,
+        app_type: &str,
+        request_body: &Value,
+    ) -> Result<(Vec<Provider>, bool), AppError> {
+        if app_type != AppType::Codex.as_str() {
+            return self
+                .select_providers_for_request_inner(app_type, request_body)
+                .await;
+        }
+
+        let Some(current_provider_id) = self.resolve_current_provider_id(app_type) else {
+            return self
+                .select_providers_for_request_inner(app_type, request_body)
+                .await;
+        };
+        let Some(current_provider) = self.db.get_provider_by_id(&current_provider_id, app_type)?
+        else {
+            return self
+                .select_providers_for_request_inner(app_type, request_body)
+                .await;
+        };
+        if !current_provider.is_codex_aggregate() {
+            return self
+                .select_providers_for_request_inner(app_type, request_body)
+                .await;
+        }
+
+        let request_model = request_body
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .ok_or_else(|| {
+                AppError::Message("Codex 聚合请求缺少 model，无法选择真实供应商".to_string())
+            })?;
+        let routes = current_provider
+            .settings_config
+            .get("codexAggregateRoutes")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
+            })?;
+
+        if Self::find_codex_aggregate_route(routes, request_model).is_some() {
+            return self
+                .select_providers_for_request_inner(app_type, request_body)
+                .await;
+        }
+
+        let fallback_routes =
+            Self::codex_aggregate_compact_fallback_routes(&current_provider, routes);
+        let mut providers = Vec::with_capacity(fallback_routes.len());
+        let mut selected_models = Vec::with_capacity(fallback_routes.len());
+        let mut last_error = None;
+
+        for (route_model, _) in fallback_routes {
+            let mut candidate_body = request_body.clone();
+            candidate_body["model"] = Value::String(route_model.to_string());
+            match self.resolve_codex_aggregate_target(app_type, &candidate_body) {
+                Ok(Some(provider)) => {
+                    let upstream_model = provider
+                        .settings_config
+                        .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                        .and_then(Value::as_str)
+                        .unwrap_or(route_model);
+                    selected_models.push(upstream_model.to_string());
+                    providers.push(provider);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!(
+                        "[codex] Compact 自动降级候选不可用: route={}, error={}",
+                        route_model,
+                        error
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+
+        if providers.is_empty() {
+            return Err(last_error.unwrap_or_else(|| {
+                AppError::Message(format!(
+                    "Codex 聚合没有可用于上下文压缩的启用模型: {request_model}"
+                ))
+            }));
+        }
+
+        log::warn!(
+            "[codex] Compact 历史模型路由不存在，自动降级链: {} -> [{}]",
+            request_model,
+            selected_models.join(" -> ")
+        );
+        Ok((providers, true))
+    }
+
+    async fn select_providers_for_request_inner(
         &self,
         app_type: &str,
         request_body: &Value,
@@ -485,23 +595,92 @@ impl ProviderRouter {
                 AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
             })?;
 
-        let route = routes
-            .get(request_model)
-            .map(|route| (request_model, route))
-            .or_else(|| {
-                routes
-                    .iter()
-                    .find(|(route_model, route)| {
-                        Self::codex_aggregate_upstream_model(route_model, route)
-                            == Some(request_model)
-                    })
-                    .map(|(route_model, route)| (route_model.as_str(), route))
-            })
-            .ok_or_else(|| {
-                AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
-            })?;
+        let route = Self::find_codex_aggregate_route(routes, request_model).ok_or_else(|| {
+            AppError::Message(format!("Codex 聚合模型未配置路由: {request_model}"))
+        })?;
 
         Self::codex_aggregate_route_target(request_model, route.0, route.1)
+    }
+
+    fn find_codex_aggregate_route<'a>(
+        routes: &'a serde_json::Map<String, Value>,
+        request_model: &str,
+    ) -> Option<(&'a str, &'a Value)> {
+        routes
+            .get_key_value(request_model)
+            .map(|(route_model, route)| (route_model.as_str(), route))
+            .or_else(|| {
+                routes.iter().find_map(|(route_model, route)| {
+                    (Self::codex_aggregate_upstream_model(route_model, route)
+                        == Some(request_model))
+                    .then_some((route_model.as_str(), route))
+                })
+            })
+    }
+
+    /// 从当前启用的聚合模型目录中生成一次性 compact 降级链。
+    ///
+    /// 优先级：Luna → Flash → 目录顺序。目录项没有对应路由时跳过；旧数据没有
+    /// modelCatalog 时使用路由表顺序。
+    fn codex_aggregate_compact_fallback_routes<'a>(
+        current_provider: &'a Provider,
+        routes: &'a serde_json::Map<String, Value>,
+    ) -> Vec<(&'a str, &'a Value)> {
+        let catalog_models = current_provider
+            .settings_config
+            .pointer("/modelCatalog/models")
+            .and_then(Value::as_array);
+        let mut selected = Vec::new();
+        let mut seen = HashSet::new();
+
+        if let Some(catalog_models) = catalog_models {
+            for keyword in ["luna", "flash"] {
+                for entry in catalog_models {
+                    let Some(model) = Self::codex_catalog_model_id(entry) else {
+                        continue;
+                    };
+                    if model.to_ascii_lowercase().contains(keyword) {
+                        if let Some((route_model, route)) = routes.get_key_value(model) {
+                            if seen.insert(route_model.as_str()) {
+                                selected.push((route_model.as_str(), route));
+                            }
+                        }
+                    }
+                }
+            }
+
+            for entry in catalog_models {
+                let Some(model) = Self::codex_catalog_model_id(entry) else {
+                    continue;
+                };
+                if let Some((route_model, route)) = routes.get_key_value(model) {
+                    if seen.insert(route_model.as_str()) {
+                        selected.push((route_model.as_str(), route));
+                    }
+                }
+            }
+        }
+
+        for (route_model, route) in routes {
+            if seen.insert(route_model.as_str()) {
+                selected.push((route_model.as_str(), route));
+            }
+        }
+        selected
+    }
+
+    fn codex_catalog_model_id(entry: &Value) -> Option<&str> {
+        entry
+            .as_str()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .or_else(|| {
+                ["model", "slug", "id", "name"]
+                    .iter()
+                    .find_map(|key| entry.get(*key).and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+            })
     }
 
     fn codex_aggregate_upstream_model<'a>(
@@ -1124,6 +1303,212 @@ mod tests {
                 .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
                 .and_then(Value::as_str),
             Some("gpt-5.6-luna")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_aggregate_compact_falls_back_from_retired_provider_alias() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let mut aggregate = Provider::with_id(
+            "codex-multi-provider".to_string(),
+            "Codex Multi Provider".to_string(),
+            json!({
+                "modelCatalog": {
+                    "models": [
+                        { "model": "gpt-5.5" },
+                        { "model": "deepseek-v4-flash-0731/dashscope" },
+                        { "model": "gpt-5.6-luna" }
+                    ]
+                },
+                "codexAggregateRoutes": {
+                    "gpt-5.5": {
+                        "providerId": "codex-official",
+                        "model": "gpt-5.5"
+                    },
+                    "deepseek-v4-flash-0731/dashscope": {
+                        "providerId": "dashscope",
+                        "model": "deepseek-v4-flash-0731"
+                    },
+                    "gpt-5.6-luna": {
+                        "providerId": "codex-official",
+                        "model": "gpt-5.6-luna"
+                    }
+                }
+            }),
+            None,
+        );
+        aggregate.meta = Some(ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        let official = Provider::with_id(
+            "codex-official".to_string(),
+            "OpenAI Official".to_string(),
+            json!({}),
+            None,
+        );
+        let dashscope = Provider::with_id(
+            "dashscope".to_string(),
+            "dashscope".to_string(),
+            json!({}),
+            None,
+        );
+
+        db.save_provider("codex", &aggregate).unwrap();
+        db.save_provider("codex", &official).unwrap();
+        db.save_provider("codex", &dashscope).unwrap();
+        db.set_current_provider("codex", "codex-multi-provider")
+            .unwrap();
+
+        let router = ProviderRouter::new(db);
+        let (providers, route_applied) = router
+            .select_providers_for_compact_request("codex", &json!({"model": "token-free/gpt-5.5"}))
+            .await
+            .unwrap();
+
+        assert!(route_applied);
+        assert_eq!(providers.len(), 3);
+        assert_eq!(providers[0].id, "codex-official");
+        assert_eq!(
+            providers[0]
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                .and_then(Value::as_str),
+            Some("gpt-5.6-luna")
+        );
+        assert_eq!(providers[1].id, "dashscope");
+        assert_eq!(
+            providers[1]
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                .and_then(Value::as_str),
+            Some("deepseek-v4-flash-0731")
+        );
+        assert_eq!(
+            providers[2]
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                .and_then(Value::as_str),
+            Some("gpt-5.5")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_aggregate_compact_prefers_flash_when_luna_is_not_enabled() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let mut aggregate = Provider::with_id(
+            "codex-multi-provider".to_string(),
+            "Codex Multi Provider".to_string(),
+            json!({
+                "modelCatalog": {
+                    "models": [
+                        { "model": "gpt-5.5" },
+                        { "model": "deepseek-v4-flash-0731/dashscope" }
+                    ]
+                },
+                "codexAggregateRoutes": {
+                    "gpt-5.5": {
+                        "providerId": "codex-official",
+                        "model": "gpt-5.5"
+                    },
+                    "deepseek-v4-flash-0731/dashscope": {
+                        "providerId": "dashscope",
+                        "model": "deepseek-v4-flash-0731"
+                    }
+                }
+            }),
+            None,
+        );
+        aggregate.meta = Some(ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        let official = Provider::with_id(
+            "codex-official".to_string(),
+            "OpenAI Official".to_string(),
+            json!({}),
+            None,
+        );
+        let dashscope = Provider::with_id(
+            "dashscope".to_string(),
+            "dashscope".to_string(),
+            json!({}),
+            None,
+        );
+
+        db.save_provider("codex", &aggregate).unwrap();
+        db.save_provider("codex", &official).unwrap();
+        db.save_provider("codex", &dashscope).unwrap();
+        db.set_current_provider("codex", "codex-multi-provider")
+            .unwrap();
+
+        let router = ProviderRouter::new(db);
+        let (providers, route_applied) = router
+            .select_providers_for_compact_request("codex", &json!({"model": "retired/model"}))
+            .await
+            .unwrap();
+
+        assert!(route_applied);
+        assert_eq!(providers.len(), 2);
+        assert_eq!(providers[0].id, "dashscope");
+        assert_eq!(
+            providers[0]
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                .and_then(Value::as_str),
+            Some("deepseek-v4-flash-0731")
+        );
+        assert_eq!(
+            providers[1]
+                .settings_config
+                .get(crate::services::codex_aggregation::CODEX_AGGREGATE_UPSTREAM_MODEL_KEY)
+                .and_then(Value::as_str),
+            Some("gpt-5.5")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_aggregate_regular_request_rejects_retired_provider_alias() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let mut aggregate = Provider::with_id(
+            "codex-multi-provider".to_string(),
+            "Codex Multi Provider".to_string(),
+            json!({
+                "codexAggregateRoutes": {
+                    "gpt-5.5": {
+                        "providerId": "codex-official",
+                        "model": "gpt-5.5"
+                    }
+                }
+            }),
+            None,
+        );
+        aggregate.meta = Some(ProviderMeta {
+            provider_type: Some("codex_aggregate".to_string()),
+            ..Default::default()
+        });
+        db.save_provider("codex", &aggregate).unwrap();
+        db.set_current_provider("codex", "codex-multi-provider")
+            .unwrap();
+
+        let router = ProviderRouter::new(db);
+        let error = router
+            .select_providers_for_request("codex", &json!({"model": "token-free/gpt-5.5"}))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Codex 聚合模型未配置路由: token-free/gpt-5.5"
         );
     }
 

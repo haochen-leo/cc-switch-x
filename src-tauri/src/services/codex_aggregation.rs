@@ -245,14 +245,21 @@ pub async fn build_codex_aggregate_provider(
                         source_provider_ids.insert(CODEX_OFFICIAL_PROVIDER_ID.to_string());
                     }
                 }
-                if !source_provider_ids.contains(CODEX_OFFICIAL_PROVIDER_ID) {
-                    warnings.push(
-                        "OpenAI Official 模型缓存为空；请先用官方供应商打开一次 Codex 模型列表"
-                            .to_string(),
-                    );
-                }
             }
             Err(error) => warnings.push(error),
+        }
+        // 官方源读空时拒绝重建：否则残缺的聚合目录会顶掉现有官方路由，而
+        // models_cache.json 回流一旦断裂就无法自愈（2026-09-03 事故）。确实不想聚合
+        // 官方模型时，应把 OpenAI Official 从聚合来源中移除，而不是带着空源重建。
+        if !source_provider_ids.contains(CODEX_OFFICIAL_PROVIDER_ID) {
+            let detail = if warnings.is_empty() {
+                "OpenAI Official 模型缓存为空".to_string()
+            } else {
+                warnings.join("；")
+            };
+            return Err(format!(
+                "Codex 聚合官方源为空，已拒绝重建以保护现有目录。请先用官方供应商打开一次 Codex 模型列表以恢复 models_cache.json，或从聚合来源中移除 OpenAI Official。详情: {detail}"
+            ));
         }
     }
 
@@ -909,6 +916,43 @@ mod tests {
         assert!(build.provider.settings_config["codexAggregateRoutes"]
             .get("model-b/Provider B")
             .is_none());
+    }
+
+    /// 官方源读空（如 models_cache.json 被移走/写空）时必须拒绝重建，
+    /// 防止残缺目录顶掉现有官方路由（2026-09-03 事故防护）。
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn aggregate_build_refuses_rebuild_when_official_source_is_empty() {
+        let dir = tempfile::tempdir().expect("create isolated home without models_cache");
+        let original_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+        let _ = crate::settings::reload_settings();
+
+        let db = Database::memory().expect("in-memory database");
+        let official = Provider::with_id(
+            CODEX_OFFICIAL_PROVIDER_ID.to_string(),
+            "OpenAI Official".to_string(),
+            json!({ "auth": {}, "config": "" }),
+            None,
+        );
+        db.save_provider(AppType::Codex.as_str(), &official)
+            .expect("save official");
+
+        let result = build_codex_aggregate_provider(&db).await;
+
+        match &original_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let _ = crate::settings::reload_settings();
+
+        match result {
+            Err(error) => assert!(
+                error.contains("官方源为空"),
+                "unexpected error message: {error}"
+            ),
+            Ok(_) => panic!("官方源为空时必须拒绝重建"),
+        }
     }
 
     #[test]
