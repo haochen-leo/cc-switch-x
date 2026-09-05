@@ -1273,6 +1273,13 @@ pub fn run() {
                 // 检查 settings 表中的代理状态，自动恢复代理服务
                 restore_proxy_state_on_startup(&state).await;
 
+                // Codex 聚合：启动时检测 models_cache.json 是否变化，若变了则自动重建聚合目录
+                crate::services::codex_aggregation::refresh_if_models_cache_changed(
+                    &state.proxy_service,
+                    &state.db,
+                )
+                .await;
+
                 // Periodic backup check (on startup)
                 if let Err(e) = state.db.periodic_backup_if_needed() {
                     log::warn!("Periodic backup failed on startup: {e}");
