@@ -203,7 +203,7 @@ pub async fn restart_app(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 pub async fn install_update_and_restart(app: AppHandle) -> Result<bool, String> {
     if !official_in_app_updates_enabled(&app) {
-        return Err("当前 IdeaLAB 版本已禁用官方应用内升级，避免覆盖本地安装。".to_string());
+        return Err("当前 CC Switch X 版本已禁用官方应用内升级，避免覆盖本地安装。".to_string());
     }
 
     let updater = app

@@ -1,7 +1,7 @@
 import { getIdentifier } from "@tauri-apps/api/app";
 
 export const OFFICIAL_APP_IDENTIFIER = "com.ccswitch.desktop";
-export const IDEALAB_APP_IDENTIFIER = "com.ccswitch.idealab";
+export const CC_SWITCH_X_APP_IDENTIFIER = "com.ccswitch.x";
 
 let officialUpdateSupportPromise: Promise<boolean> | null = null;
 

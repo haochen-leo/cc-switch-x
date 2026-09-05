@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "CC Switch For IdeaLAB",
+    "title": "CC Switch X",
     "description": "Claude Code・Codex・Gemini CLI のためのオールインワンアシスタント"
   },
   "common": {
@@ -45,9 +45,9 @@
     "notSet": "未設定"
   },
   "firstRunNotice": {
-    "title": "CC Switch For IdeaLAB へようこそ",
-    "bodyDefault": "CC Switch For IdeaLAB は Claude Code / Codex / Gemini CLI の複数プロバイダーをワンクリックで切り替えられるツールです。すでにこれらのツールを設定済みの場合、CC Switch For IdeaLAB は現在の設定を「default」という名前のプロバイダーとして自動的に保存するので、既存の設定が失われることはありません。",
-    "bodyOfficial": "リストには「Official（公式）」プリセットも用意されており、公式バージョンに戻したくなったらクリックするだけで切り替えられます。切り替える前に現在の設定は自動で default にバックアップされるので、自由に行き来できます。これが CC Switch For IdeaLAB の仕組みです 😊",
+    "title": "CC Switch X へようこそ",
+    "bodyDefault": "CC Switch X は Claude Code / Codex / Gemini CLI の複数プロバイダーをワンクリックで切り替えられるツールです。すでにこれらのツールを設定済みの場合、CC Switch X は現在の設定を「default」という名前のプロバイダーとして自動的に保存するので、既存の設定が失われることはありません。",
+    "bodyOfficial": "リストには「Official（公式）」プリセットも用意されており、公式バージョンに戻したくなったらクリックするだけで切り替えられます。切り替える前に現在の設定は自動で default にバックアップされるので、自由に行き来できます。これが CC Switch X の仕組みです 😊",
     "confirm": "了解しました"
   },
   "apiKeyInput": {
@@ -830,7 +830,7 @@
     "releaseNotes": "リリースノート",
     "viewReleaseNotes": "このバージョンのリリースノートを見る",
     "viewCurrentReleaseNotes": "現在のバージョンのリリースノートを見る",
-    "officialUpdatesDisabled": "IdeaLAB ビルドでは、ローカルインストールを上書きしないよう公式のアプリ内更新を無効化しています。",
+    "officialUpdatesDisabled": "CC Switch X ビルドでは、ローカルインストールを上書きしないよう公式のアプリ内更新を無効化しています。",
     "officialUpdatesDisabledBadge": "公式更新は無効",
     "officialWebsite": "公式サイト",
     "github": "GitHub",

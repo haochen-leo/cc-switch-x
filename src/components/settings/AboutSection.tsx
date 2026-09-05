@@ -892,11 +892,11 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               <div className="flex items-center gap-2">
                 <img
                   src={appIcon}
-                  alt="CC Switch For IdeaLAB"
+                  alt="CC Switch X"
                   className="h-5 w-5"
                 />
                 <h4 className="text-lg font-semibold text-foreground">
-                  CC Switch For IdeaLAB
+                  CC Switch X
                 </h4>
               </div>
               <div className="flex items-center gap-2">
