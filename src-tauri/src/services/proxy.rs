@@ -3839,12 +3839,47 @@ impl ProxyService {
             .and_then(|value| value.as_str())
             .unwrap_or("")
             .to_string();
+        let previous_route_key =
+            config_text
+                .parse::<toml_edit::DocumentMut>()
+                .ok()
+                .and_then(|doc| {
+                    doc.get("model_provider")
+                        .and_then(|item| item.as_str())
+                        .map(str::to_string)
+                });
+        let unify_session_history = crate::settings::unify_codex_session_history();
+        let route_key = if unify_session_history {
+            crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID
+        } else {
+            crate::codex_config::CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID
+        };
         let projected = Self::apply_codex_proxy_toml_config_for_provider(
             &config_text,
             proxy_base_url,
             Some(provider),
-            crate::settings::unify_codex_session_history(),
+            unify_session_history,
         )?;
+        // 归因：代理路由写在哪个 provider 键下完全由 unify 开关决定，而 Codex 线程按
+        // 创建时钉住的键名解析上游。键名漂移会让已存在的线程静默走错上游（曾表现为
+        // 400/404），所以把决定因素和漂移一起落日志。
+        match previous_route_key.as_deref() {
+            Some(previous) if previous != route_key => log::warn!(
+                "[TAKEOVER] codex 接管键名漂移: model_provider {} -> {}, unify_session_history={}, provider={}, base_url={}；已创建的 Codex 线程仍按旧键名解析上游",
+                previous,
+                route_key,
+                unify_session_history,
+                provider.id,
+                proxy_base_url
+            ),
+            _ => log::info!(
+                "[TAKEOVER] codex 接管投影: model_provider={}, unify_session_history={}, provider={}, base_url={}",
+                route_key,
+                unify_session_history,
+                provider.id,
+                proxy_base_url
+            ),
+        }
         settings["config"] = json!(projected);
         Self::attach_codex_model_catalog_from_provider(settings, Some(provider));
         Ok(())
