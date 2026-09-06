@@ -88,7 +88,7 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
         return 0;
     };
 
-    let mut changed = synthesize_delegation_function_call_pairs(input);
+    let mut changed = synthesize_codex_app_function_call_pairs(input);
     for (index, item) in input.iter_mut().enumerate() {
         let item_type = item.get("type").and_then(Value::as_str);
         if item_type == Some("reasoning")
@@ -159,12 +159,12 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
     changed
 }
 
-/// Codex App cross-thread delegation can seed a receiver thread with only the
-/// `function_call_output` half of `send_message_to_thread` / `create_thread`.
-/// Strict upstreams then see a tool result whose `call_id` has no preceding
-/// function call. Repair only those delegation envelopes at the request
-/// boundary; do not rewrite normal tool history.
-fn synthesize_delegation_function_call_pairs(input: &mut Vec<Value>) -> usize {
+/// Codex App can start or steer a turn with a standalone `function_call_output`,
+/// including automation and cross-thread delegation inputs. Strict upstreams
+/// require every tool result to have a `call_id` with a preceding function call.
+/// Repair only named `codex_app` outputs that lack that pair at the request
+/// boundary; do not rewrite already-paired or non-app tool history.
+fn synthesize_codex_app_function_call_pairs(input: &mut Vec<Value>) -> usize {
     let mut changed = 0;
     let mut seen_function_call_ids: HashSet<String> = HashSet::new();
     let mut repaired = Vec::with_capacity(input.len());
@@ -178,7 +178,7 @@ fn synthesize_delegation_function_call_pairs(input: &mut Vec<Value>) -> usize {
             continue;
         }
 
-        if is_codex_delegation_function_call_output(&item) {
+        if is_codex_app_function_call_output(&item) {
             let existing_call_id = item
                 .get("call_id")
                 .and_then(Value::as_str)
@@ -248,25 +248,16 @@ fn function_call_output_pair_seed(item: &Value, index: usize) -> String {
         })
 }
 
-fn is_codex_delegation_function_call_output(item: &Value) -> bool {
+fn is_codex_app_function_call_output(item: &Value) -> bool {
     if item.get("type").and_then(Value::as_str) != Some("function_call_output") {
         return false;
     }
     if item.get("namespace").and_then(Value::as_str) != Some("codex_app") {
         return false;
     }
-    let Some(name) = item.get("name").and_then(Value::as_str) else {
-        return false;
-    };
-    if !matches!(name, "create_thread" | "send_message_to_thread") {
-        return false;
-    }
-    item.get("output")
-        .map(|output| match output {
-            Value::String(output) => output.contains("<codex_delegation>"),
-            other => canonical_json_string(other).contains("<codex_delegation>"),
-        })
-        .unwrap_or(false)
+    item.get("name")
+        .and_then(Value::as_str)
+        .is_some_and(|name| !name.trim().is_empty())
 }
 
 /// Normalize third-party native Responses output before Codex records it as
@@ -1138,10 +1129,10 @@ fn append_responses_input_as_chat_messages(
         }
         Value::Array(items) => {
             let mut repaired_items = items.clone();
-            let repaired = synthesize_delegation_function_call_pairs(&mut repaired_items);
+            let repaired = synthesize_codex_app_function_call_pairs(&mut repaired_items);
             if repaired > 0 {
                 log::debug!(
-                    "[Codex] Synthesized {repaired} delegation function call replay item(s) before Chat bridge"
+                    "[Codex] Synthesized {repaired} Codex App function call replay item(s) before Chat bridge"
                 );
             }
             for item in &repaired_items {
@@ -3054,7 +3045,40 @@ mod tests {
     }
 
     #[test]
-    fn responses_upstream_does_not_synthesize_pair_for_non_delegation_output() {
+    fn responses_upstream_synthesizes_pair_for_automation_output_without_call_id() {
+        let orphan_id = "fco_automation_update";
+        let mut body = json!({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "id": orphan_id,
+                    "name": "automation_update",
+                    "namespace": "codex_app",
+                    "output": "Automation: 每日投资策略"
+                }
+            ]
+        });
+
+        assert_eq!(
+            normalize_replayed_item_ids_for_responses_upstream(&mut body),
+            2
+        );
+        assert_eq!(body["input"].as_array().unwrap().len(), 2);
+        assert_eq!(body["input"][0]["type"], "function_call");
+        assert_eq!(body["input"][0]["name"], "automation_update");
+        assert_eq!(body["input"][0]["namespace"], "codex_app");
+        assert_eq!(body["input"][0]["arguments"], "{}");
+        assert_eq!(
+            body["input"][0]["call_id"],
+            format!("call_ccswitch_{}", short_sha256_hex(orphan_id.as_bytes()))
+        );
+        assert_eq!(body["input"][1]["type"], "function_call_output");
+        assert_eq!(body["input"][1]["call_id"], body["input"][0]["call_id"]);
+        assert_eq!(body["input"][1]["output"], "Automation: 每日投资策略");
+    }
+
+    #[test]
+    fn responses_upstream_synthesizes_pair_for_plain_codex_app_output() {
         let mut body = json!({
             "input": [
                 {
@@ -3069,10 +3093,105 @@ mod tests {
 
         assert_eq!(
             normalize_replayed_item_ids_for_responses_upstream(&mut body),
-            0
+            2
         );
-        assert_eq!(body["input"].as_array().unwrap().len(), 1);
-        assert!(body["input"][0].get("call_id").is_none());
+        assert_eq!(body["input"].as_array().unwrap().len(), 2);
+        assert_eq!(body["input"][0]["type"], "function_call");
+        assert_eq!(body["input"][1]["type"], "function_call_output");
+        assert_eq!(body["input"][1]["call_id"], body["input"][0]["call_id"]);
+    }
+
+    #[test]
+    fn codex_app_pair_synthesis_keeps_existing_pair() {
+        let mut input = vec![
+            json!({
+                "type": "function_call",
+                "id": "fc_existing",
+                "call_id": "call_existing",
+                "name": "automation_update",
+                "namespace": "codex_app",
+                "arguments": "{}"
+            }),
+            json!({
+                "type": "function_call_output",
+                "id": "fco_existing",
+                "call_id": "call_existing",
+                "name": "automation_update",
+                "namespace": "codex_app",
+                "output": "Automation: 每日投资策略"
+            }),
+        ];
+        let original = input.clone();
+
+        assert_eq!(synthesize_codex_app_function_call_pairs(&mut input), 0);
+        assert_eq!(input, original);
+    }
+
+    #[test]
+    fn codex_app_pair_synthesis_reuses_unpaired_existing_call_id() {
+        let mut input = vec![json!({
+            "type": "function_call_output",
+            "id": "fco_existing_call_id",
+            "call_id": "call_existing",
+            "name": "automation_update",
+            "namespace": "codex_app",
+            "output": "Automation: 每日投资策略"
+        })];
+
+        assert_eq!(synthesize_codex_app_function_call_pairs(&mut input), 1);
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[0]["call_id"], "call_existing");
+        assert_eq!(input[1]["call_id"], "call_existing");
+    }
+
+    #[test]
+    fn codex_app_pair_synthesis_is_deterministic_and_idempotent() {
+        let mut first = vec![json!({
+            "type": "function_call_output",
+            "name": "automation_update",
+            "namespace": "codex_app",
+            "output": "Automation: 每日投资策略"
+        })];
+        let mut second = first.clone();
+
+        assert_eq!(synthesize_codex_app_function_call_pairs(&mut first), 2);
+        assert_eq!(synthesize_codex_app_function_call_pairs(&mut second), 2);
+        assert_eq!(first, second);
+
+        let repaired = first.clone();
+        assert_eq!(synthesize_codex_app_function_call_pairs(&mut first), 0);
+        assert_eq!(first, repaired);
+    }
+
+    #[test]
+    fn codex_app_pair_synthesis_ignores_other_namespaces_and_missing_names() {
+        let mut input = vec![
+            json!({
+                "type": "function_call_output",
+                "id": "fco_other_namespace",
+                "name": "automation_update",
+                "namespace": "other_app",
+                "output": "result"
+            }),
+            json!({
+                "type": "function_call_output",
+                "id": "fco_missing_name",
+                "namespace": "codex_app",
+                "output": "result"
+            }),
+            json!({
+                "type": "function_call_output",
+                "id": "fco_blank_name",
+                "name": "   ",
+                "namespace": "codex_app",
+                "output": "result"
+            }),
+        ];
+        let original = input.clone();
+
+        assert_eq!(synthesize_codex_app_function_call_pairs(&mut input), 0);
+        assert_eq!(input, original);
     }
 
     #[test]
@@ -4671,6 +4790,39 @@ mod tests {
             messages[1]["content"],
             "<codex_delegation><input>do it</input></codex_delegation>"
         );
+    }
+
+    #[test]
+    fn responses_request_to_chat_synthesizes_pair_for_automation_output_without_call_id() {
+        let orphan_id = "fco_automation_update";
+        let input = json!({
+            "model": "kimi-k3",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "id": orphan_id,
+                    "name": "automation_update",
+                    "namespace": "codex_app",
+                    "output": "Automation: 每日投资策略"
+                }
+            ]
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        let messages = result["messages"].as_array().unwrap();
+        let expected_call_id = format!("call_ccswitch_{}", short_sha256_hex(orphan_id.as_bytes()));
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], expected_call_id);
+        assert_eq!(
+            messages[0]["tool_calls"][0]["function"]["name"],
+            "codex_app__automation_update"
+        );
+        assert_eq!(messages[0]["tool_calls"][0]["function"]["arguments"], "{}");
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], expected_call_id);
+        assert_eq!(messages[1]["content"], "Automation: 每日投资策略");
     }
 
     #[test]
