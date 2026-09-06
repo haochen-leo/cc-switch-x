@@ -2,9 +2,8 @@ import { renderHook } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { useCodexConfigState } from "@/components/providers/forms/hooks/useCodexConfigState";
 
-// 回归：编辑已存在的原生 Responses 供应商时，读回 modelCatalog 必须保留隐藏字段
-// (supportsParallelToolCalls / inputModalities / baseInstructions)，否则保存会
-// 把它们剥掉，导致生成的 Codex catalog 丢官方 base_instructions、并行工具、图像模态。
+// 回归：编辑已存在的供应商时，读回 modelCatalog 必须保留隐藏能力字段，
+// 否则保存会把并行工具、图像模态声明剥掉。
 //
 // 注意：initialData 必须是稳定引用（hook 的 init effect 依赖 [initialData]）。
 // 写成内联字面量会每次 re-render 产生新引用 → effect 反复 setState → 死循环 OOM。
@@ -22,7 +21,8 @@ describe("useCodexConfigState catalog load", () => {
               contextWindow: 1000000,
               supportsParallelToolCalls: true,
               inputModalities: ["text", "image"],
-              baseInstructions: "You are Codex, based on MiniMax-M3.",
+              // Legacy persisted prompt override is intentionally discarded.
+              baseInstructions: "legacy provider-specific prompt",
             },
           ],
         },
@@ -38,7 +38,6 @@ describe("useCodexConfigState catalog load", () => {
         contextWindow: 1000000,
         supportsParallelToolCalls: true,
         inputModalities: ["text", "image"],
-        baseInstructions: "You are Codex, based on MiniMax-M3.",
       },
     ]);
   });
@@ -56,7 +55,7 @@ describe("useCodexConfigState catalog load", () => {
               context_window: 262144,
               supports_parallel_tool_calls: false,
               input_modalities: ["text"],
-              base_instructions: "You are MiMo, developed by Xiaomi.",
+              base_instructions: "legacy provider-specific prompt",
             },
           ],
         },
@@ -72,7 +71,6 @@ describe("useCodexConfigState catalog load", () => {
         contextWindow: 262144,
         supportsParallelToolCalls: false,
         inputModalities: ["text"],
-        baseInstructions: "You are MiMo, developed by Xiaomi.",
       },
     ]);
   });

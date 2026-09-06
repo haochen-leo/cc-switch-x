@@ -582,6 +582,12 @@ fn read_official_catalog_models() -> Result<Vec<Value>, String> {
             let mut normalized = Map::new();
             normalized.insert("model".to_string(), json!(id));
             normalized.insert("displayName".to_string(), json!(display_name));
+            // Keep the official cache import as a small model-facts allowlist:
+            // identity/display/context/input modalities/parallel-call metadata
+            // and reasoning levels. Do not copy prompt text, tool contracts,
+            // web-search policy, truncation, comp_hash, or OpenAI-private wire
+            // toggles; those remain owned by the cc-switch catalog template and
+            // the selected proxy route.
             copy_first_field(
                 entry,
                 &mut normalized,

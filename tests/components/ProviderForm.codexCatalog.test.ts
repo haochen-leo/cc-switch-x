@@ -20,7 +20,7 @@ describe("ProviderForm Codex catalog helpers", () => {
     ]);
   });
 
-  it("preserves native-profile overrides (parallel tool calls + input modalities + base instructions)", () => {
+  it("preserves per-model capability overrides", () => {
     expect(
       normalizeCodexCatalogModelsForSave([
         {
@@ -29,16 +29,12 @@ describe("ProviderForm Codex catalog helpers", () => {
           contextWindow: 1000000,
           supportsParallelToolCalls: true,
           inputModalities: ["text", "image"],
-          baseInstructions:
-            "  You are Codex, a coding agent based on MiniMax-M3.  ",
         },
-        // false must be preserved (not dropped as falsy); empty modalities dropped;
-        // empty/whitespace baseInstructions dropped
+        // false must be preserved (not dropped as falsy); empty modalities dropped.
         {
           model: "mimo-v2.5-pro",
           supportsParallelToolCalls: false,
           inputModalities: [],
-          baseInstructions: "   ",
         },
       ]),
     ).toEqual([
@@ -48,7 +44,6 @@ describe("ProviderForm Codex catalog helpers", () => {
         contextWindow: 1000000,
         supportsParallelToolCalls: true,
         inputModalities: ["text", "image"],
-        baseInstructions: "You are Codex, a coding agent based on MiniMax-M3.",
       },
       { model: "mimo-v2.5-pro", supportsParallelToolCalls: false },
     ]);

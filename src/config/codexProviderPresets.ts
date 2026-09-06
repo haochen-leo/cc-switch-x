@@ -89,9 +89,6 @@ function modelCatalog(
         // defaults to text+image.
         supportsParallelToolCalls?: boolean;
         inputModalities?: string[];
-        // Vendor's OFFICIAL base_instructions; omit to inherit the neutral
-        // template default. Required by Codex, so the backend always emits one.
-        baseInstructions?: string;
         // Reasoning efforts the vendor's endpoint actually accepts (subset of
         // none/minimal/low/medium/high/xhigh/max/ultra). Omit to keep the
         // template's conservative none/high default. Pre-filled from official
@@ -110,7 +107,6 @@ function modelCatalog(
           contextWindow: entry.contextWindow,
           supportsParallelToolCalls: entry.supportsParallelToolCalls,
           inputModalities: entry.inputModalities,
-          baseInstructions: entry.baseInstructions,
           reasoningLevels: entry.reasoningLevels,
           defaultReasoningLevel: entry.defaultReasoningLevel,
         },
@@ -1578,8 +1574,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "high"],
         supportsParallelToolCalls: true,
         inputModalities: ["text", "image"],
-        baseInstructions:
-          "You are Codex, a coding agent based on MiniMax-M3. You and the user share the same workspace and collaborate to achieve the user's goals.",
       },
     ]),
     category: "cn_official",
@@ -1617,8 +1611,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "high"],
         supportsParallelToolCalls: true,
         inputModalities: ["text", "image"],
-        baseInstructions:
-          "You are Codex, a coding agent based on MiniMax-M3. You and the user share the same workspace and collaborate to achieve the user's goals.",
       },
     ]),
     category: "cn_official",
@@ -1676,8 +1668,6 @@ requires_openai_auth = true`,
         contextWindow: 1048576,
         inputModalities: ["text"],
         reasoningLevels: ["none", "high"],
-        baseInstructions:
-          "You are MiMo, an AI assistant developed by Xiaomi. Today's date: {date} {week}. Your knowledge cutoff date is December 2024.",
       },
       {
         model: "mimo-v2.5",
@@ -1685,8 +1675,6 @@ requires_openai_auth = true`,
         contextWindow: 1048576,
         inputModalities: ["text", "image"],
         reasoningLevels: ["none", "high"],
-        baseInstructions:
-          "You are MiMo, an AI assistant developed by Xiaomi. Today's date: {date} {week}. Your knowledge cutoff date is December 2024.",
       },
     ]),
     category: "cn_official",
@@ -1718,8 +1706,6 @@ requires_openai_auth = true`,
         contextWindow: 1048576,
         inputModalities: ["text"],
         reasoningLevels: ["none", "high"],
-        baseInstructions:
-          "You are MiMo, an AI assistant developed by Xiaomi. Today's date: {date} {week}. Your knowledge cutoff date is December 2024.",
       },
       {
         model: "mimo-v2.5",
@@ -1727,8 +1713,6 @@ requires_openai_auth = true`,
         contextWindow: 1048576,
         inputModalities: ["text", "image"],
         reasoningLevels: ["none", "high"],
-        baseInstructions:
-          "You are MiMo, an AI assistant developed by Xiaomi. Today's date: {date} {week}. Your knowledge cutoff date is December 2024.",
       },
     ]),
     category: "cn_official",
