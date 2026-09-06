@@ -1,12 +1,13 @@
 use crate::app_config::AppType;
+use crate::codex_config::CODEX_OFFICIAL_CATALOG_ENTRY_FIELD;
 use crate::database::{Database, CODEX_OFFICIAL_PROVIDER_ID};
 use crate::provider::{Provider, ProviderMeta};
 use futures::future::join_all;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use sha2::{Digest, Sha256};
 
 pub const CODEX_AGGREGATE_PROVIDER_ID: &str = "codex-multi-provider";
 pub const CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING: &str = "codex_aggregate_previous_provider";
@@ -579,35 +580,14 @@ fn read_official_catalog_models() -> Result<Vec<Value>, String> {
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .unwrap_or(&id);
-            let mut normalized = Map::new();
-            normalized.insert("model".to_string(), json!(id));
-            normalized.insert("displayName".to_string(), json!(display_name));
-            // Keep the official cache import as a small model-facts allowlist:
-            // identity/display/context/input modalities/parallel-call metadata
-            // and reasoning levels. Do not copy prompt text, tool contracts,
-            // web-search policy, truncation, comp_hash, or OpenAI-private wire
-            // toggles; those remain owned by the cc-switch catalog template and
-            // the selected proxy route.
-            copy_first_field(
-                entry,
-                &mut normalized,
-                &["context_window", "max_context_window", "contextWindow"],
-                "contextWindow",
+            let mut official = Map::new();
+            official.insert("model".to_string(), json!(id));
+            official.insert("displayName".to_string(), json!(display_name));
+            official.insert(
+                CODEX_OFFICIAL_CATALOG_ENTRY_FIELD.to_string(),
+                entry.clone(),
             );
-            copy_first_field(
-                entry,
-                &mut normalized,
-                &["input_modalities", "inputModalities"],
-                "inputModalities",
-            );
-            copy_first_field(
-                entry,
-                &mut normalized,
-                &["supports_parallel_tool_calls", "supportsParallelToolCalls"],
-                "supportsParallelToolCalls",
-            );
-            copy_official_reasoning_metadata(entry, &mut normalized);
-            models.push(Value::Object(normalized));
+            models.push(Value::Object(official));
         }
     }
 
@@ -616,54 +596,6 @@ fn read_official_catalog_models() -> Result<Vec<Value>, String> {
     } else {
         Ok(models)
     }
-}
-
-fn copy_first_field(
-    source: &Value,
-    target: &mut Map<String, Value>,
-    candidates: &[&str],
-    target_key: &str,
-) {
-    if let Some(value) = candidates.iter().find_map(|key| source.get(*key)).cloned() {
-        target.insert(target_key.to_string(), value);
-    }
-}
-
-fn copy_official_reasoning_metadata(source: &Value, target: &mut Map<String, Value>) {
-    if let Some(levels) = official_reasoning_levels(source) {
-        target.insert("reasoningLevels".to_string(), Value::Array(levels));
-    }
-    copy_first_field(
-        source,
-        target,
-        &["default_reasoning_level", "defaultReasoningLevel"],
-        "defaultReasoningLevel",
-    );
-}
-
-fn official_reasoning_levels(source: &Value) -> Option<Vec<Value>> {
-    let levels = source
-        .get("supported_reasoning_levels")
-        .or_else(|| source.get("supportedReasoningLevels"))
-        .or_else(|| source.get("reasoningLevels"))
-        .and_then(Value::as_array)?;
-
-    let mut seen = HashSet::new();
-    let normalized = levels
-        .iter()
-        .filter_map(|level| {
-            level
-                .as_str()
-                .or_else(|| level.get("effort").and_then(Value::as_str))
-                .map(str::trim)
-                .filter(|effort| !effort.is_empty())
-                .map(str::to_string)
-        })
-        .filter(|effort| seen.insert(effort.clone()))
-        .map(Value::String)
-        .collect::<Vec<_>>();
-
-    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn normalize_catalog_entry(
@@ -893,68 +825,36 @@ mod tests {
     }
 
     #[test]
-    fn official_reasoning_metadata_is_normalized_for_aggregate_catalog() {
-        let source = json!({
-            "slug": "gpt-5.6-sol",
-            "supported_reasoning_levels": [
-                { "effort": "low", "description": "Fast responses" },
-                { "effort": "medium", "description": "Balanced" },
-                { "effort": "high", "description": "Deep" },
-                { "effort": "xhigh", "description": "Extra deep" },
-                { "effort": "max", "description": "Maximum" },
-                { "effort": "ultra", "description": "Ultra" }
-            ],
-            "default_reasoning_level": "low"
-        });
-        let mut target = Map::new();
-
-        copy_official_reasoning_metadata(&source, &mut target);
-
-        assert_eq!(
-            target.get("reasoningLevels"),
-            Some(&json!(["low", "medium", "high", "xhigh", "max", "ultra"]))
-        );
-        assert_eq!(target.get("defaultReasoningLevel"), Some(&json!("low")));
-    }
-
-    #[test]
-    fn official_reasoning_metadata_accepts_string_levels_and_deduplicates() {
-        let source = json!({
-            "reasoningLevels": [" high ", "", "max", "high"],
-            "defaultReasoningLevel": "max"
-        });
-        let mut target = Map::new();
-
-        copy_official_reasoning_metadata(&source, &mut target);
-
-        assert_eq!(target.get("reasoningLevels"), Some(&json!(["high", "max"])));
-        assert_eq!(target.get("defaultReasoningLevel"), Some(&json!("max")));
-    }
-
-    #[test]
     #[serial_test::serial]
-    fn official_catalog_read_preserves_reasoning_metadata_from_cache() {
+    fn official_catalog_read_preserves_complete_entry_from_cache() {
         let dir = tempfile::tempdir().expect("create isolated home");
         let codex_dir = dir.path().join(".codex");
         std::fs::create_dir_all(&codex_dir).expect("create codex dir");
+        let official_entry = json!({
+            "slug": "gpt-5.6-sol",
+            "display_name": "GPT-5.6-Sol",
+            "supported_reasoning_levels": [
+                { "effort": "low" },
+                { "effort": "medium" },
+                { "effort": "high" },
+                { "effort": "xhigh" },
+                { "effort": "max" },
+                { "effort": "ultra" }
+            ],
+            "default_reasoning_level": "low",
+            "base_instructions": "official sol instructions",
+            "model_messages": {
+                "instructions_template": "official sol template"
+            },
+            "comp_hash": "official-comp-hash",
+            "service_tiers": [{ "id": "priority" }],
+            "use_responses_lite": true
+        });
         std::fs::write(
             codex_dir.join("models_cache.json"),
             serde_json::to_string(&json!({
                 "models": [
-                    {
-                        "slug": "gpt-5.6-sol",
-                        "display_name": "GPT-5.6-Sol",
-                        "supported_reasoning_levels": [
-                            { "effort": "low" },
-                            { "effort": "medium" },
-                            { "effort": "high" },
-                            { "effort": "xhigh" },
-                            { "effort": "max" },
-                            { "effort": "ultra" }
-                        ],
-                        "default_reasoning_level": "low",
-                        "base_instructions": "official sol instructions"
-                    },
+                    official_entry.clone(),
                     {
                         "slug": "kimi-k3",
                         "display_name": "Kimi K3",
@@ -980,14 +880,11 @@ mod tests {
 
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["model"], "gpt-5.6-sol");
+        assert_eq!(models[0]["displayName"], "GPT-5.6-Sol");
         assert_eq!(
-            models[0]["reasoningLevels"],
-            json!(["low", "medium", "high", "xhigh", "max", "ultra"])
+            models[0][CODEX_OFFICIAL_CATALOG_ENTRY_FIELD], official_entry,
+            "official model descriptors must survive aggregation byte-for-byte"
         );
-        assert_eq!(models[0]["defaultReasoningLevel"], "low");
-        // Official prompts must NOT leak into the aggregate catalog: every row
-        // keeps the shared third-party template prompt.
-        assert!(models[0].get("baseInstructions").is_none());
     }
 
     #[test]
