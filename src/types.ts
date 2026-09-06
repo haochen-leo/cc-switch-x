@@ -280,10 +280,6 @@ export interface CodexCatalogModel {
   // automatic text-only model detection for every profile.
   supportsParallelToolCalls?: boolean;
   inputModalities?: string[];
-  // Vendor's OFFICIAL base_instructions (model identity / system preamble).
-  // Codex requires this field in every catalog entry; when omitted the backend
-  // falls back to a neutral default. e.g. MiMo "developed by Xiaomi".
-  baseInstructions?: string;
   // Per-model reasoning effort levels exposed in the generated Codex catalog
   // (e.g. ["none", "low", "medium", "high", "xhigh", "max"]). When omitted the
   // backend keeps the template's conservative none/high default.

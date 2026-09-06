@@ -163,9 +163,6 @@ function createCatalogRow(seed?: Partial<CodexCatalogModel>): CodexCatalogRow {
       ? { supportsParallelToolCalls: seed.supportsParallelToolCalls }
       : {}),
     ...(seed?.inputModalities ? { inputModalities: seed.inputModalities } : {}),
-    ...(seed?.baseInstructions
-      ? { baseInstructions: seed.baseInstructions }
-      : {}),
     ...(seed?.reasoningLevels && seed.reasoningLevels.length > 0
       ? { reasoningLevels: seed.reasoningLevels }
       : {}),
@@ -178,7 +175,7 @@ function createCatalogRow(seed?: Partial<CodexCatalogModel>): CodexCatalogRow {
 // Compares rows (with rowId) to incoming models (without) by data fields only,
 // so both sync effects can use the same equality definition. Hidden native-profile
 // fields are included so switching between providers with identical visible fields
-// but different base_instructions / tools / modalities still rebuilds the rows.
+// but different tools/modalities still rebuilds the rows.
 function catalogRowsMatchModels(
   rows: CodexCatalogModel[],
   models: CodexCatalogModel[],
@@ -193,7 +190,6 @@ function catalogRowsMatchModels(
         String(incoming.contextWindow ?? "") &&
       (row.supportsParallelToolCalls ?? null) ===
         (incoming.supportsParallelToolCalls ?? null) &&
-      (row.baseInstructions ?? "") === (incoming.baseInstructions ?? "") &&
       JSON.stringify(row.inputModalities ?? []) ===
         JSON.stringify(incoming.inputModalities ?? []) &&
       JSON.stringify(row.reasoningLevels ?? []) ===

@@ -261,7 +261,6 @@ export const normalizeCodexCatalogModelsForSave = (
       (m) => typeof m === "string" && m.trim(),
     );
 
-    const baseInstructions = item.baseInstructions?.trim();
     const reasoningLevels = item.reasoningLevels
       ?.filter((level) => typeof level === "string" && level.trim())
       .map((level) => level.trim());
@@ -271,14 +270,13 @@ export const normalizeCodexCatalogModelsForSave = (
       model,
       ...(displayName ? { displayName } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
-      // Native Responses profile overrides (ignored by the chat/proxy profile).
+      // Per-model capability overrides.
       ...(typeof item.supportsParallelToolCalls === "boolean"
         ? { supportsParallelToolCalls: item.supportsParallelToolCalls }
         : {}),
       ...(inputModalities && inputModalities.length > 0
         ? { inputModalities }
         : {}),
-      ...(baseInstructions ? { baseInstructions } : {}),
       ...(reasoningLevels && reasoningLevels.length > 0
         ? { reasoningLevels }
         : {}),
