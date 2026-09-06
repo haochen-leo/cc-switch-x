@@ -27,6 +27,22 @@ pub fn get_home_dir() -> PathBuf {
         }
     }
 
+    // 测试构建的最后一道闸：CC_SWITCH_TEST_HOME 是进程级变量，非 serial 测试在结束
+    // 时清空它，与并发的接管测试交错后，写入就会落到真实主目录（曾把测试 fixture
+    // 写进真实 ~/.codex/config.toml 与 ~/.cc-switch/settings.json）。此时绝不回落到
+    // dirs::home_dir()，改用本进程独享的临时目录。仅 cfg(test) 生效，不影响发布产物。
+    #[cfg(test)]
+    {
+        let fallback =
+            std::env::temp_dir().join(format!("cc-switch-test-home-{}", std::process::id()));
+        log::error!(
+            "[TEST-GUARD] CC_SWITCH_TEST_HOME 未设置，改道临时目录以避免写入真实主目录: {}",
+            fallback.display()
+        );
+        return fallback;
+    }
+
+    #[cfg(not(test))]
     dirs::home_dir().unwrap_or_else(|| {
         log::warn!("无法获取用户主目录，回退到当前目录");
         PathBuf::from(".")
@@ -474,6 +490,38 @@ fn atomic_write_with_unix_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：测试构建绝不能回落到真实用户主目录。
+    ///
+    /// 事故：非 serial 测试结束时 `remove_var("CC_SWITCH_TEST_HOME")`，与并发的接管
+    /// 测试交错，接管测试的 fixture（供应商 p1、OS 临时端口）被写进真实
+    /// `~/.codex/config.toml` 和 `~/.cc-switch/settings.json`。
+    #[test]
+    #[serial_test::serial]
+    #[allow(deprecated)] // set_var/remove_var deprecated since Rust 1.81; safe here under serial
+    fn test_build_home_never_falls_back_to_real_home() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::remove_var("CC_SWITCH_TEST_HOME");
+        let home = get_home_dir();
+        match original {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+
+        assert!(
+            home.starts_with(std::env::temp_dir()),
+            "测试构建必须落在临时目录，实际: {}",
+            home.display()
+        );
+        if let Some(real_home) = dirs::home_dir() {
+            assert_ne!(
+                home,
+                real_home,
+                "测试构建不得使用真实主目录: {}",
+                real_home.display()
+            );
+        }
+    }
 
     fn assert_atomic_write_replaces_existing_file(dir: &Path) {
         let path = dir.join("atomic-write-contract.json");
