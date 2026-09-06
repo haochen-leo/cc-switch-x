@@ -509,7 +509,7 @@ pub fn resolve_codex_catalog_tool_profile(
         return CodexCatalogToolProfile::NativeResponses;
     }
     if provider.is_codex_aggregate() {
-        return CodexCatalogToolProfile::NativeResponses;
+        return CodexCatalogToolProfile::RoutedAggregate;
     }
     // xAI OAuth pins the native Responses profile regardless of editable
     // api_format, mirroring the Claude-side managed-provider invariant.
@@ -1668,7 +1668,7 @@ wire_api = "anthropic"
         });
         assert_eq!(
             resolve_codex_catalog_tool_profile(&aggregate),
-            CodexCatalogToolProfile::NativeResponses
+            CodexCatalogToolProfile::RoutedAggregate
         );
 
         let chat = create_provider(json!({ "apiFormat": "openai_chat" }));
