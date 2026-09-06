@@ -21,6 +21,9 @@ use toml_edit::DocumentMut;
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
 const CODEX_OPENAI_MODEL_PROVIDER_ID: &str = "openai";
 pub const CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME: &str = "Codex Multi Provider";
+/// Internal aggregate-catalog field carrying one complete official Codex model
+/// descriptor. It is unwrapped verbatim when writing the external catalog.
+pub(crate) const CODEX_OFFICIAL_CATALOG_ENTRY_FIELD: &str = "officialCatalogEntry";
 /// Legacy/default model-provider id used while the built-in `codex-official`
 /// provider is routed through CC Switch with unified history disabled. It is
 /// still recognized so older live configs can be detected and cleaned up.
@@ -1403,6 +1406,10 @@ fn codex_catalog_model_entry(
     priority: usize,
     default_context_window: u64,
 ) -> Value {
+    if let Some(official_entry) = spec.official_catalog_entry.as_ref() {
+        return official_entry.clone();
+    }
+
     let mut entry = template.clone();
     let Some(entry_obj) = entry.as_object_mut() else {
         return json!({});
@@ -1472,6 +1479,9 @@ fn codex_catalog_model_entry(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CodexCatalogModelSpec {
     model: String,
+    /// Complete official descriptor imported from Codex's models cache.
+    /// Official rows bypass third-party projection and are emitted verbatim.
+    official_catalog_entry: Option<Value>,
     /// Explicit user value only. Entries fall back to the model id — except
     /// official vendor catalog entries, which keep the vendor's display name.
     display_name: Option<String>,
@@ -1577,9 +1587,14 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
             .map(str::trim)
             .filter(|level| !level.is_empty())
             .map(str::to_string);
+        let official_catalog_entry = model_config
+            .get(CODEX_OFFICIAL_CATALOG_ENTRY_FIELD)
+            .filter(|entry| entry.is_object())
+            .cloned();
 
         specs.push(CodexCatalogModelSpec {
             model: model.to_string(),
+            official_catalog_entry,
             display_name,
             context_window,
             supports_parallel_tool_calls,
@@ -6788,6 +6803,7 @@ base_url = "https://production.api/v1"
         fill_template_fields_from_static(&mut template);
         let specs = vec![CodexCatalogModelSpec {
             model: "k3".to_string(),
+            official_catalog_entry: None,
             display_name: Some("Kimi K3".to_string()),
             context_window: Some(262_144),
             supports_parallel_tool_calls: None,
@@ -6802,6 +6818,58 @@ base_url = "https://production.api/v1"
                 .and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn official_catalog_entry_is_verbatim_and_third_party_uses_shared_template() {
+        let official_entry = json!({
+            "slug": "gpt-5.5",
+            "display_name": "GPT-5.5",
+            "description": "Official GPT-5.5",
+            "base_instructions": "official 5.5 instructions",
+            "model_messages": {
+                "instructions_template": "official 5.5 template"
+            },
+            "comp_hash": "official-5.5-hash",
+            "service_tiers": [{ "id": "priority" }],
+            "use_responses_lite": true
+        });
+        let settings = json!({
+            "modelCatalog": {
+                "models": [
+                    {
+                        "model": "gpt-5.5",
+                        "officialCatalogEntry": official_entry.clone()
+                    },
+                    {
+                        "model": "kimi-k3/dashscope-chat",
+                        "displayName": "Kimi K3"
+                    }
+                ]
+            }
+        });
+
+        let catalog = codex_model_catalog_from_settings(
+            &settings,
+            "",
+            CodexCatalogToolProfile::RoutedAggregate,
+        )
+        .expect("catalog generation should succeed")
+        .expect("catalog should not be empty");
+        let models = catalog["models"].as_array().expect("models array");
+
+        assert_eq!(
+            models[0], official_entry,
+            "official descriptor must bypass every generated-field override"
+        );
+        let third_party_template =
+            load_codex_third_party_template_static().expect("third-party template parses");
+        assert_eq!(
+            models[1]["model_messages"],
+            third_party_template["model_messages"]
+        );
+        assert_eq!(models[1]["comp_hash"], "3000");
+        assert_eq!(models[1]["use_responses_lite"], false);
     }
 
     #[test]
@@ -6957,6 +7025,7 @@ base_url = "https://production.api/v1"
         let specs = vec![
             CodexCatalogModelSpec {
                 model: "gpt-5.6-sol".to_string(),
+                official_catalog_entry: None,
                 display_name: Some("GPT-5.6 Sol".to_string()),
                 context_window: Some(128_000),
                 supports_parallel_tool_calls: None,
@@ -6966,6 +7035,7 @@ base_url = "https://production.api/v1"
             },
             CodexCatalogModelSpec {
                 model: "kimi-k3/dashscope-chat".to_string(),
+                official_catalog_entry: None,
                 display_name: Some("Kimi K3".to_string()),
                 context_window: Some(262_144),
                 supports_parallel_tool_calls: None,
@@ -6975,6 +7045,7 @@ base_url = "https://production.api/v1"
             },
             CodexCatalogModelSpec {
                 model: "gpt-5.5".to_string(),
+                official_catalog_entry: None,
                 display_name: Some("GPT-5.5".to_string()),
                 context_window: Some(272_000),
                 supports_parallel_tool_calls: None,
@@ -7411,6 +7482,7 @@ base_url = "https://production.api/v1"
         let specs = vec![
             CodexCatalogModelSpec {
                 model: "gpt-5.4".to_string(),
+                official_catalog_entry: None,
                 display_name: Some("GPT 5.4".to_string()),
                 context_window: Some(128_000),
                 supports_parallel_tool_calls: None,
@@ -7420,6 +7492,7 @@ base_url = "https://production.api/v1"
             },
             CodexCatalogModelSpec {
                 model: "deepseek/deepseek-v4-pro".to_string(),
+                official_catalog_entry: None,
                 display_name: Some("DeepSeek V4 Pro".to_string()),
                 context_window: Some(128_000),
                 supports_parallel_tool_calls: None,
@@ -7429,6 +7502,7 @@ base_url = "https://production.api/v1"
             },
             CodexCatalogModelSpec {
                 model: "glm-5.2v".to_string(),
+                official_catalog_entry: None,
                 display_name: Some("GLM 5.2V".to_string()),
                 context_window: Some(128_000),
                 supports_parallel_tool_calls: None,
@@ -7438,6 +7512,7 @@ base_url = "https://production.api/v1"
             },
             CodexCatalogModelSpec {
                 model: "deepseek-v4-flash".to_string(),
+                official_catalog_entry: None,
                 display_name: Some("Explicit Visual Override".to_string()),
                 context_window: Some(128_000),
                 supports_parallel_tool_calls: None,
@@ -7447,6 +7522,7 @@ base_url = "https://production.api/v1"
             },
             CodexCatalogModelSpec {
                 model: "custom-text-alias".to_string(),
+                official_catalog_entry: None,
                 display_name: Some("Explicit Text Override".to_string()),
                 context_window: Some(128_000),
                 supports_parallel_tool_calls: None,
@@ -7713,6 +7789,7 @@ wire_api = "responses"
         let template = load_codex_model_template_static().expect("bundled gpt-5.5 template parses");
         let specs = vec![CodexCatalogModelSpec {
             model: "x".to_string(),
+            official_catalog_entry: None,
             display_name: Some("x".to_string()),
             context_window: Some(128_000),
             supports_parallel_tool_calls: None,
