@@ -600,12 +600,6 @@ fn read_official_catalog_models() -> Result<Vec<Value>, String> {
                 &["supports_parallel_tool_calls", "supportsParallelToolCalls"],
                 "supportsParallelToolCalls",
             );
-            copy_first_field(
-                entry,
-                &mut normalized,
-                &["base_instructions", "baseInstructions"],
-                "baseInstructions",
-            );
             copy_official_reasoning_metadata(entry, &mut normalized);
             models.push(Value::Object(normalized));
         }
@@ -985,7 +979,9 @@ mod tests {
             json!(["low", "medium", "high", "xhigh", "max", "ultra"])
         );
         assert_eq!(models[0]["defaultReasoningLevel"], "low");
-        assert_eq!(models[0]["baseInstructions"], "official sol instructions");
+        // Official prompts must NOT leak into the aggregate catalog: every row
+        // keeps the shared third-party template prompt.
+        assert!(models[0].get("baseInstructions").is_none());
     }
 
     #[test]
