@@ -3607,8 +3607,8 @@ impl ProxyService {
     ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
         use crate::services::codex_aggregation::{
             build_codex_aggregate_provider, record_models_cache_hash, CodexAggregationStatus,
-            CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING,
-            CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING, CODEX_AGGREGATE_PROVIDER_ID,
+            CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING, CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING,
+            CODEX_AGGREGATE_PROVIDER_ID,
         };
 
         let app_type = AppType::Codex;

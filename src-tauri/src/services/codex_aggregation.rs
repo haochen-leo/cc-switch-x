@@ -490,19 +490,14 @@ pub async fn refresh_if_models_cache_changed(
         Ok(Some(status)) => {
             log::info!(
                 "Codex 聚合目录已自动刷新: {} 模型, {} 来源",
-                status.model_count, status.source_provider_count
+                status.model_count,
+                status.source_provider_count
             );
-            let _ = db.set_setting(
-                CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING,
-                &current_hash,
-            );
+            let _ = db.set_setting(CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING, &current_hash);
         }
         Ok(None) => {
             // 聚合未启用，仍记录当前 hash 以便下次启用时基线正确
-            let _ = db.set_setting(
-                CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING,
-                &current_hash,
-            );
+            let _ = db.set_setting(CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING, &current_hash);
         }
         Err(error) => {
             log::warn!("启动时自动刷新 Codex 聚合目录失败: {error}");
