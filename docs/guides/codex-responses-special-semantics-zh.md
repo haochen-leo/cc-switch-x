@@ -1,6 +1,6 @@
 # Codex Responses 特殊语义与三链路兼容矩阵
 
-> 日期：2026-08-29  
+> 日期：2026-08-29（2026-09-07 增补独立 function_call_output 与 automation_update 条目）  
 > 范围：Codex / Grok Build 请求经 CC Switch 接入第三方供应商时，Native Responses、Responses → Chat Completions、Responses → Anthropic Messages 三条链路的语义兼容。  
 > 目的：区分“接口能接收基础 Responses JSON”和“能够完整承载 Codex 会话”的差别，避免把单轮文本成功误判为完整兼容。
 
@@ -61,6 +61,7 @@ Codex 实际使用的协议面更大。除了 OpenAI Responses 公共结构，�
 | `namespace` 工具 | Codex 0.142+ 对自定义 provider 默认发送；严格网关 422，宽松网关静默丢工具 | 所有非官方 Native flatten，响应恢复 `{namespace,name}` | 转换时展开为扁平 function，响应按上下文恢复 | 共享工具上下文展开为 Anthropic tool，响应恢复 |
 | `tool_choice` | 自定义类型、namespace、无工具时的 choice 会使严格网关 400 | apply_patch choice 会转换；namespace choice 被中和；xAI 清理悬空 choice；其他形态原生透传 | 映射为 Chat choice；无有效工具时删除 `tool_choice` 和 `parallel_tool_calls` | 映射为 Anthropic choice；处理 thinking 与强制工具冲突 |
 | `parallel_tool_calls` | 各协议表达不同，部分网关不支持 | 原生透传，依赖上游 | 转 Chat 字段；无工具时删除 | `false` 映射为 `disable_parallel_tool_use` |
+| `automation_update` 等 Desktop 动态工具 schema | Desktop 从 Rust 协议类型生成 `$defs/$ref/oneOf` 递归 schema；官方后端接受，第三方模型读不懂会以空参数调用（自动化管理全部失效） | 仅对该工具替换为人工维护的扁平 schema，其他工具不动；官方路径透传 | 原 schema 透传，实测上游可解析 | 随工具声明原样转换 |
 
 ### 4.2 工具、历史和上下文
 
@@ -73,6 +74,7 @@ Codex 实际使用的协议面更大。除了 OpenAI Responses 公共结构，�
 | compaction handoff | 压缩摘要若仍是 user 消息，会改变对话语义 | 三链分流前恢复 assistant summary；Native compact 请求仍要求上游具备对应 Responses 能力 | compact 请求走 Chat 转换，不要求 Chat 上游理解 Responses compact 结构 | compact 请求走 Anthropic 转换，不要求 Anthropic 上游理解 Responses compact 结构 |
 | synthetic runtime context | `<subagent_notification>`、`<turn_aborted>` 等可能污染用户回合 | 分流前恢复为 assistant runtime context | 同左 | 同左 |
 | 连续/不完整工具历史 | 严格网关拒绝缺失 tool result、空工具名或不完整 arguments | 上游 Responses 语义为主；已处理已知 ID 和 apply_patch 问题 | 合并连续 assistant，补齐工具上下文；对截断、空名、无 finish reason 做保护 | 删除不完整 tool turn，保证 Anthropic 历史从 user 开始且角色交替合法 |
+| 独立 `function_call_output`（无 `call_id`） | Desktop 用 `turn/start.tool_output` 以无 `call_id` 的独立 FCO 开启回合（automation 运行、跨线程委托），严格网关拒绝（`call_id is required`）；注入后落进线程历史，之后每个回合重放都会复发 | 请求边界为缺配对的命名 FCO 合成确定性 `function_call`+`call_id`，历史重放同样覆盖；官方路径不动 | 同一共享逻辑，转换入口即配对 | 同一共享逻辑，转换入口即配对 |
 
 ### 4.3 Reasoning、缓存和计费
 
@@ -120,6 +122,8 @@ Codex 实际使用的协议面更大。除了 OpenAI Responses 公共结构，�
 - xAI `additional_tools` 提升、私有字段清理和工具白名单
 - 流式与非流式的 apply_patch、namespace、tool_search 恢复
 - 三链共用的 user-role、compaction 和 synthetic context 整流
+- 独立 `function_call_output` 配对（automation/委托回合启动形态，三链共用同一逻辑）
+- `automation_update` 工具扁平 schema（仅该工具、人工维护，其他工具 schema 不动）
 
 仍依赖上游：
 
@@ -183,7 +187,7 @@ Codex 实际使用的协议面更大。除了 OpenAI Responses 公共结构，�
    当前设计是清除不被严格 parser 接受的 carrier，不提供延迟工具发现。
 
 3. **Native 未知私有字段**  
-   除 xAI 外不做统一白名单清洗。Codex 新版本增加字段后，严格网关可能重新出现 400/422。
+   除 xAI 外不做统一白名单清洗。Codex 新版本增加字段后，严格网关可能重新出现 400/422。Desktop 新增的 app 侧注入工具（`turn/start.tool_output` 的 name/namespace 开放）会产生新的私有形态，按 `automation_update` 的模式逐工具定向适配，不做通用 schema 编译。
 
 4. **辅助端点**  
    `/responses` 单轮成功不能证明 `/responses/compact`、`/alpha/search`、images、files、memories 或 realtime 可用。当前 realtime 是明确不支持，不应归类为已 relay。
@@ -215,6 +219,8 @@ Codex 实际使用的协议面更大。除了 OpenAI Responses 公共结构，�
 | 三链分流和请求预处理 | `src-tauri/src/proxy/forwarder.rs` |
 | 三链响应分流 | `src-tauri/src/proxy/handlers.rs` |
 | provider 能力谓词 | `src-tauri/src/proxy/providers/codex.rs` |
+| Native Responses 入口（prepare/finalize/响应恢复） | `src-tauri/src/proxy/providers/transform_codex_responses.rs` |
+| 独立 FCO 配对（三链共用） | `transform_codex_chat.rs` 内 `synthesize_named_function_call_output_pairs` |
 | Native namespace | `src-tauri/src/proxy/providers/transform_codex_responses_namespace.rs` |
 | Native tool_search | `src-tauri/src/proxy/providers/transform_codex_responses_toolsearch.rs` |
 | Native xAI 清理 | `src-tauri/src/proxy/providers/transform_codex_responses_xai_sanitize.rs` |
