@@ -36,6 +36,7 @@ pub mod transform_codex_anthropic;
 pub mod transform_codex_apply_patch;
 pub mod transform_codex_chat;
 pub mod transform_codex_compaction;
+pub mod transform_codex_responses;
 pub mod transform_codex_responses_namespace;
 pub mod transform_codex_responses_toolsearch;
 pub mod transform_codex_responses_xai_sanitize;
@@ -61,8 +62,7 @@ pub use claude::{
 pub use codex::CodexAdapter;
 pub use codex::{
     apply_codex_chat_upstream_model, apply_codex_upstream_model, codex_anthropic_thinking_policy,
-    codex_native_responses_uses_openai_private_contract,
-    codex_provider_requires_native_responses_item_id_normalization, codex_provider_upstream_model,
+    codex_native_responses_uses_openai_private_contract, codex_provider_upstream_model,
     codex_provider_uses_anthropic, codex_provider_uses_chat_completions,
     inject_codex_chat_prompt_cache_key, is_codex_official_provider,
     provider_needs_responses_apply_patch_bridge, provider_needs_responses_namespace_flatten,
