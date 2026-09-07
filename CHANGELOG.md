@@ -9,6 +9,31 @@ Entries at 3.20.1 and below describe the upstream CC Switch baseline that CC
 Switch X is built from. CC Switch X uses an independent version line starting
 at 0.1.0-beta.1.
 
+## [0.1.0-beta.3] - 2026-09-07
+
+This beta refreshes the Codex bridge layer with broader replay pairing,
+native Responses route refactoring, and safer local compaction handling.
+
+### Fixed
+
+- **Standalone Function-Call Output Replay**: Codex Desktop automation and
+  delegation can start a turn with an unpaired `function_call_output`; the
+  proxy now synthesizes deterministic call pairs across the Responses,
+  Chat, and Anthropic bridge paths.
+- **Local Compaction Routing**: Local compaction requests use an aggregate
+  route fallback so compacted conversations continue through the expected
+  upstream.
+- **Automation Update Schema**: Third-party native Responses routes receive a
+  flattened, manually maintained `automation_update` tool schema so strict
+  gateways and models do not choke on recursive Codex schema definitions.
+
+### Changed
+
+- Native Responses transformation logic is split into a dedicated provider
+  module, reducing duplicated routing/forwarding logic.
+- The Chinese Codex Responses compatibility matrix now documents standalone
+  function-call output and `automation_update` behavior.
+
 ## [0.1.0-beta.2] - 2026-09-07
 
 This beta updates the Codex compatibility and model-catalog paths carried by

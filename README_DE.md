@@ -38,7 +38,7 @@ CC Switch X ist ein fokussierter Fork für Nutzer, die Claude und Codex zuverlä
 
 ## Auf Basis von CC Switch
 
-[Vollständiges Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.2-en.md)
+[Vollständiges Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.3-en.md)
 
 CC Switch X übernimmt die umfassenden Desktop-Verwaltungsfunktionen des Upstream-Projekts: Anbieter- und Konfigurationsverwaltung für neun KI-Werkzeuge, MCP / Prompts / Skills, Tray-Umschaltung, Nutzungsverfolgung, Sitzungen, Cloud-Synchronisierung, Import/Export, Backups und plattformübergreifende Unterstützung. Allgemeine Funktionen finden Sie im [Upstream-Projekt](https://github.com/farion1231/cc-switch), Details zur Nutzung im [Benutzerhandbuch](docs/user-manual/en/README.md).
 
