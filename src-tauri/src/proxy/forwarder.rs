@@ -111,6 +111,9 @@ pub struct ForwardResult {
     /// usage 归因不能依赖 ctx.request_model（映射前的客户端别名）：上游响应
     /// 缺失 model 或回显别名时，接管流量会被记成 claude-* 并按其定价计费。
     pub outbound_model: Option<String>,
+    /// Native Responses 请求在实际成功 provider attempt 上生成的恢复上下文。
+    pub(crate) codex_responses_transform:
+        Option<super::providers::transform_codex_responses::TransformContext>,
     /// 活跃连接 RAII guard：随响应一起流转到 response_processor / handle_claude_transform，
     /// 最终被 move 进流式 body future（或非流式响应作用域），覆盖整个响应生命周期。
     pub(crate) connection_guard: Option<ActiveConnectionGuard>,
@@ -345,7 +348,15 @@ impl RequestForwarder {
         adapter: &dyn ProviderAdapter,
         is_routed_target: bool,
         app_type_str: &str,
-    ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
+    ) -> Result<
+        (
+            ProxyResponse,
+            Option<String>,
+            Option<String>,
+            Option<super::providers::transform_codex_responses::TransformContext>,
+        ),
+        ProxyError,
+    > {
         let mut rate_limit_retries = 0u32;
         loop {
             let result = self
@@ -664,7 +675,7 @@ impl RequestForwarder {
                 )
                 .await
             {
-                Ok((response, claude_api_format, outbound_model)) => {
+                Ok((response, claude_api_format, outbound_model, codex_responses_transform)) => {
                     // 成功：普通闭合熔断状态异步记录，避免阻塞流式首包返回；
                     // HalfOpen 探测仍同步等待，保证 permit 与熔断状态及时释放。
                     self.record_success_result(&provider.id, app_type_str, used_half_open_permit)
@@ -713,6 +724,7 @@ impl RequestForwarder {
                         provider: provider.clone(),
                         claude_api_format,
                         outbound_model,
+                        codex_responses_transform,
                         connection_guard: None,
                     });
                 }
@@ -759,7 +771,12 @@ impl RequestForwarder {
                                 )
                                 .await
                             {
-                                Ok((response, claude_api_format, outbound_model)) => {
+                                Ok((
+                                    response,
+                                    claude_api_format,
+                                    outbound_model,
+                                    codex_responses_transform,
+                                )) => {
                                     log::info!(
                                         "[{app_type_str}] [Media] Unsupported-image retry succeeded"
                                     );
@@ -812,6 +829,7 @@ impl RequestForwarder {
                                         provider: provider.clone(),
                                         claude_api_format,
                                         outbound_model,
+                                        codex_responses_transform,
                                         connection_guard: None,
                                     });
                                 }
@@ -906,7 +924,12 @@ impl RequestForwarder {
                                     )
                                     .await
                                 {
-                                    Ok((response, claude_api_format, outbound_model)) => {
+                                    Ok((
+                                        response,
+                                        claude_api_format,
+                                        outbound_model,
+                                        codex_responses_transform,
+                                    )) => {
                                         log::info!("[{app_type_str}] [RECT-002] 整流重试成功");
                                         self.record_success_result(
                                             &provider.id,
@@ -963,6 +986,7 @@ impl RequestForwarder {
                                             provider: provider.clone(),
                                             claude_api_format,
                                             outbound_model,
+                                            codex_responses_transform,
                                             connection_guard: None,
                                         });
                                     }
@@ -1074,7 +1098,12 @@ impl RequestForwarder {
                                 )
                                 .await
                             {
-                                Ok((response, claude_api_format, outbound_model)) => {
+                                Ok((
+                                    response,
+                                    claude_api_format,
+                                    outbound_model,
+                                    codex_responses_transform,
+                                )) => {
                                     log::info!("[{app_type_str}] [RECT-011] budget 整流重试成功");
                                     self.record_success_result(
                                         &provider.id,
@@ -1124,6 +1153,7 @@ impl RequestForwarder {
                                         provider: provider.clone(),
                                         claude_api_format,
                                         outbound_model,
+                                        codex_responses_transform,
                                         connection_guard: None,
                                     });
                                 }
@@ -1296,7 +1326,15 @@ impl RequestForwarder {
         extensions: &Extensions,
         adapter: &dyn ProviderAdapter,
         is_routed_target: bool,
-    ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
+    ) -> Result<
+        (
+            ProxyResponse,
+            Option<String>,
+            Option<String>,
+            Option<super::providers::transform_codex_responses::TransformContext>,
+        ),
+        ProxyError,
+    > {
         // 使用适配器提取 base_url
         let mut base_url = adapter.extract_base_url(provider)?;
 
@@ -1758,175 +1796,25 @@ impl RequestForwarder {
             .and_then(|m| m.as_str())
             .filter(|m| !m.is_empty())
             .map(str::to_string);
-        let codex_native_responses_openai_private_contract =
-            matches!(app_type, AppType::Codex | AppType::GrokBuild)
-                && !codex_responses_to_chat
-                && !codex_responses_to_anthropic
-                && super::providers::codex_native_responses_uses_openai_private_contract(
-                    provider,
-                    codex_native_responses_upstream_model.as_deref(),
-                );
-
-        // Native Responses passthrough to the strict xAI gateway: lift
-        // per-turn tool carriers before namespace flattening so nested
-        // namespace tools are preserved as top-level function tools.
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_responses_to_chat
-            && !codex_responses_to_anthropic
-            && super::providers::provider_needs_xai_responses_sanitize(provider)
-            && super::providers::transform_codex_responses_xai_sanitize::promote_additional_tools(
-                &mut request_body,
-            )
-        {
-            log::debug!(
-                "[Codex] Promoted additional_tools for native Responses upstream (provider={})",
-                provider.id
-            );
-        }
-
-        // Then flatten Codex's private `namespace`/plugin tool declarations into
-        // top-level function tools so a third-party native gateway neither
-        // 422s on `unknown variant "namespace"` (strict serde) nor silently
-        // drops them (lenient). The Chat/Anthropic paths above already unwrap
-        // namespaces, so this only fires on the native passthrough. The
-        // response handler restores the flat names using a map re-derived
-        // from the same request tools.
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_responses_to_chat
-            && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_namespace_flatten(
+        let is_codex_native_responses = should_transform_codex_native_responses(
+            app_type,
+            endpoint,
+            codex_responses_to_chat,
+            codex_responses_to_anthropic,
+        );
+        let mut codex_responses_transform = None;
+        if is_codex_native_responses {
+            let prepared = super::providers::transform_codex_responses::prepare_request(
+                request_body,
                 provider,
                 codex_native_responses_upstream_model.as_deref(),
-            )
-            && super::providers::transform_codex_responses_namespace::flatten_request_namespaces(
-                &mut request_body,
-            )?
-        {
-            log::debug!(
-                "[Codex] Flattened namespace tools for native Responses upstream (provider={})",
-                provider.id
-            );
-        }
-
-        // Codex exposes apply_patch as a freeform custom tool. Most
-        // third-party native Responses gateways accept only standard function
-        // tools, so bridge the declaration, forced choice and replay history
-        // after namespace flattening. The response handler restores the
-        // function call before ID normalization and client dispatch.
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_responses_to_chat
-            && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_apply_patch_bridge(
-                provider,
-                codex_native_responses_upstream_model.as_deref(),
-            )
-            && super::providers::transform_codex_apply_patch::bridge_request_apply_patch_custom_to_function(
-                &mut request_body,
-            )
-        {
-            log::debug!(
-                "[Codex] Bridged apply_patch custom tool to function for native Responses upstream (provider={})",
-                provider.id
-            );
-        }
-
-        // xAI-only on the same native-Responses path: scrub the
-        // OpenAI-backend-private fields and tool carriers
-        // (`external_web_access`, `prompt_cache_retention`, `additional_tools`,
-        // `tool_search`, …) that xAI's strict serde parser rejects with
-        // 400/422. Deterministic field removals only, gated on the xAI OAuth
-        // path, so the prompt-cache prefix stays stable and no other provider
-        // is affected. Runs after the flatten above so lifted `namespace`
-        // tools survive the tool-type whitelist.
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_responses_to_chat
-            && !codex_responses_to_anthropic
-            && super::providers::provider_needs_xai_responses_sanitize(provider)
-            && super::providers::transform_codex_responses_xai_sanitize::sanitize_xai_responses_request(
-                &mut request_body,
-            )
-        {
-            log::debug!(
-                "[Codex] Sanitized xAI-unsupported Responses fields (provider={})",
-                provider.id
-            );
-        }
-
-        // Third-party native Responses upstreams (dashscope etc.) don't
-        // implement OpenAI's private deferred-tool discovery contract
-        // (`tool_search`). Bridge it: materialize the declaration into a plain
-        // function tool, and lift tools discovered in replayed
-        // `tool_search_output` items into top-level `tools` (converting the
-        // carrier history items into standard function_call items). The
-        // response handler rewrites the model's `function_call` named
-        // `tool_search` back into a client-executed `tool_search_call` item.
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_responses_to_chat
-            && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_tool_search_bridge(
-                provider,
-                codex_native_responses_upstream_model.as_deref(),
-            )
-        {
-            let materialized = super::providers::transform_codex_responses_toolsearch::materialize_tool_search_declaration(
-                &mut request_body,
-            );
-            let promoted = super::providers::transform_codex_responses_toolsearch::promote_tool_search_output_tools(
-                &mut request_body,
-            );
-            if materialized || promoted {
-                log::debug!(
-                    "[Codex] Bridged tool_search discovery for native Responses upstream (provider={}, declaration={}, promoted={})",
-                    provider.id,
-                    materialized,
-                    promoted
-                );
-            }
+            )?;
+            request_body = prepared.body;
+            codex_responses_transform = Some(prepared.context);
         }
 
         if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
             self.apply_media_prevention(&mut request_body, provider);
-        }
-
-        if should_sanitize_codex_native_responses_reasoning_envelopes(
-            app_type,
-            endpoint,
-            codex_responses_to_chat,
-            codex_responses_to_anthropic,
-        ) {
-            let changed = super::providers::transform_codex_anthropic::sanitize_anthropic_reasoning_envelopes_for_native_responses(
-                &mut request_body,
-            );
-            if changed > 0 {
-                log::debug!(
-                    "[Codex] Sanitized {changed} cc-switch Anthropic reasoning envelope(s) before native Responses upstream (provider={})",
-                    provider.id
-                );
-            }
-        }
-
-        if should_normalize_codex_native_responses_item_ids(
-            app_type,
-            endpoint,
-            provider,
-            codex_responses_to_chat,
-            codex_responses_to_anthropic,
-        ) {
-            let changed = if codex_native_responses_openai_private_contract {
-                super::providers::transform_codex_chat::normalize_official_replayed_item_ids_for_responses_upstream(
-                    &mut request_body,
-                )
-            } else {
-                super::providers::transform_codex_chat::normalize_replayed_item_ids_for_responses_upstream(
-                    &mut request_body,
-                )
-            };
-            if changed > 0 {
-                log::debug!(
-                    "[Codex] Normalized {changed} noncanonical replayed item ID(s) for native Responses upstream (provider={})",
-                    provider.id
-                );
-            }
         }
 
         // 过滤私有参数（以 `_` 开头的字段），防止内部信息泄露到上游
@@ -1943,6 +1831,16 @@ impl RequestForwarder {
                 }
             }
         }
+
+        if let Some(context) = codex_responses_transform.take() {
+            let finalized = super::providers::transform_codex_responses::finalize_request(
+                context,
+                filtered_body,
+            )?;
+            filtered_body = canonicalize_value(finalized.body);
+            codex_responses_transform = Some(finalized.context);
+        }
+
         // 出站 body 定稿后刷新真值（覆盖 Codex chat 上游模型覆写、转换层模型改写）
         if let Some(m) = filtered_body
             .get("model")
@@ -2718,7 +2616,12 @@ impl RequestForwarder {
                     response = self.validate_responses_stream_start(response).await?;
                 }
             }
-            Ok((response, resolved_claude_api_format, outbound_model))
+            Ok((
+                response,
+                resolved_claude_api_format,
+                outbound_model,
+                codex_responses_transform,
+            ))
         } else {
             let status_code = status.as_u16();
             let retry_after_ms = parse_retry_after_ms(response.headers());
@@ -4072,30 +3975,7 @@ fn codex_third_party_needs_image_budget(
     matches!(app_type, AppType::Codex | AppType::GrokBuild) && !codex_official_auth_passthrough
 }
 
-fn should_normalize_codex_native_responses_item_ids(
-    app_type: &AppType,
-    endpoint: &str,
-    provider: &Provider,
-    codex_responses_to_chat: bool,
-    codex_responses_to_anthropic: bool,
-) -> bool {
-    let path = endpoint
-        .split_once('?')
-        .map_or(endpoint, |(path, _query)| path);
-
-    matches!(app_type, AppType::Codex)
-        && matches!(
-            path,
-            "/responses" | "/v1/responses" | "/responses/compact" | "/v1/responses/compact"
-        )
-        && !codex_responses_to_chat
-        && !codex_responses_to_anthropic
-        && super::providers::codex_provider_requires_native_responses_item_id_normalization(
-            provider,
-        )
-}
-
-fn should_sanitize_codex_native_responses_reasoning_envelopes(
+fn should_transform_codex_native_responses(
     app_type: &AppType,
     endpoint: &str,
     codex_responses_to_chat: bool,
@@ -4104,7 +3984,6 @@ fn should_sanitize_codex_native_responses_reasoning_envelopes(
     let path = endpoint
         .split_once('?')
         .map_or(endpoint, |(path, _query)| path);
-
     matches!(app_type, AppType::Codex | AppType::GrokBuild)
         && matches!(
             path,
@@ -4281,162 +4160,29 @@ mod tests {
     }
 
     #[test]
-    fn native_responses_item_id_normalization_is_provider_capability_driven() {
-        let native = Provider {
-            id: "dashscope".to_string(),
-            name: "DashScope".to_string(),
-            settings_config: json!({ "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1" }),
-            website_url: None,
-            category: None,
-            created_at: None,
-            sort_index: None,
-            notes: None,
-            meta: Some(crate::provider::ProviderMeta {
-                api_format: Some("openai_responses".to_string()),
-                ..Default::default()
-            }),
-            icon: None,
-            icon_color: None,
-            in_failover_queue: false,
-        };
-        let mut chat = test_provider_with_models(
-            "chat",
-            "Chat",
-            json!({ "api_format": "openai_chat", "base_url": "https://chat.example/v1" }),
-        );
-        chat.meta = Some(crate::provider::ProviderMeta {
-            api_format: Some("openai_chat".to_string()),
-            ..Default::default()
-        });
-        let mut anthropic = test_provider_with_models(
-            "anthropic",
-            "Anthropic",
-            json!({ "api_format": "anthropic", "base_url": "https://anthropic.example/v1" }),
-        );
-        anthropic.meta = Some(crate::provider::ProviderMeta {
-            api_format: Some("anthropic".to_string()),
-            ..Default::default()
-        });
-        let official = Provider {
-            id: crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string(),
-            name: "Codex".to_string(),
-            settings_config: json!({ "base_url": "https://chatgpt.com/backend-api/codex" }),
-            website_url: None,
-            category: Some("official".to_string()),
-            created_at: None,
-            sort_index: None,
-            notes: None,
-            meta: None,
-            icon: None,
-            icon_color: None,
-            in_failover_queue: false,
-        };
-
-        assert!(should_normalize_codex_native_responses_item_ids(
+    fn native_responses_transform_does_not_capture_alpha_search() {
+        assert!(should_transform_codex_native_responses(
             &AppType::Codex,
             "/v1/responses?stream=true",
-            &native,
             false,
-            false
-        ));
-        assert!(should_normalize_codex_native_responses_item_ids(
-            &AppType::Codex,
-            "/v1/responses",
-            &native,
             false,
-            false
         ));
-        assert!(should_normalize_codex_native_responses_item_ids(
-            &AppType::Codex,
-            "/v1/responses/compact",
-            &native,
-            false,
-            false
-        ));
-        assert!(!should_normalize_codex_native_responses_item_ids(
-            &AppType::Codex,
-            "/v1/responses",
-            &chat,
-            false,
-            false
-        ));
-        assert!(!should_normalize_codex_native_responses_item_ids(
-            &AppType::Codex,
-            "/v1/responses",
-            &anthropic,
-            false,
-            false
-        ));
-        assert!(!should_normalize_codex_native_responses_item_ids(
+        assert!(should_transform_codex_native_responses(
             &AppType::GrokBuild,
-            "/v1/responses",
-            &native,
+            "/responses/compact",
             false,
-            false
-        ));
-        assert!(should_normalize_codex_native_responses_item_ids(
-            &AppType::Codex,
-            "/v1/responses",
-            &official,
             false,
-            false
         ));
-        assert!(!should_normalize_codex_native_responses_item_ids(
+        assert!(!should_transform_codex_native_responses(
             &AppType::Codex,
-            "/v1/responses",
-            &native,
+            "/v1/alpha/search",
+            false,
+            false,
+        ));
+        assert!(!should_transform_codex_native_responses(
+            &AppType::Codex,
+            "/responses",
             true,
-            false
-        ));
-        assert!(!should_normalize_codex_native_responses_item_ids(
-            &AppType::Codex,
-            "/v1/responses",
-            &native,
-            false,
-            true
-        ));
-        assert!(!should_normalize_codex_native_responses_item_ids(
-            &AppType::Codex,
-            "/v1/chat/completions",
-            &native,
-            false,
-            false
-        ));
-    }
-
-    #[test]
-    fn native_responses_reasoning_envelope_sanitizer_covers_codex_and_grokbuild() {
-        for app_type in [AppType::Codex, AppType::GrokBuild] {
-            assert!(should_sanitize_codex_native_responses_reasoning_envelopes(
-                &app_type,
-                "/v1/responses?stream=true",
-                false,
-                false,
-            ));
-            assert!(should_sanitize_codex_native_responses_reasoning_envelopes(
-                &app_type,
-                "/v1/responses/compact",
-                false,
-                false,
-            ));
-            assert!(!should_sanitize_codex_native_responses_reasoning_envelopes(
-                &app_type,
-                "/v1/responses",
-                true,
-                false,
-            ));
-            assert!(!should_sanitize_codex_native_responses_reasoning_envelopes(
-                &app_type,
-                "/v1/responses",
-                false,
-                true,
-            ));
-        }
-
-        assert!(!should_sanitize_codex_native_responses_reasoning_envelopes(
-            &AppType::Codex,
-            "/v1/chat/completions",
-            false,
             false,
         ));
     }
