@@ -130,6 +130,13 @@ impl RequestContext {
         let start_time = Instant::now();
         let request_id = uuid::Uuid::new_v4().to_string();
 
+        // Codex 本地压缩（local compaction）以普通 /responses 请求发送，路径上
+        // 与正式对话无法区分；按请求体中的压缩指令特征识别后同样允许聚合路由降级。
+        let detected_local_compaction = !is_compact
+            && app_type_str == AppType::Codex.as_str()
+            && is_codex_local_compaction_request(body);
+        let is_compact = is_compact || detected_local_compaction;
+
         // 从数据库读取应用级代理配置（per-app）
         let app_config = state
             .db
@@ -155,6 +162,15 @@ impl RequestContext {
         // 提取 Session ID
         let session_result = extract_session_id(headers, body, app_type_str);
         let session_id = session_result.session_id.clone();
+
+        if detected_local_compaction {
+            log::info!(
+                "[{}] 识别到 Codex 本地压缩请求: model={}, session={}, 启用聚合路由自动降级",
+                tag,
+                request_model,
+                session_id
+            );
+        }
 
         log::debug!(
             "[{}] Session ID: {} (from {:?}, client_provided: {})",
@@ -365,9 +381,110 @@ pub(crate) fn extract_gemini_model_from_path(endpoint: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Codex 本地压缩（local compaction）提示词特征。
+/// 来源：codex-rs `prompts/templates/compact/prompt.md`。app-server 在无法使用远端
+/// 压缩（如 `disable_response_storage=true` 或 provider 不支持）时，把该指令作为
+/// user message 追加到普通 `/responses` 请求中，正常对话请求不会携带。
+/// 注意：用户通过 `compact_prompt` 配置自定义压缩提示词时，此特征不生效。
+const CODEX_LOCAL_COMPACTION_PROMPT_MARKERS: &[&str] =
+    &["You are performing a CONTEXT CHECKPOINT COMPACTION"];
+
+/// 判断 Codex `/responses` 请求是否为本地压缩请求。
+///
+/// 本地压缩与正式对话共用 `/responses` 端点，只能通过请求体中注入的压缩指令识别。
+fn is_codex_local_compaction_request(body: &serde_json::Value) -> bool {
+    let Some(items) = body.get("input").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    items.iter().any(|item| {
+        let is_user_message = item.get("type").and_then(|t| t.as_str()) == Some("message")
+            && item.get("role").and_then(|r| r.as_str()) == Some("user");
+        if !is_user_message {
+            return false;
+        }
+        match item.get("content") {
+            Some(serde_json::Value::String(text)) => contains_compaction_marker(text),
+            Some(serde_json::Value::Array(parts)) => parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                .any(contains_compaction_marker),
+            _ => false,
+        }
+    })
+}
+
+fn contains_compaction_marker(text: &str) -> bool {
+    CODEX_LOCAL_COMPACTION_PROMPT_MARKERS
+        .iter()
+        .any(|marker| text.contains(marker))
+}
+
 #[cfg(test)]
 mod tests {
     use super::extract_gemini_model_from_path;
+    use super::is_codex_local_compaction_request;
+
+    #[test]
+    fn detects_local_compaction_prompt_in_input() {
+        let body = serde_json::json!({
+            "model": "qwen3.8-max/dashscope",
+            "input": [
+                {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "生成最新一期的报表"}
+                ]},
+                {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.\n\nInclude:\n- Current progress"}
+                ]}
+            ]
+        });
+        assert!(is_codex_local_compaction_request(&body));
+    }
+
+    #[test]
+    fn detects_local_compaction_prompt_with_string_content() {
+        let body = serde_json::json!({
+            "model": "kimi-k3/dashscope-chat",
+            "input": [
+                {"type": "message", "role": "user", "content": "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task."}
+            ]
+        });
+        assert!(is_codex_local_compaction_request(&body));
+    }
+
+    #[test]
+    fn ignores_normal_turn_request() {
+        let body = serde_json::json!({
+            "model": "kimi-k3/dashscope-chat",
+            "input": [
+                {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "帮我看下 compaction 为什么报错"}
+                ]}
+            ]
+        });
+        assert!(!is_codex_local_compaction_request(&body));
+    }
+
+    #[test]
+    fn ignores_marker_in_assistant_or_developer_messages() {
+        let body = serde_json::json!({
+            "input": [
+                {"type": "message", "role": "assistant", "content": [
+                    {"type": "output_text", "text": "You are performing a CONTEXT CHECKPOINT COMPACTION"}
+                ]},
+                {"type": "message", "role": "developer", "content": [
+                    {"type": "input_text", "text": "You are performing a CONTEXT CHECKPOINT COMPACTION"}
+                ]}
+            ]
+        });
+        assert!(!is_codex_local_compaction_request(&body));
+    }
+
+    #[test]
+    fn ignores_request_without_input_items() {
+        assert!(!is_codex_local_compaction_request(
+            &serde_json::json!({"model": "kimi-k3/dashscope-chat"})
+        ));
+    }
 
     #[test]
     fn extract_model_with_action() {
