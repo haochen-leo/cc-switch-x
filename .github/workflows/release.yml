@@ -624,7 +624,7 @@ jobs:
             - **Linux (ARM64)**: `CC-Switch-X-${{ github.ref_name }}-Linux-arm64.AppImage` / `.deb` / `.rpm`
 
             ---
-            CC Switch X 的首个 Beta 尚未启用独立的自动更新通道。发布流水线默认跳过；配置 X 自有签名、公证和 updater 后再启用。
+            CC Switch X Beta 尚未启用独立的自动更新通道。发布流水线默认跳过；配置 X 自有签名、公证和 updater 后再启用。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

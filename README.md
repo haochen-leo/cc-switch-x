@@ -41,7 +41,7 @@ CC Switch X is a focused fork for users who need Claude and Codex to work reliab
 
 ## Built on CC Switch
 
-[Full Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.1-en.md)
+[Full Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.2-en.md)
 
 CC Switch X retains the upstream project's broad desktop-management capabilities: provider and configuration management for nine AI tools, MCP / Prompts / Skills, tray switching, usage tracking, sessions, cloud sync, import/export, backups, and cross-platform support. See the [upstream project](https://github.com/farion1231/cc-switch) for the general feature set and the [user manual](docs/user-manual/en/README.md) for usage details.
 

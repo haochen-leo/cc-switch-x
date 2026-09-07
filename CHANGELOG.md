@@ -9,6 +9,32 @@ Entries at 3.20.1 and below describe the upstream CC Switch baseline that CC
 Switch X is built from. CC Switch X uses an independent version line starting
 at 0.1.0-beta.1.
 
+## [0.1.0-beta.2] - 2026-09-07
+
+This beta updates the Codex compatibility and model-catalog paths carried by
+the X release branch, with additional safeguards around test isolation and
+live configuration writes.
+
+### Fixed
+
+- **Codex Automation Replay Pairing**: Orphan `codex_app` function-call output
+  items are repaired with a deterministic, complete function-call pair before
+  replay, covering both native Responses and Chat bridge paths.
+- **Test Configuration Isolation**: Environment-mutating tests are serialized,
+  and test builds no longer fall back to the real home directory when the
+  test-home variable is temporarily unset.
+- **Codex Aggregate Catalog Semantics**: Official catalog entries are preserved
+  verbatim while third-party routes use the shared X template; official
+  `base_instructions` are no longer copied into the aggregate catalog.
+
+### Changed
+
+- Codex catalog templates are now independent from route profiles, and
+  takeover logs record the route key and unified-session decision for easier
+  diagnosis.
+- The release branch is distributed as a manually built beta while X-specific
+  signing, notarization, and updater infrastructure remain disabled.
+
 ## [0.1.0-beta.1] - 2026-08-31
 
 CC Switch X begins as an unofficial, independently branded fork of CC Switch,
