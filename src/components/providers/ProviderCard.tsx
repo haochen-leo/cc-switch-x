@@ -31,6 +31,7 @@ import {
   extractCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
 import { resolveManagedAccountId } from "@/lib/authBinding";
+import { isOfficialSeedProviderId } from "@/lib/officialSeeds";
 import {
   resolveCodexOfficialIdentity,
   supportsOfficialProxyTakeover,
@@ -271,6 +272,7 @@ export function ProviderCard({
   const usageEnabled =
     provider.meta?.usage_script?.enabled ?? isBoundCodexOfficial;
   const isOfficial = isOfficialProvider(provider, appId);
+  const isOfficialSeed = isOfficialSeedProviderId(provider.id);
   const supportsOfficialSubscription =
     isOfficial && ["claude", "codex", "gemini", "grokbuild"].includes(appId);
   const isOfficialSubscriptionUsage =
@@ -692,6 +694,7 @@ export function ProviderCard({
               isOfficialBlockedByProxy={isOfficialBlockedByProxy}
               isReadOnly={isHermesReadOnly}
               isOmo={isAnyOmo}
+              isOfficialSeed={isOfficialSeed}
               onSwitch={() => onSwitch(provider)}
               onEdit={() => onEdit(provider)}
               onDuplicate={() => onDuplicate(provider)}
