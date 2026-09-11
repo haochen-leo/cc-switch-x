@@ -5,7 +5,10 @@
 //! a subset, so request lowering and response restoration must be treated as
 //! one attempt-scoped transform instead of being recomputed later by handlers.
 
-use std::{collections::HashMap, pin::Pin};
+use std::{
+    collections::{HashMap, HashSet},
+    pin::Pin,
+};
 
 use bytes::Bytes;
 use futures::Stream;
@@ -47,6 +50,7 @@ pub(crate) struct TransformContext {
     pub(crate) provider_id: String,
     pub(crate) upstream_model: Option<String>,
     restore_map: HashMap<String, NamespacedName>,
+    xai_allowed_models: HashSet<String>,
     policy: TransformPolicy,
 }
 
@@ -90,6 +94,9 @@ pub(crate) fn prepare_request(
         provider_id: provider.id.clone(),
         upstream_model: upstream_model.map(str::to_string),
         restore_map: HashMap::new(),
+        xai_allowed_models: transform_codex_responses_xai_sanitize::collect_xai_catalog_model_ids(
+            &provider.settings_config,
+        ),
         policy,
     };
 
@@ -140,6 +147,12 @@ fn apply_request_transforms(
         // Promotion can expose namespace declarations that were nested in the
         // per-turn carrier. Capture them before flattening.
         extend_restore_map(body, &mut context.restore_map);
+        transform_codex_responses_xai_sanitize::rewrite_xai_unknown_request_model(
+            body,
+            context.upstream_model.as_deref().unwrap_or_default(),
+            &context.xai_allowed_models,
+        );
+        transform_codex_responses_xai_sanitize::rewrite_xai_agent_message_input_items(body);
     }
 
     if context.policy.namespace_flatten {
@@ -188,6 +201,9 @@ pub(crate) fn transform_response(body: &mut Value, context: &TransformContext) {
             &context.restore_map,
         );
     }
+    if context.policy.xai_sanitize {
+        transform_codex_responses_xai_sanitize::normalize_xai_function_call_integer_arguments(body);
+    }
     transform_codex_apply_patch::sanitize_response_apply_patch_inputs(body);
 }
 
@@ -214,7 +230,14 @@ pub(crate) fn transform_response_stream(
     } else {
         stream
     };
-    let stream = if !context.restore_map.is_empty() {
+    let stream = if context.policy.xai_sanitize {
+        Box::pin(
+            transform_codex_responses_xai_sanitize::create_xai_native_responses_sse_stream(
+                stream,
+                context.restore_map,
+            ),
+        ) as ResponseByteStream
+    } else if !context.restore_map.is_empty() {
         Box::pin(
             transform_codex_responses_namespace::create_namespace_restore_sse_stream(
                 stream,
