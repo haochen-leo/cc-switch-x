@@ -116,6 +116,7 @@
     "needsRouting": "Needs Routing",
     "noRoutingSupport": "No Routing Support",
     "blockedByProxyHint": "Can't switch to an official provider while proxy takeover is active",
+    "blockedByCodexAggregationHint": "Multi-model mode is active. Turn it off before enabling an individual provider.",
     "editProvider": "Edit Provider",
     "editProviderHint": "Configuration will be applied to the current provider immediately after update.",
     "deleteProvider": "Delete Provider",

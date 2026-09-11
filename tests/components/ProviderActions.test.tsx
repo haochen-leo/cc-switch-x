@@ -52,6 +52,32 @@ function renderPiActions({
 }
 
 describe("ProviderActions Pi provider switching", () => {
+  it("blocks individual provider activation while Codex aggregation is active", async () => {
+    const user = userEvent.setup();
+    const onSwitch = vi.fn();
+    const hint = "多模型模式已开启，请先关闭多模型后再单独启用供应商";
+
+    render(
+      <ProviderActions
+        appId="codex"
+        isCurrent={false}
+        switchDisabledHint={hint}
+        onSwitch={onSwitch}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    const enableButton = screen.getByRole("button", {
+      name: "provider.enable",
+    });
+    expect(enableButton).toBeDisabled();
+    expect(enableButton.parentElement).toHaveAttribute("title", hint);
+
+    await user.click(enableButton);
+    expect(onSwitch).not.toHaveBeenCalled();
+  });
+
   it("omits duplication when the caller disallows it", () => {
     render(
       <ProviderActions
