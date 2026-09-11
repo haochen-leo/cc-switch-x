@@ -382,6 +382,10 @@ fn get_codex_managed_oauth_live_auth_marker_path() -> PathBuf {
     crate::config::get_app_config_dir().join(CODEX_MANAGED_OAUTH_LIVE_AUTH_MARKER_FILENAME)
 }
 
+pub(crate) fn clear_codex_managed_oauth_live_auth_marker() -> Result<(), AppError> {
+    delete_file(&get_codex_managed_oauth_live_auth_marker_path())
+}
+
 #[cfg(test)]
 pub(crate) fn codex_managed_oauth_live_auth_marker_exists() -> bool {
     get_codex_managed_oauth_live_auth_marker_path().exists()
@@ -2553,6 +2557,41 @@ pub fn extract_codex_experimental_bearer_token(config_text: &str) -> Option<Stri
         .map(str::to_string)
 }
 
+pub(crate) fn apply_codex_proxy_managed_auth(config_text: &str) -> Result<String, AppError> {
+    if config_text.trim().is_empty() {
+        return Err(AppError::localized(
+            "provider.codex.config.missing",
+            "Codex 第三方供应商缺少 config.toml 配置，无法写入代理认证",
+            "Codex third-party provider is missing config.toml, cannot write proxy auth",
+        ));
+    }
+
+    let mut doc = config_text
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
+    doc.as_table_mut().remove("experimental_bearer_token");
+    doc.as_table_mut().remove("requires_openai_auth");
+
+    let provider_id = active_codex_model_provider_id(&doc);
+    if let Some(provider_table) = provider_id.as_deref().and_then(|provider_id| {
+        doc.get_mut("model_providers")
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .and_then(|providers| providers.get_mut(provider_id))
+            .and_then(toml_edit::Item::as_table_like_mut)
+    }) {
+        provider_table.insert(
+            "experimental_bearer_token",
+            toml_edit::value(CODEX_PROXY_AUTH_PLACEHOLDER),
+        );
+        provider_table.insert("requires_openai_auth", toml_edit::value(false));
+    } else {
+        doc["experimental_bearer_token"] = toml_edit::value(CODEX_PROXY_AUTH_PLACEHOLDER);
+        doc["requires_openai_auth"] = toml_edit::value(false);
+    }
+
+    Ok(doc.to_string())
+}
+
 fn set_codex_experimental_bearer_token(config_text: &str, token: &str) -> Result<String, AppError> {
     if config_text.trim().is_empty() {
         return Err(AppError::localized(
@@ -2682,13 +2721,23 @@ fn codex_official_provider_table(base_url: Option<&str>) -> toml_edit::Table {
     table
 }
 
+fn codex_proxy_managed_provider_table(name: &str, base_url: &str) -> toml_edit::Table {
+    let mut table = toml_edit::Table::new();
+    table["name"] = toml_edit::value(name);
+    table["requires_openai_auth"] = toml_edit::value(false);
+    table["wire_api"] = toml_edit::value("responses");
+    table["base_url"] = toml_edit::value(base_url.trim_end_matches('/'));
+    table["experimental_bearer_token"] = toml_edit::value(CODEX_PROXY_AUTH_PLACEHOLDER);
+    table
+}
+
 fn codex_unified_official_provider_table() -> toml_edit::Table {
     codex_official_provider_table(None)
 }
 
 fn codex_aggregate_provider_table(base_url: &str) -> toml_edit::Table {
-    let mut table = codex_official_provider_table(Some(base_url));
-    table["name"] = toml_edit::value(CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME);
+    let mut table =
+        codex_proxy_managed_provider_table(CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME, base_url);
     table["supports_standalone_web_search"] = toml_edit::value(true);
     table
 }
@@ -2733,34 +2782,31 @@ fn remove_owned_codex_realtime_overrides(doc: &mut DocumentMut) {
     }
 }
 
-/// Project a Codex official account card through the local proxy while keeping
-/// authentication owned by Codex itself.
-///
-/// The resulting custom provider explicitly opts into OpenAI authentication,
-/// so Codex forwards its existing ChatGPT login to the local `/responses`
-/// endpoint.  No API key or bearer placeholder is written to `auth.json`.
+/// Project a Codex official account card through the local proxy. Codex sees
+/// only the CC Switch-owned placeholder; the proxy resolves the selected OAuth
+/// account after final provider routing.
 pub fn apply_codex_official_proxy_route(
     config_text: &str,
     proxy_base_url: &str,
     unify_session_history: bool,
 ) -> Result<String, AppError> {
-    apply_codex_native_auth_proxy_route(
+    apply_codex_managed_auth_proxy_route(
         config_text,
         proxy_base_url,
         unify_session_history,
-        codex_official_provider_table(Some(proxy_base_url)),
+        codex_proxy_managed_provider_table("OpenAI", proxy_base_url),
     )
 }
 
-/// Project the aggregate provider through the local proxy while preserving the
-/// built-in ChatGPT login. Its distinct name keeps Codex on local compaction
-/// because aggregate Chat-to-Responses routes do not emit compaction V2 items.
+/// Project the aggregate provider through the local proxy. The aggregate model
+/// route decides whether the placeholder becomes managed OAuth or a third-party
+/// provider credential.
 pub fn apply_codex_aggregate_proxy_route(
     config_text: &str,
     proxy_base_url: &str,
     unify_session_history: bool,
 ) -> Result<String, AppError> {
-    apply_codex_native_auth_proxy_route(
+    apply_codex_managed_auth_proxy_route(
         config_text,
         proxy_base_url,
         unify_session_history,
@@ -2768,7 +2814,7 @@ pub fn apply_codex_aggregate_proxy_route(
     )
 }
 
-fn apply_codex_native_auth_proxy_route(
+fn apply_codex_managed_auth_proxy_route(
     config_text: &str,
     proxy_base_url: &str,
     unify_session_history: bool,
@@ -2837,14 +2883,18 @@ fn is_local_codex_proxy_url(url: &str) -> bool {
         || rest.starts_with("::")
 }
 
-fn table_matches_codex_native_auth_proxy_provider(table: &toml_edit::Table) -> bool {
+fn table_matches_codex_managed_auth_proxy_provider(table: &toml_edit::Table) -> bool {
     matches!(
         table.get("name").and_then(|item| item.as_str()),
         Some("OpenAI") | Some(CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME)
     ) && table
         .get("requires_openai_auth")
         .and_then(|item| item.as_bool())
-        == Some(true)
+        == Some(false)
+        && table
+            .get("experimental_bearer_token")
+            .and_then(|item| item.as_str())
+            == Some(CODEX_PROXY_AUTH_PLACEHOLDER)
         && table.get("wire_api").and_then(|item| item.as_str()) == Some("responses")
         && table
             .get("supports_websockets")
@@ -2856,8 +2906,8 @@ fn table_matches_codex_native_auth_proxy_provider(table: &toml_edit::Table) -> b
             .is_some_and(is_local_codex_proxy_url)
 }
 
-/// Whether a live Codex config is a native-auth route projected by CC Switch.
-/// Recognizes official and aggregate routes under the legacy or unified ids.
+/// Whether a live Codex config is an official route projected by CC Switch.
+/// Recognizes proxy-managed official and aggregate routes under legacy or unified ids.
 pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
     let Ok(doc) = config_text.parse::<DocumentMut>() else {
         return false;
@@ -2873,7 +2923,7 @@ pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
         .and_then(|item| item.as_table())
         .and_then(|providers| providers.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
         .and_then(|item| item.as_table())
-        .is_some_and(table_matches_codex_native_auth_proxy_provider)
+        .is_some_and(table_matches_codex_managed_auth_proxy_provider)
 }
 
 /// Remove only the legacy official takeover route owned by CC Switch. Unified
@@ -3628,7 +3678,13 @@ command = "example"
             provider
                 .get("requires_openai_auth")
                 .and_then(toml::Value::as_bool),
-            Some(true)
+            Some(false)
+        );
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(toml::Value::as_str),
+            Some(CODEX_PROXY_AUTH_PLACEHOLDER)
         );
         assert_eq!(
             provider
@@ -3684,7 +3740,13 @@ supports_websockets = false
             provider
                 .get("requires_openai_auth")
                 .and_then(toml::Value::as_bool),
-            Some(true)
+            Some(false)
+        );
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(toml::Value::as_str),
+            Some(CODEX_PROXY_AUTH_PLACEHOLDER)
         );
         assert!(codex_config_has_official_proxy_route(&output));
     }

@@ -86,7 +86,7 @@ fn is_kimi_for_coding_provider(provider: &Provider) -> bool {
 /// Explicit user values always win; the defaults are only injected when every
 /// configured model targets gpt-5.6.
 fn apply_codex_oauth_claude_context_defaults(settings: &mut Value, provider: &Provider) {
-    if !provider.is_codex_oauth() {
+    if !provider.is_managed_codex_oauth() {
         return;
     }
 
@@ -953,7 +953,7 @@ pub(crate) fn strip_common_config_from_live_settings(
 /// 就是这个值、且存储配置本来没有显式值"时才剥；用户显式存储的值和手改
 /// live 成其他数字的值都保留。
 fn strip_injected_codex_oauth_context_defaults(settings: &mut Value, provider: &Provider) {
-    if !provider.is_codex_oauth() {
+    if !provider.is_managed_codex_oauth() {
         return;
     }
     let provider_env = provider

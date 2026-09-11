@@ -497,13 +497,15 @@ export function ProviderList({
                     : isProviderDefaultModel(provider.id)
                 }
                 isRemovalProtected={
-                  appId === "pi"
-                    ? false
-                    : appId === "hermes"
-                      ? isHermesCurrent
-                      : appId === "openclaw"
-                        ? isProviderDefaultModel(provider.id)
-                        : false
+                  appId === "codex" && provider.id === "codex-official"
+                    ? true
+                    : appId === "pi"
+                      ? false
+                      : appId === "hermes"
+                        ? isHermesCurrent
+                        : appId === "openclaw"
+                          ? isProviderDefaultModel(provider.id)
+                          : false
                 }
                 isStateChangeProtected={
                   appId === "pi" && !isPiAuthoritativeStateReady

@@ -291,6 +291,70 @@ pub(crate) struct ManagedTokenBundle {
     pub last_refresh: String,
 }
 
+struct ImportedLiveAuth {
+    account_id: String,
+    email: Option<String>,
+    id_token: Option<String>,
+    refresh_token: String,
+}
+
+impl ImportedLiveAuth {
+    fn parse(auth: &serde_json::Value) -> Result<Self, CodexOAuthError> {
+        if auth.get("auth_mode").and_then(serde_json::Value::as_str) != Some("chatgpt") {
+            return Err(CodexOAuthError::ParseError(
+                "Codex 当前不是 ChatGPT OAuth 登录，无法接管".to_string(),
+            ));
+        }
+        let tokens = auth
+            .get("tokens")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| {
+                CodexOAuthError::ParseError("Codex OAuth 登录缺少 tokens".to_string())
+            })?;
+        let required = |key: &str| {
+            tokens
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| CodexOAuthError::ParseError(format!("Codex OAuth 登录缺少 {key}")))
+        };
+        let declared_account_id = required("account_id")?;
+        let access_token = required("access_token")?;
+        let refresh_token = required("refresh_token")?;
+        let id_token = tokens
+            .get("id_token")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let identity_tokens = OAuthTokenResponse {
+            access_token: access_token.clone(),
+            refresh_token: Some(refresh_token.clone()),
+            id_token: id_token.clone(),
+            expires_in: None,
+        };
+        let (derived_account_id, email) = extract_identity_from_tokens(&identity_tokens);
+        let derived_account_id = derived_account_id.ok_or_else(|| {
+            CodexOAuthError::ParseError(
+                "无法从 Codex OAuth token 校验 ChatGPT account_id".to_string(),
+            )
+        })?;
+        if derived_account_id != declared_account_id {
+            return Err(CodexOAuthError::ParseError(
+                "Codex OAuth token 的账号与 tokens.account_id 不一致".to_string(),
+            ));
+        }
+        Ok(Self {
+            account_id: derived_account_id,
+            email,
+            id_token,
+            refresh_token,
+        })
+    }
+}
+
 /// Codex OAuth 认证管理器（多账号）
 pub struct CodexOAuthManager {
     accounts: Arc<RwLock<HashMap<String, CodexAccountData>>>,
@@ -312,6 +376,7 @@ pub struct CodexOAuthManager {
     /// 完成。此前由外层 `RwLock<CodexOAuthManager>` 的写锁隐式串行化；去掉外层锁后
     /// 需要它防止并发保存/清除交错，导致已删账号被旧快照复活。
     storage_lock: Arc<Mutex<()>>,
+    oauth_token_url: String,
 }
 
 impl CodexOAuthManager {
@@ -328,12 +393,20 @@ impl CodexOAuthManager {
             login_epoch: AtomicU64::new(0),
             storage_path,
             storage_lock: Arc::new(Mutex::new(())),
+            oauth_token_url: OAUTH_TOKEN_URL.to_string(),
         };
 
         if let Err(e) = manager.load_from_disk_sync() {
             log::warn!("[CodexOAuth] 加载存储失败: {e}");
         }
 
+        manager
+    }
+
+    #[cfg(test)]
+    fn new_with_token_url(data_dir: PathBuf, oauth_token_url: String) -> Self {
+        let mut manager = Self::new(data_dir);
+        manager.oauth_token_url = oauth_token_url;
         manager
     }
 
@@ -529,7 +602,7 @@ impl CodexOAuthManager {
         code_verifier: &str,
     ) -> Result<OAuthTokenResponse, CodexOAuthError> {
         let response = crate::proxy::http_client::get()
-            .post(OAUTH_TOKEN_URL)
+            .post(&self.oauth_token_url)
             .timeout(OAUTH_HTTP_TIMEOUT)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("User-Agent", CODEX_USER_AGENT)
@@ -563,7 +636,7 @@ impl CodexOAuthManager {
         refresh_token: &str,
     ) -> Result<OAuthTokenResponse, CodexOAuthError> {
         let response = crate::proxy::http_client::get()
-            .post(OAUTH_TOKEN_URL)
+            .post(&self.oauth_token_url)
             .timeout(OAUTH_HTTP_TIMEOUT)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("User-Agent", CODEX_USER_AGENT)
@@ -605,6 +678,185 @@ impl CodexOAuthManager {
     }
 
     // ==================== Token 获取（含自动刷新） ====================
+
+    /// Import Codex CLI's current ChatGPT login and rotate its refresh-token
+    /// generation before CC Switch takes ownership.
+    ///
+    /// The live file remains the rollback target until the caller commits the
+    /// proxy projection. If refresh fails, the manager's previous account state
+    /// is restored and the live file is left untouched.
+    pub(crate) async fn import_live_auth_and_rotate(
+        &self,
+        auth: &serde_json::Value,
+    ) -> Result<(GitHubAccount, ManagedTokenBundle), CodexOAuthError> {
+        let parsed = ImportedLiveAuth::parse(auth)?;
+        let _lifecycle = self.lifecycle_lock.read().await;
+        let refresh_lock = self.get_refresh_lock(&parsed.account_id).await;
+        let _refresh_guard = refresh_lock.lock().await;
+
+        let existing = self.accounts.read().await.get(&parsed.account_id).cloned();
+        if existing
+            .as_ref()
+            .is_some_and(|account| account.refresh_token == parsed.refresh_token)
+        {
+            *self.default_account_id.write().await = Some(parsed.account_id.clone());
+            self.save_to_disk().await?;
+            let cached = self
+                .resolve_valid_cached_token_under_lock(&parsed.account_id)
+                .await?;
+            let account = existing.expect("matched account must exist");
+            let last_refresh =
+                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(cached.obtained_at_ms)
+                    .unwrap_or_else(chrono::Utc::now)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+            return Ok((
+                GitHubAccount::from(&account),
+                ManagedTokenBundle {
+                    access_token: cached.token,
+                    id_token: account.id_token,
+                    refresh_token: account.refresh_token,
+                    last_refresh,
+                },
+            ));
+        }
+
+        // Do not persist the imported generation before rotating it. Codex still
+        // owns that generation in auth.json until this request succeeds.
+        let refreshed = self.refresh_with_token(&parsed.refresh_token).await?;
+        let refresh_token = refreshed
+            .refresh_token
+            .clone()
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| {
+                CodexOAuthError::TokenFetchFailed("接管刷新响应缺少新的 refresh_token".to_string())
+            })?;
+        let (refreshed_account_id, refreshed_email) = extract_identity_from_tokens(&refreshed);
+        if refreshed_account_id
+            .as_deref()
+            .is_some_and(|account_id| account_id != parsed.account_id)
+        {
+            return Err(CodexOAuthError::ParseError(
+                "刷新后的 ChatGPT 账号与导入账号不一致".to_string(),
+            ));
+        }
+
+        let now = chrono::Utc::now();
+        let obtained_at_ms = now.timestamp_millis();
+        let id_token = refreshed
+            .id_token
+            .clone()
+            .filter(|token| !token.trim().is_empty())
+            .or(parsed.id_token);
+        let data = CodexAccountData {
+            account_id: parsed.account_id.clone(),
+            email: refreshed_email.or(parsed.email),
+            refresh_token: refresh_token.clone(),
+            authenticated_at: existing
+                .as_ref()
+                .map(|account| account.authenticated_at)
+                .unwrap_or_else(|| now.timestamp()),
+            id_token: id_token.clone(),
+            token_updated_at_ms: obtained_at_ms,
+        };
+        let account = GitHubAccount::from(&data);
+        let cached = CachedAccessToken {
+            token: refreshed.access_token.clone(),
+            expires_at_ms: compute_expires_at_ms(refreshed.expires_in),
+            obtained_at_ms,
+        };
+        {
+            self.accounts
+                .write()
+                .await
+                .insert(parsed.account_id.clone(), data);
+            self.access_tokens
+                .write()
+                .await
+                .insert(parsed.account_id.clone(), cached.clone());
+            *self.default_account_id.write().await = Some(parsed.account_id.clone());
+        }
+        let last_refresh = now.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let bundle = ManagedTokenBundle {
+            access_token: cached.token,
+            id_token,
+            refresh_token,
+            last_refresh,
+        };
+
+        if let Err(error) = self.save_to_disk().await {
+            // The OAuth server has already invalidated the imported generation.
+            // Keep the only usable replacement in Codex live state before
+            // aborting takeover; reverting manager memory would lose ownership.
+            let recovery_auth = crate::codex_config::codex_managed_oauth_auth_value(
+                &parsed.account_id,
+                &bundle.access_token,
+                bundle.id_token.as_deref(),
+                &bundle.refresh_token,
+                &bundle.last_refresh,
+            );
+            let recovered = crate::codex_config::sync_codex_managed_oauth_live_auth_after_refresh(
+                &parsed.account_id,
+                &parsed.refresh_token,
+                &recovery_auth,
+            )
+            .map_err(|recovery_error| {
+                CodexOAuthError::TokenFetchFailed(format!(
+                    "托管 OAuth 持久化失败: {error}; 保存新凭据到 Codex 同时失败: {recovery_error}"
+                ))
+            })?;
+            if !recovered {
+                return Err(CodexOAuthError::TokenFetchFailed(format!(
+                    "托管 OAuth 持久化失败，且 Codex 登录已并发变化，未覆盖当前登录: {error}"
+                )));
+            }
+            return Err(CodexOAuthError::TokenFetchFailed(format!(
+                "托管 OAuth 持久化失败，新凭据已保留在 Codex: {error}"
+            )));
+        }
+
+        let live_auth = crate::codex_config::codex_managed_oauth_auth_value(
+            &parsed.account_id,
+            &bundle.access_token,
+            bundle.id_token.as_deref(),
+            &bundle.refresh_token,
+            &bundle.last_refresh,
+        );
+        let synchronized = crate::codex_config::sync_codex_managed_oauth_live_auth_after_refresh(
+            &parsed.account_id,
+            &parsed.refresh_token,
+            &live_auth,
+        )
+        .map_err(|error| CodexOAuthError::IoError(error.to_string()))?;
+        if !synchronized {
+            return Err(CodexOAuthError::TokenFetchFailed(
+                "Codex OAuth 登录在接管期间发生变化；新托管凭据已保存，但未覆盖 Codex 当前登录，请重试"
+                    .to_string(),
+            ));
+        }
+
+        Ok((account, bundle))
+    }
+
+    pub(crate) async fn resolve_provider_token(
+        &self,
+        provider: &crate::provider::Provider,
+    ) -> Result<(String, String), CodexOAuthError> {
+        let bound_account_id = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
+            .map(|account_id| account_id.trim().to_string())
+            .filter(|account_id| !account_id.is_empty());
+        let account_id = match bound_account_id {
+            Some(account_id) => account_id,
+            None => self
+                .default_account_id()
+                .await
+                .ok_or_else(|| CodexOAuthError::AccountNotFound("default".to_string()))?,
+        };
+        let access_token = self.get_valid_token_for_account(&account_id).await?;
+        Ok((access_token, account_id))
+    }
 
     /// 获取指定账号的有效 access_token（必要时自动刷新）
     pub async fn get_valid_token_for_account(
@@ -1655,6 +1907,182 @@ fn extract_identity_from_tokens(tokens: &OAuthTokenResponse) -> (Option<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    fn synthetic_jwt(account_id: &str, email: Option<&str>) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "chatgpt_account_id": account_id,
+                "email": email,
+            }))
+            .expect("serialize synthetic JWT claims"),
+        );
+        format!("{header}.{payload}.")
+    }
+
+    struct TestHomeGuard(Option<std::ffi::OsString>);
+
+    impl TestHomeGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let previous = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("CC_SWITCH_TEST_HOME", path);
+            Self(previous)
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn imported_live_auth_validates_account_identity() {
+        let access_token = synthetic_jwt("acct-import", Some("import@example.test"));
+        let auth = crate::codex_config::codex_managed_oauth_auth_value(
+            "acct-import",
+            &access_token,
+            None,
+            "import-generation",
+            "2026-01-01T00:00:00Z",
+        );
+
+        let parsed = ImportedLiveAuth::parse(&auth).expect("parse complete live OAuth bundle");
+        assert_eq!(parsed.account_id, "acct-import");
+        assert_eq!(parsed.email.as_deref(), Some("import@example.test"));
+    }
+
+    #[test]
+    fn imported_live_auth_rejects_mismatched_account_identity() {
+        let access_token = synthetic_jwt("acct-token", None);
+        let auth = crate::codex_config::codex_managed_oauth_auth_value(
+            "acct-declared",
+            &access_token,
+            None,
+            "import-generation",
+            "2026-01-01T00:00:00Z",
+        );
+
+        let error = match ImportedLiveAuth::parse(&auth) {
+            Ok(_) => panic!("mismatched account must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("account_id 不一致"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn import_live_auth_rotates_once_and_reuses_the_managed_generation() {
+        use axum::{extract::State, routing::post, Form, Json, Router};
+
+        let temp = tempfile::tempdir().expect("create isolated home");
+        let _home = TestHomeGuard::set(temp.path());
+        let account_id = "acct-import";
+        let imported_access = synthetic_jwt(account_id, Some("import@example.test"));
+        let refreshed_access = synthetic_jwt(account_id, Some("import@example.test"));
+        let refreshed_id = synthetic_jwt(account_id, Some("import@example.test"));
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let count_for_handler = request_count.clone();
+        let refreshed_access_for_handler = refreshed_access.clone();
+        let refreshed_id_for_handler = refreshed_id.clone();
+        let app = Router::new()
+            .route(
+                "/oauth/token",
+                post(
+                    move |State(count): State<Arc<AtomicUsize>>,
+                          Form(form): Form<HashMap<String, String>>| {
+                        let access_token = refreshed_access_for_handler.clone();
+                        let id_token = refreshed_id_for_handler.clone();
+                        async move {
+                            assert_eq!(
+                                form.get("grant_type").map(String::as_str),
+                                Some("refresh_token")
+                            );
+                            assert_eq!(
+                                form.get("refresh_token").map(String::as_str),
+                                Some("import-generation")
+                            );
+                            count.fetch_add(1, AtomicOrdering::SeqCst);
+                            Json(serde_json::json!({
+                                "access_token": access_token,
+                                "refresh_token": "managed-generation",
+                                "id_token": id_token,
+                                "expires_in": 3600
+                            }))
+                        }
+                    },
+                ),
+            )
+            .with_state(count_for_handler);
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock OAuth endpoint");
+        let address = listener.local_addr().expect("read mock OAuth address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve mock OAuth endpoint");
+        });
+
+        let manager = CodexOAuthManager::new_with_token_url(
+            crate::config::get_app_config_dir(),
+            format!("http://{address}/oauth/token"),
+        );
+        let imported_auth = crate::codex_config::codex_managed_oauth_auth_value(
+            account_id,
+            &imported_access,
+            None,
+            "import-generation",
+            "2026-01-01T00:00:00Z",
+        );
+        crate::config::write_json_file(&crate::codex_config::get_codex_auth_path(), &imported_auth)
+            .expect("seed isolated Codex live auth");
+
+        let (account, first_bundle) = manager
+            .import_live_auth_and_rotate(&imported_auth)
+            .await
+            .expect("import and rotate live auth");
+        assert_eq!(account.id, account_id);
+        assert_eq!(request_count.load(AtomicOrdering::SeqCst), 1);
+        assert_ne!(first_bundle.refresh_token, "import-generation");
+        assert_eq!(
+            manager
+                .test_refresh_token_for_account(account_id)
+                .await
+                .as_deref(),
+            Some(first_bundle.refresh_token.as_str())
+        );
+
+        let rotated_live: serde_json::Value =
+            crate::config::read_json_file(&crate::codex_config::get_codex_auth_path())
+                .expect("read rotated isolated live auth");
+        assert_eq!(
+            rotated_live
+                .pointer("/tokens/account_id")
+                .and_then(serde_json::Value::as_str),
+            Some(account_id)
+        );
+        assert_eq!(
+            rotated_live
+                .pointer("/tokens/refresh_token")
+                .and_then(serde_json::Value::as_str),
+            Some(first_bundle.refresh_token.as_str())
+        );
+
+        let (_, second_bundle) = manager
+            .import_live_auth_and_rotate(&rotated_live)
+            .await
+            .expect("reuse already managed generation");
+        assert_eq!(request_count.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(second_bundle.refresh_token, first_bundle.refresh_token);
+
+        server.abort();
+    }
 
     #[test]
     fn test_parse_interval_number() {

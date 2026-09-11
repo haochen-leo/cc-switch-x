@@ -642,8 +642,9 @@ wire_api = "responses"
     let auth_after_takeover: serde_json::Value =
         read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth after takeover");
     assert_eq!(
-        auth_after_takeover, oauth_auth,
-        "enabling takeover must not rewrite Codex OAuth auth.json"
+        auth_after_takeover,
+        json!({ "OPENAI_API_KEY": "PROXY_MANAGED" }),
+        "enabling takeover must expose only the proxy-managed placeholder to Codex"
     );
 
     let config_after_takeover =
@@ -1805,8 +1806,9 @@ wire_api = "responses"
     let auth_after: serde_json::Value =
         read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth.json");
     assert_eq!(
-        auth_after, oauth_auth,
-        "provider switch during takeover ownership must not rewrite Codex OAuth auth"
+        auth_after,
+        json!({ "OPENAI_API_KEY": "PROXY_MANAGED" }),
+        "provider switch during takeover ownership must repair auth.json to the proxy placeholder"
     );
 
     let live_config =
@@ -1836,7 +1838,7 @@ wire_api = "responses"
         serde_json::from_str(&backup.original_config).expect("parse backup");
     assert_eq!(
         backup_value.get("auth"),
-        Some(&auth_after),
+        Some(&oauth_auth),
         "restore backup should preserve the official OAuth auth"
     );
     let backup_config = backup_value

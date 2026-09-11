@@ -665,7 +665,7 @@ fn migrate_codex_provider_templates_to_custom(
     for (_, provider) in providers {
         if provider.category.as_deref() == Some("official")
             || is_official_seed_id(&provider.id)
-            || provider.is_codex_oauth()
+            || provider.is_managed_codex_oauth()
         {
             continue;
         }
@@ -710,7 +710,7 @@ fn collect_source_model_provider_ids(db: &Database) -> Result<BTreeSet<String>, 
     for provider in providers.values() {
         if provider.category.as_deref() == Some("official")
             || is_official_seed_id(&provider.id)
-            || provider.is_codex_oauth()
+            || provider.is_managed_codex_oauth()
         {
             continue;
         }

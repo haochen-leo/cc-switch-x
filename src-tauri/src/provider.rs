@@ -71,6 +71,21 @@ impl Provider {
         self.provider_type() == Some("codex_oauth")
     }
 
+    /// Whether this provider selects an OAuth account owned by CC Switch.
+    ///
+    /// Early Codex account cards only persisted `authBinding`; newer cards also
+    /// carry `providerType = "codex_oauth"`. Treat either representation as the
+    /// same managed identity, while requiring a concrete account binding for the
+    /// generic form so an unbound official card can still mean "follow local".
+    pub fn is_managed_codex_oauth(&self) -> bool {
+        self.is_codex_oauth()
+            || self
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
+                .is_some_and(|account_id| !account_id.trim().is_empty())
+    }
+
     pub fn is_xai_oauth(&self) -> bool {
         self.provider_type() == Some("xai_oauth")
     }
@@ -90,7 +105,7 @@ impl Provider {
 
     pub fn uses_managed_account_auth(&self) -> bool {
         self.is_github_copilot()
-            || self.is_codex_oauth()
+            || self.is_managed_codex_oauth()
             || self.is_xai_oauth()
             || self.claude_base_url_contains("chatgpt.com/backend-api/codex")
     }
@@ -1113,9 +1128,9 @@ pub struct OpenCodeModelLimit {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClaudeModelConfig, ClaudeModelRouting, CodexModelConfig, GeminiModelConfig,
-        LocalProxyRequestOverrides, OpenCodeProviderConfig, Provider, ProviderManager,
-        ProviderMeta, UniversalProvider,
+        AuthBinding, AuthBindingSource, ClaudeModelConfig, ClaudeModelRouting, CodexModelConfig,
+        GeminiModelConfig, LocalProxyRequestOverrides, OpenCodeProviderConfig, Provider,
+        ProviderManager, ProviderMeta, UniversalProvider,
     };
     use crate::proxy::model_mapper::ModelMapping;
     use serde_json::json;
@@ -1321,7 +1336,26 @@ mod tests {
             ..Default::default()
         });
         assert!(codex.is_codex_oauth());
+        assert!(codex.is_managed_codex_oauth());
         assert!(codex.uses_managed_account_auth());
+
+        let mut historical_codex = Provider::with_id(
+            "historical-codex".to_string(),
+            "Historical Codex".to_string(),
+            json!({ "auth": {}, "config": "" }),
+            None,
+        );
+        historical_codex.meta = Some(ProviderMeta {
+            auth_binding: Some(AuthBinding {
+                source: AuthBindingSource::ManagedAccount,
+                auth_provider: Some("codex_oauth".to_string()),
+                account_id: Some("account-1".to_string()),
+            }),
+            ..Default::default()
+        });
+        assert!(!historical_codex.is_codex_oauth());
+        assert!(historical_codex.is_managed_codex_oauth());
+        assert!(historical_codex.uses_managed_account_auth());
 
         let codex_endpoint = Provider::with_id(
             "codex-endpoint".to_string(),

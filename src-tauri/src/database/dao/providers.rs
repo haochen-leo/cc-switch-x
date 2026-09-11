@@ -1,4 +1,5 @@
-use crate::database::{lock_conn, Database};
+use crate::app_config::AppType;
+use crate::database::{lock_conn, Database, CODEX_OFFICIAL_PROVIDER_ID};
 use crate::error::AppError;
 use crate::provider::{Provider, ProviderMeta};
 use indexmap::IndexMap;
@@ -277,6 +278,29 @@ impl Database {
         Ok(())
     }
 
+    pub(crate) fn update_provider_meta(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+        meta: &ProviderMeta,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        let meta = serde_json::to_string(meta)
+            .map_err(|e| AppError::Database(format!("Failed to serialize provider meta: {e}")))?;
+        let updated = conn
+            .execute(
+                "UPDATE providers SET meta = ?1 WHERE id = ?2 AND app_type = ?3",
+                params![meta, provider_id, app_type],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        if updated == 0 {
+            return Err(AppError::Database(format!(
+                "Provider not found: {provider_id} ({app_type})"
+            )));
+        }
+        Ok(())
+    }
+
     /// Replace a provider row under a new ID without exposing an intermediate
     /// duplicate or missing row. Existing endpoint and health references move
     /// with the provider, while its current-state bit is preserved.
@@ -377,6 +401,13 @@ impl Database {
     }
 
     pub fn delete_provider(&self, app_type: &str, id: &str) -> Result<(), AppError> {
+        if app_type == crate::app_config::AppType::Codex.as_str()
+            && id == crate::database::CODEX_OFFICIAL_PROVIDER_ID
+        {
+            return Err(AppError::Message(
+                "OpenAI Official 是 Codex 聚合路由的固定入口，不能删除".to_string(),
+            ));
+        }
         let conn = lock_conn!(self.conn);
         conn.execute(
             "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
@@ -685,6 +716,55 @@ impl Database {
         Ok(max.map(|v| (v + 1) as usize).unwrap_or(0))
     }
 
+    fn migrate_legacy_codex_official_binding(&self) -> Result<bool, AppError> {
+        let Some(mut fixed) =
+            self.get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())?
+        else {
+            return Ok(false);
+        };
+        if fixed.is_managed_codex_oauth() {
+            return Ok(false);
+        }
+
+        let providers = self.get_all_providers(AppType::Codex.as_str())?;
+        let candidates = providers
+            .values()
+            .filter(|provider| provider.id != CODEX_OFFICIAL_PROVIDER_ID)
+            .filter(|provider| provider.category.as_deref() == Some("official"))
+            .filter(|provider| provider.is_managed_codex_oauth())
+            .filter(|provider| crate::proxy::providers::is_codex_official_provider(provider))
+            .collect::<Vec<_>>();
+        let [legacy] = candidates.as_slice() else {
+            if candidates.len() > 1 {
+                log::warn!(
+                    "发现多个旧版 Codex 托管官方 Provider，无法安全迁移到固定入口: {}",
+                    candidates
+                        .iter()
+                        .map(|provider| provider.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            return Ok(false);
+        };
+        let binding = legacy
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.auth_binding.clone())
+            .ok_or_else(|| {
+                AppError::Database("旧版 Codex 托管官方 Provider 缺少 authBinding".to_string())
+            })?;
+        let meta = fixed.meta.get_or_insert_with(Default::default);
+        meta.auth_binding = Some(binding);
+        self.save_provider(AppType::Codex.as_str(), &fixed)?;
+        self.set_setting("codex_aggregate_models_cache_hash", "")?;
+        log::info!(
+            "已将旧版 Codex 托管账号绑定迁移到固定 OpenAI Official 入口（来源 Provider: {}）",
+            legacy.id
+        );
+        Ok(true)
+    }
+
     /// 启动时调用：补齐缺失的官方预设供应商（Claude / Codex / Gemini）。
     ///
     /// 使用 settings flag `official_providers_seeded` 保证每个数据库只执行一次：
@@ -697,14 +777,18 @@ impl Database {
     pub fn init_default_official_providers(&self) -> Result<usize, AppError> {
         use crate::database::dao::providers_seed::OFFICIAL_SEEDS;
 
+        let mut inserted = usize::from(
+            self.ensure_official_seed_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex)?,
+        );
+        self.migrate_legacy_codex_official_binding()?;
+
         if self
             .get_bool_flag("official_providers_seeded")
             .unwrap_or(false)
         {
-            return Ok(0);
+            return Ok(inserted);
         }
 
-        let mut inserted = 0_usize;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         for seed in OFFICIAL_SEEDS {
@@ -813,6 +897,27 @@ mod ensure_official_seed_tests {
         Database, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, CODEX_OFFICIAL_PROVIDER_ID,
         GROKBUILD_OFFICIAL_PROVIDER_ID,
     };
+    use crate::provider::{AuthBinding, AuthBindingSource, Provider, ProviderMeta};
+    use serde_json::json;
+
+    fn legacy_managed_codex_official(id: &str, account_id: &str) -> Provider {
+        let mut provider = Provider::with_id(
+            id.to_string(),
+            "Legacy OpenAI Official".to_string(),
+            json!({ "auth": {}, "config": "" }),
+            None,
+        );
+        provider.category = Some("official".to_string());
+        provider.meta = Some(ProviderMeta {
+            auth_binding: Some(AuthBinding {
+                source: AuthBindingSource::ManagedAccount,
+                auth_provider: Some("codex_oauth".to_string()),
+                account_id: Some(account_id.to_string()),
+            }),
+            ..Default::default()
+        });
+        provider
+    }
 
     #[test]
     fn ensure_inserts_when_missing() {
@@ -872,22 +977,69 @@ mod ensure_official_seed_tests {
     }
 
     #[test]
-    fn ensure_recreates_codex_official_seed_after_deletion() {
+    fn codex_official_seed_cannot_be_deleted() {
         let db = Database::memory().expect("memory db");
         db.init_default_official_providers().expect("seed");
-        db.delete_provider(AppType::Codex.as_str(), CODEX_OFFICIAL_PROVIDER_ID)
-            .expect("delete Codex official");
-
-        let inserted = db
-            .ensure_official_seed_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex)
-            .expect("ensure Codex official");
-        assert!(inserted);
+        let error = db
+            .delete_provider(AppType::Codex.as_str(), CODEX_OFFICIAL_PROVIDER_ID)
+            .expect_err("Codex official deletion must be rejected");
+        assert!(error.to_string().contains("不能删除"));
         let provider = db
             .get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())
             .expect("query")
-            .expect("Codex official restored");
+            .expect("Codex official remains present");
         assert_eq!(provider.category.as_deref(), Some("official"));
-        assert_eq!(provider.settings_config["auth"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn startup_migrates_single_legacy_codex_official_binding() {
+        let db = Database::memory().expect("memory db");
+        db.save_provider(
+            AppType::Codex.as_str(),
+            &legacy_managed_codex_official("legacy-uuid", "account-1"),
+        )
+        .expect("save legacy provider");
+
+        db.init_default_official_providers()
+            .expect("initialize seeds");
+
+        let fixed = db
+            .get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())
+            .expect("query fixed")
+            .expect("fixed provider exists");
+        assert_eq!(
+            fixed
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
+                .as_deref(),
+            Some("account-1")
+        );
+        assert!(db
+            .get_provider_by_id("legacy-uuid", AppType::Codex.as_str())
+            .expect("query legacy")
+            .is_some());
+    }
+
+    #[test]
+    fn startup_does_not_guess_between_multiple_legacy_codex_official_bindings() {
+        let db = Database::memory().expect("memory db");
+        for (id, account_id) in [("legacy-a", "account-a"), ("legacy-b", "account-b")] {
+            db.save_provider(
+                AppType::Codex.as_str(),
+                &legacy_managed_codex_official(id, account_id),
+            )
+            .expect("save legacy provider");
+        }
+
+        db.init_default_official_providers()
+            .expect("initialize seeds");
+
+        let fixed = db
+            .get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())
+            .expect("query fixed")
+            .expect("fixed provider exists");
+        assert!(!fixed.is_managed_codex_oauth());
     }
 
     #[test]

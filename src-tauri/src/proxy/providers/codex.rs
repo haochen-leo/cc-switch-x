@@ -437,10 +437,10 @@ fn has_explicit_codex_third_party_upstream(provider: &Provider) -> bool {
             .is_some_and(|provider_id| !provider_id.eq_ignore_ascii_case("openai"))
 }
 
-/// Codex Official ChatGPT cards receive authentication from the calling Codex
-/// client (`requires_openai_auth = true`). Unbound cards with a stored API key
-/// stay on the direct OpenAI API path instead of being sent to the ChatGPT
-/// backend. The fixed legacy card keeps its existing behavior.
+/// Identify Codex Official ChatGPT routes independently of their credential
+/// projection. During takeover, CC Switch resolves the selected managed OAuth
+/// account; direct mode may project the complete OAuth bundle back to Codex.
+/// Cards with an explicit third-party upstream or stored API key are excluded.
 pub fn is_codex_official_provider(provider: &Provider) -> bool {
     let is_fixed_official_id = provider.id == crate::database::CODEX_OFFICIAL_PROVIDER_ID;
     if is_fixed_official_id && provider.category.as_deref() == Some("official") {
@@ -1089,6 +1089,16 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     fn extract_auth(&self, provider: &Provider) -> Option<AuthInfo> {
+        // Official ChatGPT routes are always resolved by CC Switch while the
+        // local proxy owns Codex. A bound card selects its account explicitly;
+        // an unbound fixed card follows the manager's default imported account.
+        if is_codex_official_provider(provider) {
+            return Some(AuthInfo::new(
+                "codex_oauth_placeholder".to_string(),
+                AuthStrategy::CodexOAuth,
+            ));
+        }
+
         // xAI OAuth (Grok subscription): placeholder credentials only; the real
         // access_token is resolved per-request by the forwarder via XaiOAuthManager.
         if provider.is_xai_oauth() {
@@ -1311,7 +1321,10 @@ context_window = 500000
                 .expect("official base url"),
             "https://chatgpt.com/backend-api/codex"
         );
-        assert!(adapter.extract_auth(&provider).is_none());
+        let auth = adapter
+            .extract_auth(&provider)
+            .expect("official route should resolve managed OAuth lazily");
+        assert_eq!(auth.strategy, AuthStrategy::CodexOAuth);
         assert_eq!(
             adapter.build_url(
                 "https://chatgpt.com/backend-api/codex",

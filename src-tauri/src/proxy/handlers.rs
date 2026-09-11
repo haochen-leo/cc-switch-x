@@ -47,6 +47,7 @@ use super::{
     ProxyError,
 };
 use crate::app_config::AppType;
+use crate::commands::CodexOAuthState;
 use crate::database::PRICING_SOURCE_REQUEST;
 use axum::{
     extract::State,
@@ -58,9 +59,9 @@ use bytes::Bytes;
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use tauri::Manager;
 
 const CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
-const CODEX_PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
 const CODEX_OFFICIAL_RAW_RELAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 // ============================================================================
@@ -140,9 +141,11 @@ impl CodexOfficialRawRelayBase {
 }
 
 pub async fn handle_codex_image_generations(
+    State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
     handle_codex_official_raw_relay(
+        &state,
         request,
         CodexOfficialRawRelayBase::CodexBackend,
         "images/generations",
@@ -151,9 +154,11 @@ pub async fn handle_codex_image_generations(
 }
 
 pub async fn handle_codex_image_edits(
+    State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
     handle_codex_official_raw_relay(
+        &state,
         request,
         CodexOfficialRawRelayBase::CodexBackend,
         "images/edits",
@@ -162,9 +167,11 @@ pub async fn handle_codex_image_edits(
 }
 
 pub async fn handle_codex_memories_trace_summarize(
+    State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
     handle_codex_official_raw_relay(
+        &state,
         request,
         CodexOfficialRawRelayBase::CodexBackend,
         "memories/trace_summarize",
@@ -173,9 +180,11 @@ pub async fn handle_codex_memories_trace_summarize(
 }
 
 pub async fn handle_codex_realtime_calls(
+    State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
     handle_codex_official_raw_relay(
+        &state,
         request,
         CodexOfficialRawRelayBase::CodexBackend,
         "realtime/calls",
@@ -184,10 +193,12 @@ pub async fn handle_codex_realtime_calls(
 }
 
 pub async fn handle_codex_files(
+    State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
     let upstream_path = codex_files_upstream_path(request.uri())?;
     handle_codex_official_raw_relay(
+        &state,
         request,
         CodexOfficialRawRelayBase::ChatGptBackend,
         &upstream_path,
@@ -210,6 +221,7 @@ pub async fn handle_codex_realtime_websocket_unsupported(
 }
 
 async fn handle_codex_official_raw_relay(
+    state: &ProxyState,
     request: axum::extract::Request,
     base: CodexOfficialRawRelayBase,
     upstream_path: &str,
@@ -220,7 +232,7 @@ async fn handle_codex_official_raw_relay(
     let incoming_headers = parts.headers;
     let extensions = parts.extensions;
 
-    validate_codex_raw_relay_authorization(&incoming_headers)?;
+    let (access_token, account_id) = resolve_codex_raw_relay_auth(state).await?;
 
     let body_bytes = req_body
         .collect()
@@ -234,7 +246,8 @@ async fn handle_codex_official_raw_relay(
             "Invalid Codex upstream URL for {upstream_path}: {e}"
         ))
     })?;
-    let upstream_headers = codex_raw_relay_headers(&incoming_headers, &upstream_uri)?;
+    let upstream_headers =
+        codex_raw_relay_headers(&incoming_headers, &upstream_uri, &access_token, &account_id)?;
     let response = send_codex_raw_relay_request(
         method,
         upstream_url,
@@ -247,20 +260,42 @@ async fn handle_codex_official_raw_relay(
     build_codex_raw_relay_response(response)
 }
 
-fn validate_codex_raw_relay_authorization(headers: &HeaderMap) -> Result<(), ProxyError> {
-    let authorization = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim);
-    match authorization {
-        None | Some("") => Err(ProxyError::AuthError(
-            "Codex 官方登录不可用，请先在 Codex 中完成 ChatGPT 登录".to_string(),
-        )),
-        Some(value) if value.contains(CODEX_PROXY_AUTH_PLACEHOLDER) => Err(ProxyError::AuthError(
-            "检测到 Codex 代理占位凭证，请重启 Codex 或新建会话以加载官方登录配置".to_string(),
-        )),
-        Some(_) => Ok(()),
-    }
+async fn resolve_codex_raw_relay_auth(state: &ProxyState) -> Result<(String, String), ProxyError> {
+    let current_id = crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)
+        .map_err(|error| ProxyError::ConfigError(format!("读取 Codex 当前供应商失败: {error}")))?
+        .ok_or_else(|| ProxyError::ConfigError("Codex 当前供应商不存在".to_string()))?;
+    let current = state
+        .db
+        .get_provider_by_id(&current_id, AppType::Codex.as_str())
+        .map_err(|error| ProxyError::ConfigError(format!("读取 Codex 当前供应商失败: {error}")))?
+        .ok_or_else(|| ProxyError::ConfigError(format!("Codex 供应商不存在: {current_id}")))?;
+    let official = if crate::proxy::providers::is_codex_official_provider(&current) {
+        current
+    } else if current.is_codex_aggregate() {
+        state
+            .db
+            .get_provider_by_id(
+                crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                AppType::Codex.as_str(),
+            )
+            .map_err(|error| {
+                ProxyError::ConfigError(format!("读取 OpenAI Official 供应商失败: {error}"))
+            })?
+            .ok_or_else(|| ProxyError::ConfigError("缺少 OpenAI Official 供应商".to_string()))?
+    } else {
+        return Err(ProxyError::InvalidRequest(
+            "当前 Codex 供应商不是官方或聚合入口，不能调用 ChatGPT 官方辅助端点".to_string(),
+        ));
+    };
+    let app_handle = state.app_handle.as_ref().ok_or_else(|| {
+        ProxyError::AuthError("Codex OAuth 认证不可用（无 AppHandle）".to_string())
+    })?;
+    let oauth = app_handle.state::<CodexOAuthState>();
+    oauth
+        .0
+        .resolve_provider_token(&official)
+        .await
+        .map_err(|error| ProxyError::AuthError(format!("Codex OAuth 认证失败: {error}")))
 }
 
 fn codex_raw_relay_upstream_url(
@@ -283,6 +318,8 @@ fn codex_raw_relay_upstream_url(
 fn codex_raw_relay_headers(
     headers: &HeaderMap,
     upstream_uri: &Uri,
+    access_token: &str,
+    account_id: &str,
 ) -> Result<HeaderMap, ProxyError> {
     let upstream_host = upstream_uri
         .authority()
@@ -301,7 +338,10 @@ fn codex_raw_relay_headers(
             saw_host = true;
             continue;
         }
-        if is_codex_raw_relay_blocked_request_header(name, &connection_listed_headers) {
+        if is_codex_raw_relay_blocked_request_header(name, &connection_listed_headers)
+            || name == axum::http::header::AUTHORIZATION
+            || name.as_str().eq_ignore_ascii_case("chatgpt-account-id")
+        {
             continue;
         }
         upstream_headers.append(name.clone(), value.clone());
@@ -310,6 +350,12 @@ fn codex_raw_relay_headers(
     if !saw_host {
         upstream_headers.insert(axum::http::header::HOST, upstream_host);
     }
+    let authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))
+        .map_err(|error| ProxyError::AuthError(format!("无效的 Codex OAuth token: {error}")))?;
+    let account_id = HeaderValue::from_str(account_id)
+        .map_err(|error| ProxyError::AuthError(format!("无效的 ChatGPT account_id: {error}")))?;
+    upstream_headers.insert(axum::http::header::AUTHORIZATION, authorization);
+    upstream_headers.insert(HeaderName::from_static("chatgpt-account-id"), account_id);
 
     Ok(upstream_headers)
 }
@@ -3334,7 +3380,7 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, chat_sse_to_response_value, classify_body_for_diagnostics,
-        codex_proxy_error_json, compact_fallback_error_is_retryable,
+        codex_proxy_error_json, codex_raw_relay_headers, compact_fallback_error_is_retryable,
         responses_sse_stream_to_anthropic_message, responses_sse_to_response_value,
         should_use_claude_transform_streaming, transform, upstream_body_parse_error,
     };
@@ -3344,6 +3390,56 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    #[test]
+    fn codex_raw_relay_replaces_stale_auth_and_account_headers() {
+        use axum::http::{header, HeaderMap, HeaderValue, Uri};
+
+        let mut incoming = HeaderMap::new();
+        incoming.insert(header::HOST, HeaderValue::from_static("local.proxy"));
+        incoming.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer PROXY_MANAGED"),
+        );
+        incoming.insert("chatgpt-account-id", HeaderValue::from_static("acct-stale"));
+        incoming.insert(header::CONNECTION, HeaderValue::from_static("x-hop-only"));
+        incoming.insert("x-hop-only", HeaderValue::from_static("drop-me"));
+        incoming.insert("x-business", HeaderValue::from_static("keep-me"));
+        let upstream: Uri = "https://chatgpt.com/backend-api/codex/images/generations"
+            .parse()
+            .expect("parse upstream URI");
+
+        let outgoing =
+            codex_raw_relay_headers(&incoming, &upstream, "manager-access", "acct-managed")
+                .expect("build raw relay headers");
+
+        assert_eq!(
+            outgoing
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer manager-access")
+        );
+        assert_eq!(
+            outgoing
+                .get("chatgpt-account-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("acct-managed")
+        );
+        assert_eq!(
+            outgoing
+                .get(header::HOST)
+                .and_then(|value| value.to_str().ok()),
+            Some("chatgpt.com")
+        );
+        assert!(outgoing.get(header::CONNECTION).is_none());
+        assert!(outgoing.get("x-hop-only").is_none());
+        assert_eq!(
+            outgoing
+                .get("x-business")
+                .and_then(|value| value.to_str().ok()),
+            Some("keep-me")
+        );
+    }
 
     #[test]
     fn body_looks_like_sse_detects_unlabeled_sse_prefixes() {

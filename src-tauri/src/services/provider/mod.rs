@@ -5003,6 +5003,11 @@ impl ProviderService {
     /// 同时检查本地 settings 和数据库的当前供应商，防止删除任一端正在使用的供应商。
     /// 对于累加模式应用（OpenCode, OpenClaw），可以随时删除任意供应商，同时从 live 配置中移除。
     pub fn delete(state: &AppState, app_type: AppType, id: &str) -> Result<(), AppError> {
+        if matches!(app_type, AppType::Codex) && id == crate::database::CODEX_OFFICIAL_PROVIDER_ID {
+            return Err(AppError::Message(
+                "OpenAI Official 是 Codex 聚合路由的固定入口，不能删除".to_string(),
+            ));
+        }
         if app_type == AppType::Pi {
             return pi::delete(state, id);
         }
@@ -5201,7 +5206,7 @@ impl ProviderService {
         let should_hot_switch = is_app_taken_over || live_taken_over;
 
         // Block switching to unsupported official providers when proxy takeover
-        // is active. Codex official account cards use native auth passthrough.
+        // is active. Codex official account cards use proxy-managed OAuth injection.
         if should_hot_switch
             && _provider.category.as_deref() == Some("official")
             && !official_provider_supports_proxy_takeover(&app_type, _provider)

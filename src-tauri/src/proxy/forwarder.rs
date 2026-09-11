@@ -43,46 +43,6 @@ use tokio::sync::RwLock;
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
 const DEFAULT_UPSTREAM_RESPONSE_TIMEOUT_SECS: u64 = 60;
 
-fn validate_codex_official_authorization(
-    headers: &http::HeaderMap,
-    provider: &Provider,
-) -> Result<(), ProxyError> {
-    let authorization = headers
-        .get(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim);
-    match authorization {
-        None | Some("") => Err(ProxyError::AuthError(
-            "Codex 官方登录不可用，请先在 Codex 中完成 ChatGPT 登录".to_string(),
-        )),
-        Some(value) if value.contains(PROXY_AUTH_PLACEHOLDER) => Err(ProxyError::AuthError(
-            "已切换到 OpenAI 官方供应商，请重启 Codex 或新建会话以加载官方登录配置".to_string(),
-        )),
-        Some(_) => {
-            let expected_account_id = provider
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
-                .map(|account_id| account_id.trim().to_string())
-                .filter(|account_id| !account_id.is_empty());
-            if let Some(expected_account_id) = expected_account_id {
-                let request_account_id = headers
-                    .get("chatgpt-account-id")
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::trim)
-                    .filter(|account_id| !account_id.is_empty());
-                if request_account_id != Some(expected_account_id.as_str()) {
-                    return Err(ProxyError::AuthError(
-                        "当前 Codex 会话未加载所选 ChatGPT 账号，请重启 Codex 或新建会话后重试"
-                            .to_string(),
-                    ));
-                }
-            }
-            Ok(())
-        }
-    }
-}
-
 pub struct ForwardResult {
     pub response: ProxyResponse,
     pub provider: Provider,
@@ -1324,7 +1284,7 @@ impl RequestForwarder {
             .as_ref()
             .and_then(|meta| meta.is_full_url)
             .unwrap_or(false)
-            && !provider.is_codex_oauth()
+            && !provider.is_managed_codex_oauth()
             && !provider.is_xai_oauth();
 
         // GitHub Copilot API 使用 /chat/completions（无 /v1 前缀）
@@ -1342,12 +1302,8 @@ impl RequestForwarder {
             && super::providers::should_convert_codex_responses_to_chat(provider, endpoint);
         let codex_responses_to_anthropic = matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && super::providers::should_convert_codex_responses_to_anthropic(provider, endpoint);
-        let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
+        let codex_official_contract = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
-
-        if codex_official_auth_passthrough {
-            validate_codex_official_authorization(headers, provider)?;
-        }
 
         let mapped_body =
             self.map_request_body_for_provider(app_type, provider, body, is_routed_target)?;
@@ -1364,7 +1320,7 @@ impl RequestForwarder {
 
         if should_normalize_codex_user_role_context_messages(
             app_type,
-            codex_official_auth_passthrough,
+            codex_official_contract,
             &self.optimizer_config,
         ) {
             let normalized =
@@ -1872,32 +1828,11 @@ impl RequestForwarder {
                     let codex_state = app_handle.state::<CodexOAuthState>();
                     let codex_auth: &CodexOAuthManager = codex_state.0.as_ref();
 
-                    // 从 provider.meta 获取关联的 ChatGPT 账号 ID
-                    let account_id = provider
-                        .meta
-                        .as_ref()
-                        .and_then(|m| m.managed_account_id_for("codex_oauth"));
-
-                    let token_result = match &account_id {
-                        Some(id) => {
-                            log::debug!("[CodexOAuth] 使用指定账号 {id} 获取 token");
-                            codex_auth.get_valid_token_for_account(id).await
-                        }
-                        None => {
-                            log::debug!("[CodexOAuth] 使用默认账号获取 token");
-                            codex_auth.get_valid_token().await
-                        }
-                    };
-
-                    match token_result {
-                        Ok(token) => {
+                    match codex_auth.resolve_provider_token(provider).await {
+                        Ok((token, account_id)) => {
                             auth = AuthInfo::new(token, AuthStrategy::CodexOAuth);
                             should_send_codex_oauth_session_headers = true;
-                            // 解析使用的 account_id（用于注入 ChatGPT-Account-Id header）
-                            codex_oauth_account_id = match account_id {
-                                Some(id) => Some(id),
-                                None => codex_auth.default_account_id().await,
-                            };
+                            codex_oauth_account_id = Some(account_id);
                             log::debug!(
                                 "[CodexOAuth] 成功获取 access_token (account={})",
                                 codex_oauth_account_id.as_deref().unwrap_or("default")
@@ -2158,21 +2093,10 @@ impl RequestForwarder {
             }
 
             // --- 认证类 — 用 adapter 提供的认证头替换（在原始位置） ---
-            if key_str.eq_ignore_ascii_case("authorization")
-                || key_str.eq_ignore_ascii_case("x-api-key")
-                || key_str.eq_ignore_ascii_case("x-goog-api-key")
-            {
-                // Codex official account cards deliberately keep credentials
-                // out of provider storage. `requires_openai_auth = true` makes
-                // Codex send the active ChatGPT authorization, which must reach
-                // the official upstream unchanged. Other credential headers
-                // are still discarded.
-                if codex_official_auth_passthrough && key_str.eq_ignore_ascii_case("authorization")
-                {
-                    saw_auth = true;
-                    ordered_headers.append(key.clone(), value.clone());
-                    continue;
-                }
+            if is_provider_auth_header(key_str, &auth_headers) {
+                // Authentication always comes from the resolved provider. For
+                // official Codex routes this replaces the local PROXY_MANAGED
+                // placeholder (or a stale client token) with manager-owned OAuth.
                 if !saw_auth {
                     saw_auth = true;
                     for (ah_name, ah_value) in &auth_headers {
@@ -2342,7 +2266,7 @@ impl RequestForwarder {
         // 强行附带 JSON body 会让某些上游（如 Google Gemini 的 models.list）拒绝请求。
         let body_bytes = if matches!(method, &http::Method::GET | &http::Method::HEAD) {
             Vec::new()
-        } else if codex_third_party_needs_image_budget(app_type, codex_official_auth_passthrough) {
+        } else if codex_third_party_needs_image_budget(app_type, codex_official_contract) {
             let result = super::image_budget::serialize_with_image_budget(
                 &mut filtered_body,
                 super::image_budget::CODEX_THIRD_PARTY_IMAGE_BUDGET_BYTES,
@@ -3343,11 +3267,11 @@ fn codex_anthropic_cache_config(config: &OptimizerConfig) -> OptimizerConfig {
 
 fn should_normalize_codex_user_role_context_messages(
     app_type: &AppType,
-    codex_official_auth_passthrough: bool,
+    codex_official_contract: bool,
     optimizer_config: &OptimizerConfig,
 ) -> bool {
     matches!(app_type, AppType::Codex | AppType::GrokBuild)
-        && !codex_official_auth_passthrough
+        && !codex_official_contract
         && optimizer_config.codex_user_role_context_normalization
 }
 
@@ -3615,6 +3539,18 @@ fn rewrite_codex_alpha_search_full_url(
     Ok(rewritten)
 }
 
+fn is_provider_auth_header(
+    header_name: &str,
+    auth_headers: &[(http::HeaderName, http::HeaderValue)],
+) -> bool {
+    header_name.eq_ignore_ascii_case("authorization")
+        || header_name.eq_ignore_ascii_case("x-api-key")
+        || header_name.eq_ignore_ascii_case("x-goog-api-key")
+        || auth_headers
+            .iter()
+            .any(|(name, _)| name.as_str().eq_ignore_ascii_case(header_name))
+}
+
 fn build_codex_oauth_session_headers(
     session_id: &str,
 ) -> Vec<(http::HeaderName, http::HeaderValue)> {
@@ -3685,7 +3621,7 @@ fn should_preserve_exact_header_case(
         return false;
     }
 
-    if is_copilot || provider.is_codex_oauth() || provider.is_xai_oauth() {
+    if is_copilot || provider.is_managed_codex_oauth() || provider.is_xai_oauth() {
         return false;
     }
 
@@ -3896,11 +3832,8 @@ fn prepare_upstream_request_body(request_body: Value) -> Value {
     canonicalize_value(filter_private_params_with_whitelist(request_body, &[]))
 }
 
-fn codex_third_party_needs_image_budget(
-    app_type: &AppType,
-    codex_official_auth_passthrough: bool,
-) -> bool {
-    matches!(app_type, AppType::Codex | AppType::GrokBuild) && !codex_official_auth_passthrough
+fn codex_third_party_needs_image_budget(app_type: &AppType, codex_official_contract: bool) -> bool {
+    matches!(app_type, AppType::Codex | AppType::GrokBuild) && !codex_official_contract
 }
 
 fn should_transform_codex_native_responses(
@@ -4572,6 +4505,24 @@ mod tests {
     }
 
     #[test]
+    fn stale_codex_account_header_is_replaced_with_provider_auth_headers() {
+        let auth_headers = vec![
+            (
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer managed-access"),
+            ),
+            (
+                http::HeaderName::from_static("chatgpt-account-id"),
+                HeaderValue::from_static("acct-managed"),
+            ),
+        ];
+
+        assert!(is_provider_auth_header("authorization", &auth_headers));
+        assert!(is_provider_auth_header("chatgpt-account-id", &auth_headers));
+        assert!(!is_provider_auth_header("content-type", &auth_headers));
+    }
+
+    #[test]
     fn codex_oauth_session_headers_match_codex_cache_identity() {
         let headers = build_codex_oauth_session_headers("session-123");
         let mut map = HeaderMap::new();
@@ -5070,47 +5021,6 @@ mod tests {
             ),
             ErrorCategory::Retryable
         );
-    }
-
-    #[test]
-    fn official_codex_rejects_stale_proxy_placeholder_with_restart_hint() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            http::header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer PROXY_MANAGED"),
-        );
-        let mut provider = test_provider_with_type(None);
-        provider.id = "codex-official".to_string();
-        provider.category = Some("official".to_string());
-        let error = validate_codex_official_authorization(&headers, &provider)
-            .expect_err("stale placeholder must be rejected");
-        assert!(matches!(error, ProxyError::AuthError(message) if message.contains("重启 Codex")));
-    }
-
-    #[test]
-    fn managed_codex_official_rejects_a_different_session_account() {
-        let mut provider = test_provider_with_type(Some("codex_oauth"));
-        provider.category = Some("official".to_string());
-        provider.meta.as_mut().expect("provider meta").auth_binding =
-            Some(crate::provider::AuthBinding {
-                source: crate::provider::AuthBindingSource::ManagedAccount,
-                auth_provider: Some("codex_oauth".to_string()),
-                account_id: Some("account-b".to_string()),
-            });
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            http::header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer account-a-token"),
-        );
-        headers.insert("chatgpt-account-id", HeaderValue::from_static("account-a"));
-        let error = validate_codex_official_authorization(&headers, &provider)
-            .expect_err("a stale Codex session must not cross the account boundary");
-        assert!(matches!(error, ProxyError::AuthError(message) if message.contains("重启 Codex")));
-
-        headers.insert("chatgpt-account-id", HeaderValue::from_static("account-b"));
-        validate_codex_official_authorization(&headers, &provider)
-            .expect("the selected account may pass through");
     }
 
     #[test]
