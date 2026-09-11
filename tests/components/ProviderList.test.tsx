@@ -268,6 +268,77 @@ describe("ProviderList Component", () => {
     );
   });
 
+  it("disables only individual Codex providers while aggregation is current", () => {
+    const aggregate = createProvider({
+      id: "codex-multi-provider",
+      name: "Codex Multi Provider",
+    });
+    const official = createProvider({
+      id: "codex-official",
+      name: "OpenAI Official",
+    });
+    useDragSortMock.mockReturnValue({
+      sortedProviders: [official, aggregate],
+      sensors: [],
+      handleDragEnd: vi.fn(),
+    });
+
+    renderWithQueryClient(
+      <ProviderList
+        providers={{
+          [official.id]: official,
+          [aggregate.id]: aggregate,
+        }}
+        currentProviderId="codex-multi-provider"
+        appId="codex"
+        onSwitch={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onDuplicate={vi.fn()}
+        onOpenWebsite={vi.fn()}
+      />,
+    );
+
+    const propsByProvider = new Map(
+      providerCardRenderSpy.mock.calls.map(([props]) => [
+        props.provider.id,
+        props,
+      ]),
+    );
+    expect(propsByProvider.get("codex-official")?.switchDisabledHint).toBe(
+      "provider.blockedByCodexAggregationHint",
+    );
+    expect(
+      propsByProvider.get("codex-multi-provider")?.switchDisabledHint,
+    ).toBeUndefined();
+  });
+
+  it("does not lock providers for other apps with a matching current id", () => {
+    const provider = createProvider({ id: "provider-a", name: "Provider A" });
+    useDragSortMock.mockReturnValue({
+      sortedProviders: [provider],
+      sensors: [],
+      handleDragEnd: vi.fn(),
+    });
+
+    renderWithQueryClient(
+      <ProviderList
+        providers={{ [provider.id]: provider }}
+        currentProviderId="codex-multi-provider"
+        appId="claude"
+        onSwitch={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onDuplicate={vi.fn()}
+        onOpenWebsite={vi.fn()}
+      />,
+    );
+
+    expect(
+      providerCardRenderSpy.mock.calls.at(-1)?.[0].switchDisabledHint,
+    ).toBeUndefined();
+  });
+
   it("filters providers with the search input", () => {
     const providerAlpha = createProvider({ id: "alpha", name: "Alpha Labs" });
     const providerBeta = createProvider({ id: "beta", name: "Beta Works" });

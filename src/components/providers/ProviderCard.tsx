@@ -79,6 +79,7 @@ interface ProviderCardProps {
   isDefaultModel?: boolean;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
+  switchDisabledHint?: string;
   onSetAsDefault?: (modelId?: string) => void;
 }
 
@@ -196,6 +197,7 @@ export function ProviderCard({
   isDefaultModel,
   isRemovalProtected,
   isStateChangeProtected,
+  switchDisabledHint,
   onSetAsDefault,
 }: ProviderCardProps) {
   const { t } = useTranslation();
@@ -730,6 +732,7 @@ export function ProviderCard({
               isDefaultModel={isDefaultModel}
               isRemovalProtected={isRemovalProtected}
               isStateChangeProtected={isStateChangeProtected}
+              switchDisabledHint={switchDisabledHint}
               defaultModelOptions={openclawDefaultModelOptions}
               onSetAsDefault={onSetAsDefault}
             />

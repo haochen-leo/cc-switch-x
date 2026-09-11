@@ -49,6 +49,7 @@ import { Button } from "@/components/ui/button";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { usePiCurrentState } from "@/lib/query/pi";
 import { isProxyAppId } from "@/config/appConfig";
+import { CODEX_AGGREGATE_PROVIDER_ID } from "@/components/proxy/CodexAggregationToggle";
 
 interface ProviderListProps {
   providers: Record<string, Provider>;
@@ -163,6 +164,8 @@ export function ProviderList({
     supportsFailover &&
     isProxyTakeover === true &&
     isAutoFailoverEnabled === true;
+  const isCodexAggregationActive =
+    appId === "codex" && currentProviderId === CODEX_AGGREGATE_PROVIDER_ID;
 
   const isOpenCode = appId === "opencode";
   const { data: currentOmoId } = useCurrentOmoProviderId(isOpenCode);
@@ -508,6 +511,12 @@ export function ProviderList({
                 isStateChangeProtected={
                   appId === "pi" && !isPiAuthoritativeStateReady
                 }
+                switchDisabledHint={
+                  isCodexAggregationActive &&
+                  provider.id !== CODEX_AGGREGATE_PROVIDER_ID
+                    ? t("provider.blockedByCodexAggregationHint")
+                    : undefined
+                }
                 onSetAsDefault={
                   onSetAsDefault
                     ? (modelId) => onSetAsDefault(provider, modelId)
@@ -646,6 +655,7 @@ interface SortableProviderCardProps {
   isDefaultModel?: boolean;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
+  switchDisabledHint?: string;
   onSetAsDefault?: (modelId?: string) => void;
 }
 
@@ -678,6 +688,7 @@ function SortableProviderCard({
   isDefaultModel,
   isRemovalProtected,
   isStateChangeProtected,
+  switchDisabledHint,
   onSetAsDefault,
 }: SortableProviderCardProps) {
   const {
@@ -733,6 +744,7 @@ function SortableProviderCard({
         isDefaultModel={isDefaultModel}
         isRemovalProtected={isRemovalProtected}
         isStateChangeProtected={isStateChangeProtected}
+        switchDisabledHint={switchDisabledHint}
         onSetAsDefault={onSetAsDefault}
       />
     </div>
