@@ -5140,6 +5140,14 @@ impl ProviderService {
     /// 同时检查本地 settings 和数据库的当前供应商，防止删除任一端正在使用的供应商。
     /// 对于累加模式应用（OpenCode, OpenClaw），可以随时删除任意供应商，同时从 live 配置中移除。
     pub fn delete(state: &AppState, app_type: AppType, id: &str) -> Result<(), AppError> {
+        // 官方种子行在任何路径（含 live 配置清理）之前拒绝删除；
+        // DAO 层另有兜底（delete_provider）。
+        if crate::database::is_official_seed_id(id) {
+            return Err(AppError::Message(format!(
+                "内置官方供应商（{id}）不可删除；不再使用时切换到其他供应商即可"
+            )));
+        }
+
         if app_type == AppType::Pi {
             return pi::delete(state, id);
         }

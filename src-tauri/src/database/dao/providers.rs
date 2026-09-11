@@ -377,6 +377,15 @@ impl Database {
     }
 
     pub fn delete_provider(&self, app_type: &str, id: &str) -> Result<(), AppError> {
+        // 内置官方种子行不可删除：聚合目录按固定 id 查找官方行、接管投影与
+        // 历史数据（proxy_request_logs 等）也都键控这些 id。删除后托管账号
+        // 同步会以随机 UUID 重建空壳行，导致"缺少官方供应商/指向不存在的
+        // 供应商"事故。兜底硬保护；UI 另有禁用提示。
+        if crate::database::is_official_seed_id(id) {
+            return Err(AppError::Message(format!(
+                "内置官方供应商（{id}）不可删除；不再使用时切换到其他供应商即可"
+            )));
+        }
         let conn = lock_conn!(self.conn);
         conn.execute(
             "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
@@ -875,8 +884,16 @@ mod ensure_official_seed_tests {
     fn ensure_recreates_codex_official_seed_after_deletion() {
         let db = Database::memory().expect("memory db");
         db.init_default_official_providers().expect("seed");
-        db.delete_provider(AppType::Codex.as_str(), CODEX_OFFICIAL_PROVIDER_ID)
-            .expect("delete Codex official");
+        // 硬保护生效后 delete_provider 拒绝种子 id；用裸 SQL 模拟存量库
+        // 种子行已缺失的历史状态（ensure_official_seed_by_id 的修复对象）。
+        {
+            let conn = db.conn.lock().expect("lock db");
+            conn.execute(
+                "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
+                rusqlite::params![CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str()],
+            )
+            .expect("raw delete Codex official");
+        }
 
         let inserted = db
             .ensure_official_seed_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex)
@@ -894,8 +911,14 @@ mod ensure_official_seed_tests {
     fn ensure_recreates_grokbuild_official_seed_after_deletion() {
         let db = Database::memory().expect("memory db");
         db.init_default_official_providers().expect("seed");
-        db.delete_provider(AppType::GrokBuild.as_str(), GROKBUILD_OFFICIAL_PROVIDER_ID)
-            .expect("delete Grok Build official");
+        {
+            let conn = db.conn.lock().expect("lock db");
+            conn.execute(
+                "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
+                rusqlite::params![GROKBUILD_OFFICIAL_PROVIDER_ID, AppType::GrokBuild.as_str()],
+            )
+            .expect("raw delete Grok Build official");
+        }
 
         let inserted = db
             .ensure_official_seed_by_id(GROKBUILD_OFFICIAL_PROVIDER_ID, AppType::GrokBuild)
@@ -908,6 +931,29 @@ mod ensure_official_seed_tests {
         assert_eq!(provider.category.as_deref(), Some("official"));
         // 空 config：切换时不注入自定义模型表，Grok CLI 回落到自带 OAuth 登录
         assert_eq!(provider.settings_config["config"], serde_json::json!(""));
+    }
+
+    #[test]
+    fn delete_provider_refuses_official_seed_ids() {
+        let db = Database::memory().expect("memory db");
+        db.init_default_official_providers().expect("seed");
+
+        for (id, app) in [
+            ("claude-official", AppType::Claude),
+            (CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, AppType::ClaudeDesktop),
+            (CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex),
+            ("gemini-official", AppType::Gemini),
+            (GROKBUILD_OFFICIAL_PROVIDER_ID, AppType::GrokBuild),
+        ] {
+            let result = db.delete_provider(app.as_str(), id);
+            assert!(result.is_err(), "seed id {id} must not be deletable");
+            assert!(
+                db.get_provider_by_id(id, app.as_str())
+                    .expect("query")
+                    .is_some(),
+                "seed row {id} must survive the refused delete"
+            );
+        }
     }
 
     #[test]
