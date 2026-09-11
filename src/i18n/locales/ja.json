@@ -116,6 +116,7 @@
     "needsRouting": "ルーティングが必要",
     "noRoutingSupport": "ルーティング非対応",
     "blockedByProxyHint": "プロキシ引き継ぎモードでは公式プロバイダーに切り替えできません",
+    "blockedByCodexAggregationHint": "マルチモデルモードが有効です。個別のプロバイダーを有効化する前にオフにしてください。",
     "editProvider": "プロバイダーを編集",
     "editProviderHint": "保存すると現在のプロバイダーにすぐ反映されます。",
     "deleteProvider": "プロバイダーを削除",

@@ -51,6 +51,7 @@ interface ProviderActionsProps {
   isInFailoverQueue?: boolean;
   onToggleFailover?: (enabled: boolean) => void;
   isOfficialBlockedByProxy?: boolean;
+  switchDisabledHint?: string;
   // Hermes v12+ providers: dict overlay — edit/delete must go through Web UI
   isReadOnly?: boolean;
   // OpenClaw: default model
@@ -93,6 +94,7 @@ export function ProviderActions({
   isInFailoverQueue = false,
   onToggleFailover,
   isOfficialBlockedByProxy = false,
+  switchDisabledHint,
   isReadOnly = false,
   // OpenClaw: default model
   isDefaultModel = false,
@@ -116,6 +118,8 @@ export function ProviderActions({
   const piStateChangeHint = t("pi.current.stateUnavailableHint");
 
   const handleMainButtonClick = () => {
+    if (switchDisabledHint) return;
+
     if (isOmo) {
       if (isCurrent) {
         onDisableOmo?.();
@@ -141,6 +145,17 @@ export function ProviderActions({
   };
 
   const getMainButtonState = (): MainButtonState => {
+    if (switchDisabledHint) {
+      return {
+        disabled: true,
+        variant: "default" as const,
+        className: "opacity-40 cursor-not-allowed",
+        icon: <Play className="h-4 w-4" />,
+        text: t("provider.enable"),
+        title: switchDisabledHint,
+      };
+    }
+
     if (isOmo) {
       if (isCurrent) {
         return {
