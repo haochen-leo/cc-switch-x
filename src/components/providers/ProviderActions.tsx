@@ -58,6 +58,8 @@ interface ProviderActionsProps {
   isDefaultModel?: boolean;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
+  /** 内置官方种子行（codex-official 等）不可删除，后端另有硬保护兜底。 */
+  isOfficialSeed?: boolean;
   defaultModelOptions?: OpenClawDefaultModelOption[];
   onSetAsDefault?: (modelId?: string) => void;
 }
@@ -100,6 +102,7 @@ export function ProviderActions({
   isDefaultModel = false,
   isRemovalProtected = false,
   isStateChangeProtected = false,
+  isOfficialSeed = false,
   defaultModelOptions = [],
   onSetAsDefault,
 }: ProviderActionsProps) {
@@ -276,6 +279,7 @@ export function ProviderActions({
   const buttonState = getMainButtonState();
   const canDelete =
     !isReadOnly &&
+    !isOfficialSeed &&
     (appId === "pi"
       ? !isStateChangeProtected
       : isOmo || isAdditiveMode
@@ -284,12 +288,17 @@ export function ProviderActions({
   const readOnlyHint = t("provider.managedByHermesHint", {
     defaultValue: "由 Hermes 管理，请在 Hermes Web UI 中编辑",
   });
+  const officialSeedHint = t("provider.officialSeedUndeletable", {
+    defaultValue: "内置官方供应商不可删除",
+  });
   const deleteHint =
     appId === "pi" && isStateChangeProtected
       ? piStateChangeHint
       : isReadOnly
         ? readOnlyHint
-        : t("common.delete");
+        : isOfficialSeed
+          ? officialSeedHint
+          : t("common.delete");
 
   return (
     <div className="flex items-center gap-1.5">
