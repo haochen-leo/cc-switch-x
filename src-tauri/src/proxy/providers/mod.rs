@@ -35,6 +35,7 @@ pub mod transform;
 pub mod transform_codex_anthropic;
 pub mod transform_codex_apply_patch;
 pub mod transform_codex_chat;
+pub mod transform_codex_chat_moonshot_schema;
 pub mod transform_codex_compaction;
 pub mod transform_codex_responses;
 pub mod transform_codex_responses_namespace;

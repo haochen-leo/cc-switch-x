@@ -267,18 +267,12 @@ pub fn codex_anthropic_thinking_policy(
 }
 
 /// Whether a native-Responses Codex upstream needs Codex `namespace`/plugin
-/// tool declarations flattened before forwarding.
+/// tool declarations flattened before forwarding, plus xAI schema sanitization.
 ///
 /// Codex 0.142+ emits ChatGPT-backend-private `{"type":"namespace",…}` tool
-/// shapes, and the client enables them for every custom provider: the
-/// `namespace_tools` provider capability defaults to `true` upstream and has
-/// no config.toml knob. Every third-party native gateway therefore receives
-/// these declarations — strict ones reject with
-/// `422 unknown variant "namespace"`, lenient ones silently drop the tools
-/// (the same invisible-tool failure class as `tool_search`). Only the
-/// official ChatGPT backend and OpenAI GPT relays understand the shape
-/// natively, so remaining providers get the flatten+restore pass; the
-/// Chat/Anthropic transform paths already unwrap namespaces on their own.
+/// shapes, and the client enables them for every custom provider. Every
+/// third-party native gateway therefore gets the generic namespace flattening
+/// pass unless it speaks OpenAI's private contract.
 pub fn provider_needs_responses_namespace_flatten(
     provider: &Provider,
     upstream_model: Option<&str>,
@@ -286,15 +280,29 @@ pub fn provider_needs_responses_namespace_flatten(
     !codex_native_responses_uses_openai_private_contract(provider, upstream_model)
 }
 
-/// Whether the native-Responses passthrough must additionally be scrubbed
-/// down to the strict field/tool whitelist that xAI's serde parser accepts
-/// (`promote_additional_tools` + `sanitize_xai_responses_request`).
-///
-/// This stays xAI-specific: other third-party gateways are fail-open for the
-/// OpenAI-backend-private fields (`prompt_cache_key`, `include`, …), and the
-/// tool_search bridge — not the scrubber — handles their discovery contract.
+/// Strict xAI request sanitization applies to managed xAI OAuth and API-key
+/// providers whose live upstream is first-party xAI Responses.
 pub fn provider_needs_xai_responses_sanitize(provider: &Provider) -> bool {
-    provider.is_xai_oauth()
+    provider.is_xai_oauth() || provider_is_xai_native_responses(provider)
+}
+
+fn provider_is_xai_native_responses(provider: &Provider) -> bool {
+    let config_text = provider
+        .settings_config
+        .get("config")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let Some(wire_api) = extract_codex_wire_api_from_toml(config_text) else {
+        return false;
+    };
+    if !wire_api.eq_ignore_ascii_case("responses") {
+        return false;
+    }
+    extract_codex_base_url_from_toml(config_text)
+        .and_then(|value| url::Url::parse(&value).ok())
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .as_deref()
+        == Some("api.x.ai")
 }
 
 /// Whether native Responses traffic needs Codex's freeform `apply_patch`
@@ -434,7 +442,10 @@ fn has_explicit_codex_third_party_upstream(provider: &Provider) -> bool {
                     .filter(|provider_id| !provider_id.is_empty())
                     .map(str::to_string)
             })
-            .is_some_and(|provider_id| !provider_id.eq_ignore_ascii_case("openai"))
+            // Exact match, mirroring upstream: the built-in lookup is
+            // case-sensitive, so `OpenAI` routes to a custom table — a
+            // third-party upstream, not the official provider.
+            .is_some_and(|provider_id| provider_id != "openai")
 }
 
 /// Codex Official ChatGPT cards receive authentication from the calling Codex
@@ -485,6 +496,47 @@ pub fn is_codex_official_provider(provider: &Provider) -> bool {
     is_fixed_official_id || provider.category.as_deref() == Some("official")
 }
 
+/// Vendors whose OFFICIAL Codex integration is a native `/responses` gateway that
+/// rejects Codex's freeform custom tools (`apply_patch` with `type: "custom"`,
+/// #6944). Same vendor set as `CODEX_WEB_SEARCH_REJECT_HOSTS` in `codex_config`
+/// (kept separate: that list also gates aggregators by model brand). Matched on
+/// host labels via `codex_url_host_matches_any`, never by substring.
+const CODEX_NATIVE_RESPONSES_HOSTS: &[&str] = &[
+    "bigmodel.cn",
+    "z.ai",
+    "xiaomimimo.com",
+    "minimaxi.com",
+    "minimax.io",
+    "longcat.chat",
+];
+
+/// Path markers of a listed vendor's OpenAI *Chat Completions* endpoint, which is
+/// NOT its Responses endpoint. Zhipu documents three separate base URLs per site
+/// (Anthropic `/api/anthropic`, Chat `/api/coding/paas/v4` + pay-as-you-go
+/// `/api/paas/v4`, Responses `/api/v1`) and warns that the wrong one cannot use
+/// Coding Plan quota. A stored provider still pointing at a Chat path is a
+/// pre-2026-09 Chat-route record: it keeps its `ProxyChat` catalog (the proxy
+/// route converts it correctly; direct connect fails loudly with the #6944 400
+/// until the preset is re-imported) instead of being silently steered onto the
+/// wrong endpoint with a native catalog.
+const CODEX_NATIVE_RESPONSES_CHAT_PATH_MARKERS: &[&str] = &["/paas/v4"];
+
+/// Whether `base_url` points at a listed vendor's native Responses gateway, so a
+/// provider whose stored `apiFormat` predates the preset's switch to
+/// `openai_responses` still gets the `NativeResponses` catalog without a re-save.
+pub fn is_codex_native_responses_url(base_url: &str) -> bool {
+    if !crate::codex_config::codex_url_host_matches_any(base_url, CODEX_NATIVE_RESPONSES_HOSTS) {
+        return false;
+    }
+    if is_chat_completions_url(base_url) {
+        return false;
+    }
+    let lower = base_url.to_ascii_lowercase();
+    !CODEX_NATIVE_RESPONSES_CHAT_PATH_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
 /// Resolve the model-catalog tool profile for a Codex provider using the SAME
 /// Anthropic detection as the proxy router ([`codex_provider_uses_anthropic`]), so the
 /// generated catalog never disagrees with the routed transform. A provider whose
@@ -510,9 +562,49 @@ pub fn resolve_codex_catalog_tool_profile(
     if codex_provider_uses_anthropic(provider) {
         return CodexCatalogToolProfile::Anthropic;
     }
-    CodexCatalogToolProfile::from_api_format(
-        provider.meta.as_ref().and_then(|m| m.api_format.as_deref()),
-    )
+
+    // Defensive fallback for providers saved in SQLite before their preset
+    // switched to `openai_responses` (the #6944 reporter reinstalled to no
+    // effect precisely because the stale `apiFormat` lives in the DB row): a
+    // base_url on a listed vendor's native Responses gateway forces the
+    // NativeResponses catalog. Chat-endpoint paths are deliberately excluded —
+    // see `CODEX_NATIVE_RESPONSES_CHAT_PATH_MARKERS`.
+    if let Some(base_url) = provider
+        .settings_config
+        .get("config")
+        .and_then(|v| v.as_str())
+        .and_then(extract_codex_base_url_from_toml)
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("base_url")
+                .or_else(|| provider.settings_config.get("baseURL"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string)
+        })
+    {
+        if is_codex_native_responses_url(&base_url) {
+            return CodexCatalogToolProfile::NativeResponses;
+        }
+    }
+
+    let api_format = provider
+        .meta
+        .as_ref()
+        .and_then(|m| m.api_format.as_deref())
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("api_format")
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("apiFormat")
+                .and_then(|v| v.as_str())
+        });
+    CodexCatalogToolProfile::from_api_format(api_format)
 }
 
 /// Extract the real upstream model configured for a Codex provider.
@@ -1667,6 +1759,106 @@ wire_api = "anthropic"
             resolve_codex_catalog_tool_profile(&chat),
             CodexCatalogToolProfile::ProxyChat
         );
+
+        // Host fallback (#6944): a DB row saved while the Zhipu preset was still
+        // `openai_chat` but whose base_url is the vendor's native Responses
+        // gateway (`/api/v1`) resolves to NativeResponses without a re-save —
+        // whether the URL lives in the TOML or in settings `baseURL`.
+        let legacy_chat_toml = |base_url: &str| {
+            create_provider(json!({
+                "apiFormat": "openai_chat",
+                "config": format!(
+                    "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"zhipu_glm\"\nbase_url = \"{base_url}\"\nwire_api = \"responses\"\n"
+                )
+            }))
+        };
+        for base_url in [
+            "https://open.bigmodel.cn/api/v1",
+            "https://api.z.ai/api/v1",
+            "https://Open.BigModel.cn/api/v1/",
+        ] {
+            assert_eq!(
+                resolve_codex_catalog_tool_profile(&legacy_chat_toml(base_url)),
+                CodexCatalogToolProfile::NativeResponses,
+                "{base_url}"
+            );
+        }
+        let legacy_chat_settings = create_provider(json!({
+            "apiFormat": "openai_chat",
+            "baseURL": "https://api.z.ai/api/v1"
+        }));
+        assert_eq!(
+            resolve_codex_catalog_tool_profile(&legacy_chat_settings),
+            CodexCatalogToolProfile::NativeResponses
+        );
+
+        // The vendor's Chat Completions endpoints are NOT its Responses gateway
+        // (Zhipu: `/api/coding/paas/v4` Coding Plan, `/api/paas/v4` pay-as-you-go)
+        // — a stale row there keeps ProxyChat so it is never steered onto the
+        // endpoint Zhipu documents as unable to use Coding Plan quota.
+        for base_url in [
+            "https://open.bigmodel.cn/api/coding/paas/v4",
+            "https://api.z.ai/api/coding/paas/v4",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        ] {
+            assert_eq!(
+                resolve_codex_catalog_tool_profile(&legacy_chat_toml(base_url)),
+                CodexCatalogToolProfile::ProxyChat,
+                "{base_url}"
+            );
+        }
+
+        // Host matching is on DNS labels: `xyz.ai` must not be captured by the
+        // 4-char `z.ai` entry (it would lose apply_patch and web_search).
+        for base_url in [
+            "https://api.xyz.ai/v1",
+            "https://viz.ai/v1",
+            "https://z.ai.example.com/v1",
+        ] {
+            assert_eq!(
+                resolve_codex_catalog_tool_profile(&legacy_chat_toml(base_url)),
+                CodexCatalogToolProfile::ProxyChat,
+                "{base_url}"
+            );
+        }
+
+        // An explicit `openai_responses` on an unlisted host is untouched by the
+        // fallback (it only ever widens toward NativeResponses for listed hosts).
+        let explicit_native = create_provider(json!({
+            "apiFormat": "openai_responses",
+            "baseURL": "https://api.xyz.ai/v1"
+        }));
+        assert_eq!(
+            resolve_codex_catalog_tool_profile(&explicit_native),
+            CodexCatalogToolProfile::NativeResponses
+        );
+    }
+
+    #[test]
+    fn native_responses_url_guard_matches_gateway_not_chat_paths() {
+        for url in [
+            "https://open.bigmodel.cn/api/v1",
+            "https://api.z.ai/api/v1",
+            "https://api.xiaomimimo.com/v1",
+            "https://token-plan-cn.xiaomimimo.com/v1",
+            "https://api.minimaxi.com/v1",
+            "https://api.minimax.io/v1",
+            "https://api.longcat.chat/openai/v1",
+        ] {
+            assert!(is_codex_native_responses_url(url), "{url}");
+        }
+        for url in [
+            "https://open.bigmodel.cn/api/coding/paas/v4",
+            "https://api.z.ai/api/coding/paas/v4",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "https://api.minimaxi.com/v1/chat/completions",
+            "https://api.xyz.ai/v1",
+            "https://api.deepseek.com",
+            "",
+        ] {
+            assert!(!is_codex_native_responses_url(url), "{url}");
+        }
     }
 
     #[test]
@@ -2291,7 +2483,7 @@ wire_api = "responses"
 
     #[test]
     fn namespace_flatten_gate_fires_for_every_third_party_native_upstream() {
-        // xAI OAuth: strict native gateway → needs namespace flattening.
+        // xAI OAuth: strict native gateway needs namespace flattening.
         let mut xai = create_provider(json!({ "auth": {}, "config": "" }));
         xai.meta = Some(crate::provider::ProviderMeta {
             provider_type: Some("xai_oauth".to_string()),
@@ -2410,5 +2602,23 @@ wire_api = "responses"
         assert!(!provider_needs_responses_apply_patch_bridge(
             &anthropic, None
         ));
+    }
+
+    #[test]
+    fn xai_api_key_provider_uses_strict_sanitizer() {
+        let grok_key = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-x" },
+            "config": r#"
+model_provider = "custom"
+model = "grok-4.6"
+
+[model_providers.custom]
+name = "xai"
+base_url = "https://api.x.ai/v1"
+wire_api = "responses"
+"#
+        }));
+        assert!(provider_needs_responses_namespace_flatten(&grok_key, None));
+        assert!(provider_needs_xai_responses_sanitize(&grok_key));
     }
 }
