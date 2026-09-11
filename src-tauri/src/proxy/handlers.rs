@@ -94,34 +94,84 @@ pub async fn get_status(State(state): State<ProxyState>) -> Result<Json<ProxySta
 /// Only serves the catalog when the live config.toml still references the
 /// cc-switch–owned `model_catalog_json`, using the same path ownership rules as
 /// Codex live-setting import.
-pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
+///
+/// Official takeover projections deliberately omit `model_catalog_json`, so
+/// Codex's dynamic catalog probe lands here. Returning the stale-guard empty
+/// list would make Codex persist an empty `models_cache.json` and fall back to
+/// its bundled catalog; instead relay the probe to the official backend, the
+/// same Authorization passthrough used by the chat raw-relay routes.
+pub async fn handle_models(
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
     let config_dir = crate::codex_config::get_codex_config_dir();
-    let active_catalog_path = match crate::codex_config::read_codex_config_text() {
-        Ok(config_text) => {
-            crate::codex_config::resolve_cc_switch_catalog_path(&config_text, &config_dir)
-        }
-        Err(_) => None,
-    };
+    let config_text = crate::codex_config::read_codex_config_text().ok();
+    let active_catalog_path = config_text
+        .as_deref()
+        .and_then(|text| crate::codex_config::resolve_cc_switch_catalog_path(text, &config_dir));
 
-    let catalog = if let Some(catalog_path) =
-        active_catalog_path.as_ref().filter(|path| path.exists())
-    {
-        match crate::codex_config::read_codex_model_catalog_text(catalog_path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or(json!({"models": []})),
+    if let Some(catalog_path) = active_catalog_path.as_ref().filter(|path| path.exists()) {
+        return match crate::codex_config::read_codex_model_catalog_text(catalog_path) {
+            Ok(text) => {
+                let catalog = serde_json::from_str(&text).unwrap_or(json!({"models": []}));
+                Ok(Json(catalog).into_response())
+            }
             Err(error) => {
                 log::warn!("[models] 拒绝读取越界或过大的目录文件: {error}");
-                json!({"models": []})
+                Ok(Json(json!({"models": []})).into_response())
             }
-        }
-    } else {
-        if active_catalog_path.is_none() {
-            log::debug!(
-                "[models] stale guard: catalog not served (model_catalog_json not set to cc-switch catalog)"
-            );
-        }
-        json!({"models": []})
+        };
+    }
+
+    if config_text
+        .as_deref()
+        .is_some_and(codex_live_config_is_official_takeover)
+    {
+        return handle_codex_official_raw_relay(
+            request,
+            CodexOfficialRawRelayBase::CodexBackend,
+            "models",
+        )
+        .await;
+    }
+
+    if active_catalog_path.is_none() {
+        log::debug!(
+            "[models] stale guard: catalog not served (model_catalog_json not set to cc-switch catalog)"
+        );
+    }
+    Ok(Json(json!({"models": []})).into_response())
+}
+
+/// 判断 live config.toml 是否为官方接管投影：活跃 model provider 指回本代理
+/// 且 `requires_openai_auth = true`（Codex 会给发到本代理的请求附上 ChatGPT
+/// OAuth，这正是透传所需的凭据）。第三方投影要么带 `model_catalog_json`（在
+/// 上方已返回），要么 `requires_openai_auth = false`。
+fn codex_live_config_is_official_takeover(config_text: &str) -> bool {
+    let Ok(doc) = config_text.parse::<toml_edit::DocumentMut>() else {
+        return false;
     };
-    Ok(Json(catalog))
+    let Some(provider_id) = doc.get("model_provider").and_then(|item| item.as_str()) else {
+        return false;
+    };
+    let Some(table) = doc
+        .get("model_providers")
+        .and_then(|item| item.get(provider_id))
+        .and_then(|item| item.as_table_like())
+    else {
+        return false;
+    };
+    let requires_openai_auth = table
+        .get("requires_openai_auth")
+        .and_then(|item| item.as_bool())
+        .unwrap_or(false);
+    if !requires_openai_auth {
+        return false;
+    }
+    let base_url = table
+        .get("base_url")
+        .and_then(|item| item.as_str())
+        .unwrap_or("");
+    base_url.contains("127.0.0.1") || base_url.contains("localhost")
 }
 
 #[derive(Clone, Copy)]
@@ -3363,9 +3413,10 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, chat_sse_to_response_value, classify_body_for_diagnostics,
-        codex_proxy_error_json, compact_fallback_error_is_retryable,
-        responses_sse_stream_to_anthropic_message, responses_sse_to_response_value,
-        should_use_claude_transform_streaming, transform, upstream_body_parse_error,
+        codex_live_config_is_official_takeover, codex_proxy_error_json,
+        compact_fallback_error_is_retryable, responses_sse_stream_to_anthropic_message,
+        responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
+        upstream_body_parse_error,
     };
     use crate::proxy::ProxyError;
     use bytes::Bytes;
@@ -3373,6 +3424,48 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    #[test]
+    fn official_takeover_detection_requires_proxy_base_url_and_openai_auth() {
+        // 官方接管投影：model_provider 指回本地代理 + requires_openai_auth = true
+        let official = r#"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+base_url = "http://127.0.0.1:15721/v1"
+wire_api = "responses"
+requires_openai_auth = true
+"#;
+        assert!(codex_live_config_is_official_takeover(official));
+
+        // 第三方投影：requires_openai_auth = false，即使 base_url 指回本地也不透传
+        let third_party = r#"
+model_provider = "custom"
+
+[model_providers.custom]
+base_url = "http://127.0.0.1:15721/v1"
+wire_api = "responses"
+requires_openai_auth = false
+"#;
+        assert!(!codex_live_config_is_official_takeover(third_party));
+
+        // 官方字段但 base_url 是外部地址（非接管投影）不透传
+        let external = r#"
+model_provider = "custom"
+
+[model_providers.custom]
+base_url = "https://chatgpt.com/backend-api/codex"
+requires_openai_auth = true
+"#;
+        assert!(!codex_live_config_is_official_takeover(external));
+
+        // 缺 model_provider / 缺 provider 表 / 非 TOML 都安全回落 false
+        assert!(!codex_live_config_is_official_takeover(
+            "base_url = \"http://127.0.0.1:15721/v1\"\n"
+        ));
+        assert!(!codex_live_config_is_official_takeover("not toml at all {{{"));
+    }
 
     #[test]
     fn body_looks_like_sse_detects_unlabeled_sse_prefixes() {
@@ -3389,8 +3482,7 @@ mod tests {
         assert!(body_looks_like_sse("\u{feff}\n  data: {}\n\n"));
         // HTML 拦截页与普通文本不应误判为 SSE
         assert!(!body_looks_like_sse("<html><body>blocked</body></html>"));
-        assert!(!body_looks_like_sse("Bad Gateway"));
-        assert!(!body_looks_like_sse(""));
+        assert!(!body_looks_like_sse("Bad Gateway"));        assert!(!body_looks_like_sse(""));
     }
 
     #[test]
