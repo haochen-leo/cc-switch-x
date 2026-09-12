@@ -1237,6 +1237,18 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
 
+                // 启动先把 Codex live 的通用配置回流一次主配置（带防毒化护栏）：
+                // Codex 运行期间会自写 live（projects 信任、hooks 状态等），这些
+                // 平时只在真实供应商切换时才回流；若不在恢复/接管重写之前同步一次，
+                // 随后的整体重写会把它们抹掉。提取器已剥掉接关注入的 provider 字段，
+                // 接管态 live 同样安全；live 缺失/损坏只告警，不阻断后续恢复。
+                if let Err(e) = state
+                    .proxy_service
+                    .capture_codex_official_config_from_live()
+                {
+                    log::warn!("启动时回流 Codex 主配置失败: {e}");
+                }
+
                 // 检查是否有 Live 备份（表示上次异常退出时可能处于接管状态）
                 let has_backups = match state.db.has_any_live_backup().await {
                     Ok(v) => v,
