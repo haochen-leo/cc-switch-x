@@ -2888,7 +2888,7 @@ fn switch_codex_syncs_shared_keys_from_live_into_common_config() {
     let _home = ensure_test_home();
 
     // A 激活状态下的 live：A 专属路由 + 已共享的 [tui] + 用户刚加的
-    // disable_response_storage + cc-switch 注入产物 + MCP 同步投影
+    // disable_response_storage + cc-switch 注入产物 + DB 已知但禁用的 MCP 投影
     // + 顶层 wire_api（无 model_provider 时的 fallback 写法，属 A 的路由语义）
     // + 历史错误格式 [mcp.servers]（sync_all_enabled 清不掉的孤儿形态）
     let live_config = r#"model = "gpt-5.5"
@@ -2953,6 +2953,34 @@ command = "ghost-cmd"
         manager.providers.insert("b".to_string(), provider_b);
     }
 
+    // echo 模拟 CC Switch 自己投影过、但当前已在 Codex 侧禁用的 MCP。
+    // 新归属语义下，只有 DB 不认识的 MCP 才会作为外部配置随整体重写保留；
+    // DB 已知且禁用的条目仍应由 MCP 投影移除。
+    let servers = config.mcp.servers.get_or_insert_with(Default::default);
+    servers.insert(
+        "echo".into(),
+        McpServer {
+            id: "echo".into(),
+            name: "Echo".into(),
+            server: json!({
+                "type": "stdio",
+                "command": "echo"
+            }),
+            apps: McpApps {
+                claude: false,
+                codex: false,
+                gemini: false,
+                grokbuild: false,
+                opencode: false,
+                hermes: false,
+            },
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: Vec::new(),
+        },
+    );
+
     let state = create_test_state_with_config(&config).expect("create test state");
     set_codex_official_common(&state, "[tui]\nnotifications = true\n");
 
@@ -3002,7 +3030,7 @@ command = "ghost-cmd"
     );
     assert!(
         !live_after.contains("mcp_servers"),
-        "no DB-enabled MCP servers, so live must not resurrect stale entries, got: {live_after}"
+        "DB-known disabled MCP servers must not be resurrected by provider switch, got: {live_after}"
     );
     assert!(
         !live_after.contains("ghost-legacy"),
