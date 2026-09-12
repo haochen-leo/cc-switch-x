@@ -102,6 +102,9 @@ fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
 
     let auth = json!({"OPENAI_API_KEY": "fresh-key"});
     let config = r#"model = "gpt-5"
+
+[plugins.imported]
+enabled = true
 "#;
     write_codex_live_atomic(&auth, Some(config)).expect("seed codex live config");
 
@@ -121,12 +124,29 @@ fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
         .expect("get codex providers after import");
     assert_eq!(
         providers.len(),
-        1,
-        "fresh install import should create exactly one Codex provider before seeding"
+        2,
+        "fresh install import should keep OpenAI Official alongside the imported provider"
     );
     assert!(
         providers.contains_key("default"),
         "fresh install import should create default provider"
+    );
+    assert!(providers.contains_key("codex-official"));
+    let imported = providers.get("default").expect("default provider exists");
+    let imported_config = imported.settings_config["config"]
+        .as_str()
+        .expect("default config");
+    assert!(imported_config.contains("model = \"gpt-5\""));
+    assert!(
+        !imported_config.contains("plugins.imported"),
+        "the imported provider must keep only its route/private config"
+    );
+    let official_config = providers["codex-official"].settings_config["config"]
+        .as_str()
+        .expect("Official config");
+    assert!(
+        official_config.contains("[plugins.imported]"),
+        "the imported Live common config must immediately move to Official"
     );
 
     let current_id = state
@@ -158,7 +178,7 @@ fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
     assert_eq!(
         providers_after_seed.len(),
         2,
-        "official seeding should add codex-official alongside imported default"
+        "official seeding should remain idempotent"
     );
     assert!(providers_after_seed.contains_key("codex-official"));
 

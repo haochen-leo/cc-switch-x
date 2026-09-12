@@ -99,8 +99,6 @@ interface CodexConfigSectionProps {
   onChange: (value: string) => void;
   providerName?: string;
   showRemoteCompaction?: boolean;
-  useCommonConfig: boolean;
-  onCommonConfigToggle: (checked: boolean) => void;
   onEditCommonConfig: () => void;
   commonConfigError?: string;
   configError?: string;
@@ -115,8 +113,6 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   onChange,
   providerName,
   showRemoteCompaction = true,
-  useCommonConfig,
-  onCommonConfigToggle,
   onEditCommonConfig,
   commonConfigError,
   configError,
@@ -270,15 +266,11 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
             </label>
           )}
 
-          <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={useCommonConfig}
-              onChange={(e) => onCommonConfigToggle(e.target.checked)}
-              className="w-4 h-4 text-blue-500 bg-white dark:bg-gray-800 border-border-default rounded focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-2"
-            />
-            {t("codexConfig.writeCommonConfig")}
-          </label>
+          <span className="text-sm text-muted-foreground">
+            {t("codexConfig.globalConfigAlwaysOn", {
+              defaultValue: "通用配置由 OpenAI Official 统一管理",
+            })}
+          </span>
         </div>
       </div>
 

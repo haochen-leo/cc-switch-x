@@ -54,8 +54,6 @@ describe("Common config modals", () => {
         configValue=""
         onAuthChange={() => {}}
         onConfigChange={() => {}}
-        useCommonConfig={false}
-        onCommonConfigToggle={() => {}}
         commonConfigSnippet={`base_url = "https://example.com"`}
         onCommonConfigSnippetChange={() => false}
         onCommonConfigErrorClear={() => {}}

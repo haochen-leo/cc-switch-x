@@ -13,7 +13,7 @@ use crate::proxy::types::*;
 use crate::services::provider::{
     build_effective_provider_for_live_with_codex_oauth_manager,
     build_effective_settings_with_common_config,
-    write_live_with_common_config_for_codex_oauth_manager,
+    write_live_with_common_config_for_codex_oauth_manager, ProviderService,
 };
 use serde_json::{json, Map, Value};
 use std::str::FromStr;
@@ -714,6 +714,18 @@ impl ProxyService {
     ) -> Result<(), String> {
         self.sync_codex_live_from_provider_while_proxy_active_guarded(provider, None, None)
             .await
+    }
+
+    fn capture_codex_official_config_from_live(&self) -> Result<(), String> {
+        let live_settings = match self.read_codex_live() {
+            Ok(settings) => settings,
+            Err(error) => {
+                log::warn!("读取 Codex live 主配置失败，跳过本次回流: {error}");
+                return Ok(());
+            }
+        };
+        ProviderService::sync_codex_official_config_from_settings(self.db.as_ref(), &live_settings)
+            .map_err(|error| format!("保存 Codex Official 主配置失败: {error}"))
     }
 
     pub(crate) async fn sync_codex_live_from_provider_while_proxy_active_guarded(
@@ -3086,6 +3098,30 @@ impl ProxyService {
                 None
             };
 
+        // 只有真实的供应商切换才允许把离开前的 Live 通用配置回流到 Official。
+        // 启动恢复、聚合目录刷新等同目标重建只负责重写 Live，不得修改主配置。
+        // 先保留旧 Official；后续任一步失败时与 Live/current 一起回滚。
+        let previous_official = if logical_target_changed {
+            match &app_type_enum {
+                AppType::Codex => self
+                    .db
+                    .get_provider_by_id(
+                        crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                        AppType::Codex.as_str(),
+                    )
+                    .map_err(|error| format!("读取 OpenAI Official 失败: {error}"))?,
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if logical_target_changed {
+            match &app_type_enum {
+                AppType::Codex => self.capture_codex_official_config_from_live()?,
+                _ => {}
+            }
+        }
+
         let prepare_result: Result<(), String> = async {
             if should_sync_backup {
                 self.update_live_backup_from_provider_inner(
@@ -3174,6 +3210,10 @@ impl ProxyService {
         .await;
 
         if let Err(error) = prepare_result {
+            self.restore_official_after_failed_hot_switch(
+                &app_type_enum,
+                previous_official.as_ref(),
+            );
             self.rollback_hot_switch_preparation(
                 &app_type_enum,
                 previous_backup.as_ref(),
@@ -3188,6 +3228,10 @@ impl ProxyService {
 
         if let Err(error) = crate::settings::set_current_provider(&app_type_enum, Some(provider_id))
         {
+            self.restore_official_after_failed_hot_switch(
+                &app_type_enum,
+                previous_official.as_ref(),
+            );
             self.rollback_hot_switch_preparation(
                 &app_type_enum,
                 previous_backup.as_ref(),
@@ -3209,6 +3253,10 @@ impl ProxyService {
             ) {
                 log::error!("数据库切换失败后恢复本地当前供应商失败: {rollback_error}");
             }
+            self.restore_official_after_failed_hot_switch(
+                &app_type_enum,
+                previous_official.as_ref(),
+            );
             self.rollback_hot_switch_preparation(
                 &app_type_enum,
                 previous_backup.as_ref(),
@@ -3230,6 +3278,22 @@ impl ProxyService {
         Ok(HotSwitchOutcome {
             logical_target_changed,
         })
+    }
+
+    fn restore_official_after_failed_hot_switch(
+        &self,
+        app_type: &AppType,
+        previous_official: Option<&Provider>,
+    ) {
+        let Some(previous_official) = previous_official else {
+            return;
+        };
+        if let Err(error) = self.db.save_provider(app_type.as_str(), previous_official) {
+            log::error!(
+                "热切换失败后恢复 {} Official 主配置失败: {error}",
+                app_type.as_str()
+            );
+        }
     }
 
     #[cfg(test)]
@@ -8517,11 +8581,11 @@ model = "gpt-5.1-codex"
         crate::settings::reload_settings().expect("reload settings");
 
         let db = Arc::new(Database::memory().expect("init db"));
-        db.set_config_snippet(
-            "codex",
-            Some("disable_response_storage = true\n".to_string()),
+        ProviderService::set_codex_official_config(
+            db.as_ref(),
+            "disable_response_storage = true\n",
         )
-        .expect("set common config snippet");
+        .expect("set Official config");
 
         let service = ProxyService::new(db.clone());
 
@@ -9509,16 +9573,13 @@ command = "latest-command"
         let db = Arc::new(Database::memory().expect("init db"));
         let state = crate::store::AppState::new(db.clone());
 
-        db.set_config_snippet(
-            "codex",
-            Some(
-                r#"[mcp_servers.shared]
-command = "shared-command"
-"#
-                .to_string(),
-            ),
+        ProviderService::set_codex_official_config(
+            db.as_ref(),
+            r#"[projects."/tmp/shared"]
+trust_level = "trusted"
+"#,
         )
-        .expect("set common config snippet");
+        .expect("set Official config");
 
         let proxy_config = ProxyConfig {
             listen_port: 0,
@@ -9541,6 +9602,9 @@ name = "ProviderA"
 base_url = "https://provider-a.example/v1"
 wire_api = "responses"
 requires_openai_auth = true
+
+[projects."/tmp/shared"]
+trust_level = "trusted"
 "#;
         let config_b = r#"model_provider = "provider-b"
 model = "model-b"
@@ -9641,11 +9705,11 @@ requires_openai_auth = true
             "config.toml must reference model_catalog_json after switch"
         );
         assert!(
-            config_text.contains("[mcp_servers.shared]"),
+            config_text.contains("[projects.\"/tmp/shared\"]"),
             "config.toml must keep common config after switch"
         );
         assert!(
-            config_text.contains(r#"command = "shared-command""#),
+            config_text.contains(r#"trust_level = "trusted""#),
             "config.toml must include common config content after switch"
         );
     }

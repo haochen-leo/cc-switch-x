@@ -1027,10 +1027,8 @@ function ProviderFormFull({
   });
 
   const {
-    useCommonConfig: useCodexCommonConfigFlag,
     commonConfigSnippet: codexCommonConfigSnippet,
     commonConfigError: codexCommonConfigError,
-    handleCommonConfigToggle: handleCodexCommonConfigToggle,
     handleCommonConfigSnippetChange: handleCodexCommonConfigSnippetChange,
     isExtracting: isCodexExtracting,
     handleExtract: handleCodexExtract,
@@ -1039,8 +1037,7 @@ function ProviderFormFull({
     codexConfig,
     onConfigChange: handleCodexConfigChange,
     initialData: appId === "codex" ? initialData : undefined,
-    initialEnabled:
-      appId === "codex" ? initialData?.meta?.commonConfigEnabled : undefined,
+    initialEnabled: appId === "codex" ? true : undefined,
     selectedPresetId: selectedPresetId ?? undefined,
   });
 
@@ -1942,7 +1939,7 @@ function ProviderFormFull({
         appId === "claude"
           ? useCommonConfig
           : appId === "codex"
-            ? useCodexCommonConfigFlag
+            ? true
             : appId === "gemini"
               ? useGeminiCommonConfigFlag
               : undefined,
@@ -2886,8 +2883,6 @@ function ProviderFormFull({
                 isProxyTakeover={isProxyTakeover}
                 onAuthChange={setCodexAuth}
                 onConfigChange={handleCodexConfigChange}
-                useCommonConfig={useCodexCommonConfigFlag}
-                onCommonConfigToggle={handleCodexCommonConfigToggle}
                 commonConfigSnippet={codexCommonConfigSnippet}
                 onCommonConfigSnippetChange={
                   handleCodexCommonConfigSnippetChange
