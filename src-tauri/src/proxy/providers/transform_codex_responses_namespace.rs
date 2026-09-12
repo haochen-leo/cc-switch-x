@@ -30,10 +30,13 @@
 
 use std::collections::HashMap;
 
+use bytes::Bytes;
+use futures::stream::{Stream, StreamExt};
 use serde_json::{json, Value};
 
 use super::transform_codex_chat::flatten_namespace_tool_name;
 use crate::proxy::error::ProxyError;
+use crate::proxy::sse::{append_utf8_safe, strip_sse_field, take_sse_block};
 
 /// Reverse map entry: a flattened tool name resolves back to its original
 /// namespace and bare child name.
@@ -304,6 +307,86 @@ pub(crate) fn restore_sse_event_namespaces(
         return false;
     }
     restore_value(event, map)
+}
+
+/// Wrap a native Responses SSE stream and restore flattened function-call names.
+pub(crate) fn create_namespace_restore_sse_stream<E>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+    map: HashMap<String, NamespacedName>,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send
+where
+    E: std::error::Error + Send + 'static,
+{
+    async_stream::stream! {
+        let mut buffer = String::new();
+        let mut utf8_remainder: Vec<u8> = Vec::new();
+        tokio::pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
+                    while let Some(block) = take_sse_block(&mut buffer) {
+                        if !block.trim().is_empty() {
+                            yield Ok(restore_sse_block(&block, &map));
+                        }
+                    }
+                }
+                Err(error) => {
+                    yield Err(std::io::Error::other(error.to_string()));
+                    return;
+                }
+            }
+        }
+
+        if !utf8_remainder.is_empty() {
+            buffer.push_str(&String::from_utf8_lossy(&utf8_remainder));
+        }
+        let tail = std::mem::take(&mut buffer);
+        if !tail.trim().is_empty() {
+            yield Ok(restore_sse_block(&tail, &map));
+        }
+    }
+}
+
+fn restore_sse_block(block: &str, map: &HashMap<String, NamespacedName>) -> Bytes {
+    let mut event_name: Option<&str> = None;
+    let mut data_parts = Vec::new();
+    for line in block.lines() {
+        if let Some(event) = strip_sse_field(line, "event") {
+            event_name = Some(event.trim());
+        }
+        if let Some(data) = strip_sse_field(line, "data") {
+            data_parts.push(data);
+        }
+    }
+    if data_parts.is_empty() {
+        return Bytes::from(format!("{block}\n\n"));
+    }
+
+    let data = data_parts.join("\n");
+    if data.trim() == "[DONE]" {
+        return Bytes::from(format!("{block}\n\n"));
+    }
+    let mut event: Value = match serde_json::from_str(&data) {
+        Ok(value) => value,
+        Err(_) => return Bytes::from(format!("{block}\n\n")),
+    };
+    if !restore_sse_event_namespaces(&mut event, map) {
+        return Bytes::from(format!("{block}\n\n"));
+    }
+
+    let restored = serde_json::to_string(&event).unwrap_or(data);
+    let mut output = String::new();
+    if let Some(name) = event_name {
+        output.push_str("event: ");
+        output.push_str(name);
+        output.push('\n');
+    }
+    output.push_str("data: ");
+    output.push_str(&restored);
+    output.push_str("\n\n");
+    Bytes::from(output)
 }
 
 fn namespace_children(tool: &Value) -> Vec<Value> {
