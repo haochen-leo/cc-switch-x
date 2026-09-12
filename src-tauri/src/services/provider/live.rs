@@ -540,6 +540,16 @@ pub(crate) fn provider_uses_common_config(
     provider: &Provider,
     snippet: Option<&str>,
 ) -> bool {
+    if matches!(app_type, AppType::Codex) {
+        // 设计取舍：Codex 的 config.toml 配置项复杂且会持续由 Codex 自身更新，
+        // 若允许每个供应商各自维护一份通用配置，切换时必须长期处理多份配置的
+        // 合并、剥离、回写和漂移。这里明确采用单一所有权：codex-official 保存
+        // 唯一通用配置，其它 Codex 供应商只保存认证和路由。因此 Codex 不再遵循
+        // 历史 common_config_enabled 开关；Claude 等其它应用继续使用下方原有语义。
+        let is_owner = provider.id == crate::database::CODEX_OFFICIAL_PROVIDER_ID;
+        return !is_owner && snippet.is_some_and(|value| !value.trim().is_empty());
+    }
+
     match provider
         .meta
         .as_ref()
@@ -675,7 +685,7 @@ pub(crate) fn build_effective_settings_with_common_config(
     app_type: &AppType,
     provider: &Provider,
 ) -> Result<Value, AppError> {
-    let snippet = db.get_config_snippet(app_type.as_str())?;
+    let snippet = common_config_snippet(db, app_type)?;
     let mut effective_settings = provider.settings_config.clone();
 
     if provider_uses_common_config(app_type, provider, snippet.as_deref()) {
@@ -699,6 +709,28 @@ pub(crate) fn build_effective_settings_with_common_config(
     }
 
     Ok(effective_settings)
+}
+
+pub(crate) fn common_config_snippet(
+    db: &Database,
+    app_type: &AppType,
+) -> Result<Option<String>, AppError> {
+    if matches!(app_type, AppType::Codex) {
+        return Ok(db
+            .get_provider_by_id(
+                crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                AppType::Codex.as_str(),
+            )?
+            .and_then(|provider| {
+                provider
+                    .settings_config
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }));
+    }
+
+    db.get_config_snippet(app_type.as_str())
 }
 
 pub(crate) fn write_live_with_common_config_for_state(
@@ -946,7 +978,7 @@ pub(crate) fn strip_common_config_from_live_settings(
     provider: &Provider,
     live_settings: Value,
 ) -> Value {
-    let snippet = match db.get_config_snippet(app_type.as_str()) {
+    let snippet = match common_config_snippet(db, app_type) {
         Ok(snippet) => snippet,
         Err(err) => {
             log::warn!(
@@ -1168,6 +1200,10 @@ pub(crate) fn normalize_provider_common_config_for_storage(
     app_type: &AppType,
     provider: &mut Provider,
 ) -> Result<(), AppError> {
+    if matches!(app_type, AppType::Codex) {
+        return Ok(());
+    }
+
     let uses_common_config = provider
         .meta
         .as_ref()
@@ -1178,7 +1214,7 @@ pub(crate) fn normalize_provider_common_config_for_storage(
         return Ok(());
     }
 
-    let Some(snippet) = db.get_config_snippet(app_type.as_str())? else {
+    let Some(snippet) = common_config_snippet(db, app_type)? else {
         return Ok(());
     };
 
@@ -1965,6 +2001,15 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         .to_string(),
     );
 
+    // Codex 导入也必须立即落成统一所有权：Official 保存通用部分，default 只保存
+    // 认证、端点和模型路由。不能依赖一次性 V1，因为用户可能在 V1 完成后
+    // 删除所有自定义卡并再次手动导入。
+    super::ProviderService::normalize_codex_config_ownership_for_storage(
+        state.db.as_ref(),
+        &app_type,
+        &mut provider,
+    )?;
+
     state.db.save_provider(app_type.as_str(), &provider)?;
     state
         .db
@@ -1972,8 +2017,7 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
     crate::settings::set_current_provider(&app_type, Some(provider.id.as_str()))?;
 
     // 初次导入已有配置时随手补出官方入口，对齐其它应用"首启动 = 导入 default
-    // + 播种官方条目"的观感。grokbuild 种子晚于 `official_providers_seeded`
-    // flag 引入，存量库的主播种不会再跑，只能挂在导入动作上补。
+    // + 播种官方条目"的观感；启动扫描也会兜底补齐，这里让本次导入立即可见。
     // 只在导入成功时执行；live 完全不可导入（文件缺失/语法错误/残缺配置）
     // 不会到达这里。失败只 warn。
     if matches!(app_type, AppType::GrokBuild) {

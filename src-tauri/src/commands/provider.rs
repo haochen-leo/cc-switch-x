@@ -190,6 +190,12 @@ fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result
     let imported = ProviderService::import_default_config(state, app_type.clone())?;
 
     if imported {
+        // Codex 的导入函数已经把完整 Live 按统一所有权拆成
+        // Official 通用配置 + default 供应商差量，不再写入旧 snippet。
+        if matches!(app_type, AppType::Codex) {
+            return Ok(true);
+        }
+
         // Extract common config snippet (mirrors old startup logic in lib.rs)
         if state
             .db
