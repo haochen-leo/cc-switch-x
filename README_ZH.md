@@ -41,7 +41,7 @@ CC Switch X 面向需要在多个官方及第三方模型供应商之间稳定�
 
 ## 基于 CC Switch
 
-[完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v0.1.0-beta.3-zh.md)
+[完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v0.1.0-beta.4-zh.md)
 
 CC Switch X 继承上游的完整桌面管理能力，包括九类 AI 工具的供应商与配置管理、MCP / Prompts / Skills、托盘切换、用量统计、会话管理、云同步、导入导出、备份和跨平台支持。通用功能请参考[上游项目](https://github.com/farion1231/cc-switch)，具体使用方法见[用户手册](docs/user-manual/README.md)。
 
