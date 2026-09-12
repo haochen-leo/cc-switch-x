@@ -696,27 +696,24 @@ impl Database {
 
     /// 启动时调用：补齐缺失的官方预设供应商（Claude / Codex / Gemini）。
     ///
-    /// 使用 settings flag `official_providers_seeded` 保证每个数据库只执行一次：
-    /// - 全新用户：seed 三条官方预设
-    /// - 老用户升级：同样会触发一次（flag 不存在），追加到末尾，不影响已有排序
-    /// - 用户删除 seed 后：不再重建（flag 已为 true），尊重用户意图
+    /// 首次 seed 保持历史语义；之后只补回 Codex Official，作为 Codex 通用配置
+    /// 固定 owner 的缺失修复。其它官方入口仍尊重既有 flag 行为。
     ///
     /// 与 `Database::save_provider` 的 UPSERT 语义配合，即使被意外重复调用
     /// 也不会覆盖用户当前激活的供应商（is_current 字段会被保留）。
     pub fn init_default_official_providers(&self) -> Result<usize, AppError> {
-        use crate::database::dao::providers_seed::OFFICIAL_SEEDS;
-
-        if self
-            .get_bool_flag("official_providers_seeded")
-            .unwrap_or(false)
-        {
-            return Ok(0);
-        }
+        use crate::database::dao::providers_seed::{CODEX_OFFICIAL_PROVIDER_ID, OFFICIAL_SEEDS};
 
         let mut inserted = 0_usize;
         let now_ms = chrono::Utc::now().timestamp_millis();
+        let initial_seed_needed = !self
+            .get_bool_flag("official_providers_seeded")
+            .unwrap_or(false);
 
         for seed in OFFICIAL_SEEDS {
+            if !initial_seed_needed && seed.id != CODEX_OFFICIAL_PROVIDER_ID {
+                continue;
+            }
             let app_type_str = seed.app_type.as_str();
 
             // 若该 id 已存在（极端情况：用户曾手动用过同 id），跳过
@@ -752,8 +749,9 @@ impl Database {
             );
         }
 
-        // 即使 inserted=0（例如用户手动创建过同 id）也设置 flag 防止反复检查
-        self.set_setting("official_providers_seeded", "true")?;
+        if initial_seed_needed {
+            self.set_setting("official_providers_seeded", "true")?;
+        }
 
         Ok(inserted)
     }
@@ -905,6 +903,45 @@ mod ensure_official_seed_tests {
             .expect("Codex official restored");
         assert_eq!(provider.category.as_deref(), Some("official"));
         assert_eq!(provider.settings_config["auth"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn startup_seed_scan_recreates_missing_codex_official_without_overwriting_existing() {
+        let db = Database::memory().expect("memory db");
+        db.init_default_official_providers().expect("initial seed");
+
+        let mut grokbuild = db
+            .get_provider_by_id(GROKBUILD_OFFICIAL_PROVIDER_ID, AppType::GrokBuild.as_str())
+            .expect("query GrokBuild")
+            .expect("GrokBuild official");
+        grokbuild.name = "My GrokBuild".to_string();
+        db.save_provider(AppType::GrokBuild.as_str(), &grokbuild)
+            .expect("customize GrokBuild official");
+
+        {
+            let conn = db.conn.lock().expect("lock db");
+            conn.execute(
+                "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
+                rusqlite::params![CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str()],
+            )
+            .expect("simulate historical Codex official deletion");
+        }
+
+        let inserted = db
+            .init_default_official_providers()
+            .expect("startup repair scan");
+        assert_eq!(inserted, 1);
+        assert!(db
+            .get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())
+            .expect("query Codex again")
+            .is_some());
+        assert_eq!(
+            db.get_provider_by_id(GROKBUILD_OFFICIAL_PROVIDER_ID, AppType::GrokBuild.as_str(),)
+                .expect("query GrokBuild again")
+                .expect("GrokBuild remains")
+                .name,
+            "My GrokBuild"
+        );
     }
 
     #[test]
