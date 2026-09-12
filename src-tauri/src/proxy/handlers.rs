@@ -189,28 +189,6 @@ impl CodexOfficialRawRelayBase {
     }
 }
 
-pub async fn handle_codex_image_generations(
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    handle_codex_official_raw_relay(
-        request,
-        CodexOfficialRawRelayBase::CodexBackend,
-        "images/generations",
-    )
-    .await
-}
-
-pub async fn handle_codex_image_edits(
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    handle_codex_official_raw_relay(
-        request,
-        CodexOfficialRawRelayBase::CodexBackend,
-        "images/edits",
-    )
-    .await
-}
-
 pub async fn handle_codex_memories_trace_summarize(
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
