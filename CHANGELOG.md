@@ -9,6 +9,45 @@ Entries at 3.20.1 and below describe the upstream CC Switch baseline that CC
 Switch X is built from. CC Switch X uses an independent version line starting
 at 0.1.0-beta.1.
 
+## [0.1.0-beta.4] - 2026-09-13
+
+This beta unifies Codex common configuration under the official provider,
+extends proxy coverage to Codex image endpoints, and syncs the upstream CC
+Switch baseline through the v3.20.2 line.
+
+### Added
+
+- **Unified Codex Common Config**: Codex common settings now live under the
+  official provider — captured live at startup with an anti-poisoning guard,
+  shown read-only in the UI, and non-database `mcp_servers` entries survive
+  live rewrites.
+- **Codex Image Endpoints**: The proxy now covers the Codex image
+  generations and image edits endpoints.
+- **Provider Presets**: New built-in presets for SoleAPI (nine apps),
+  9527CODE, AICodeWith, QwenCloud, Tencent TokenHub / Token Plan, and
+  extended PPIO Pi presets (upstream sync).
+- **Pricing Table**: September 2026 vendor price refresh, including GPT-6
+  Astra, GLM-5.3 / GLM-5.3 Flash, Gemini 3.8 Flash, and Claude Fable 5.1 /
+  Mythos 5.1 entries (upstream sync).
+
+### Fixed
+
+- **Aggregation Safety**: Provider switching is disabled while aggregation
+  is active, built-in official seed providers can no longer be deleted, and
+  Codex `/v1/models` probes are relayed to the official backend during
+  takeover.
+- **Replay Reconciliation**: Sync replay now reconciles with terminal
+  states, and duplicate Mac raw-relay image routes are dropped in favor of
+  upstream standalone passthrough.
+- **Upstream Fixes**: GPT-6 OAuth client identity alignment, parallel tool
+  calls for Codex OAuth, xAI/Grok native Responses sanitization, clearer
+  updater failure reasons, and assorted i18n/accessibility fixes.
+
+### Changed
+
+- Syncs the upstream CC Switch baseline through the v3.20.2 line, including
+  preset, pricing, and proxy compatibility updates.
+
 ## [0.1.0-beta.3] - 2026-09-07
 
 This beta refreshes the Codex bridge layer with broader replay pairing,

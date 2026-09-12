@@ -38,7 +38,7 @@ CC Switch X は、複数の公式・サードパーティモデルプロバイ�
 
 ## CC Switch を基盤として
 
-[完全な更新履歴](CHANGELOG.md) | [リリースノート](docs/release-notes/v0.1.0-beta.3-ja.md)
+[完全な更新履歴](CHANGELOG.md) | [リリースノート](docs/release-notes/v0.1.0-beta.4-ja.md)
 
 CC Switch X は、9 種類の AI ツール向けプロバイダ・設定管理、MCP / Prompts / Skills、トレイ切り替え、使用量追跡、セッション管理、クラウド同期、インポート・エクスポート、バックアップ、クロスプラットフォーム対応など、上流の幅広いデスクトップ管理機能を継承しています。一般機能は[上流プロジェクト](https://github.com/farion1231/cc-switch)、利用方法は[ユーザーマニュアル](docs/user-manual/en/README.md)を参照してください。
 
