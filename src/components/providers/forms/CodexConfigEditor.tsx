@@ -12,6 +12,8 @@ interface CodexConfigEditorProps {
 
   showRemoteCompaction?: boolean;
 
+  showCommonConfigPreview?: boolean;
+
   isProxyTakeover?: boolean;
 
   onAuthChange: (value: string) => void;
@@ -42,6 +44,7 @@ const CodexConfigEditor: React.FC<CodexConfigEditorProps> = ({
   configValue,
   providerName,
   showRemoteCompaction,
+  showCommonConfigPreview = true,
   isProxyTakeover = false,
   onAuthChange,
   onConfigChange,
@@ -88,6 +91,8 @@ const CodexConfigEditor: React.FC<CodexConfigEditorProps> = ({
         onChange={onConfigChange}
         providerName={providerName}
         showRemoteCompaction={showRemoteCompaction}
+        showCommonConfigPreview={showCommonConfigPreview}
+        commonConfigSnippet={commonConfigSnippet}
         onEditCommonConfig={() => setIsCommonConfigModalOpen(true)}
         commonConfigError={commonConfigError}
         configError={configError}
