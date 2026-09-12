@@ -321,35 +321,6 @@ impl ProxyServer {
             // OpenAI Models API (Codex CLI reachability check)
             .route("/models", get(handlers::handle_models))
             .route("/v1/models", get(handlers::handle_models))
-            // Codex official auxiliary endpoints. These are not text-generation
-            // routes and must not enter the Responses/Chat provider conversion
-            // chain.
-            .route(
-                "/images/generations",
-                post(handlers::handle_codex_image_generations),
-            )
-            .route(
-                "/v1/images/generations",
-                post(handlers::handle_codex_image_generations),
-            )
-            .route(
-                "/v1/v1/images/generations",
-                post(handlers::handle_codex_image_generations),
-            )
-            .route(
-                "/codex/v1/images/generations",
-                post(handlers::handle_codex_image_generations),
-            )
-            .route("/images/edits", post(handlers::handle_codex_image_edits))
-            .route("/v1/images/edits", post(handlers::handle_codex_image_edits))
-            .route(
-                "/v1/v1/images/edits",
-                post(handlers::handle_codex_image_edits),
-            )
-            .route(
-                "/codex/v1/images/edits",
-                post(handlers::handle_codex_image_edits),
-            )
             .route(
                 "/memories/trace_summarize",
                 post(handlers::handle_codex_memories_trace_summarize),
