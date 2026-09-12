@@ -1746,7 +1746,7 @@ mod tests {
             ],
         );
 
-        let parsed = parse_codex_file(&file, thread_id_from_filename(&file))?;
+        let parsed = parse_codex_file(&file, thread_id_from_filename(&file), &HashMap::new())?;
 
         // 恢复会话没有显式 parent，不应因 ID 不一致被拒
         assert!(
@@ -1812,7 +1812,7 @@ mod tests {
             ],
         );
 
-        let parsed = parse_codex_file(&file, thread_id_from_filename(&file))?;
+        let parsed = parse_codex_file(&file, thread_id_from_filename(&file), &HashMap::new())?;
         assert!(matches!(parsed.parent, ParentResolution::Deferred(_)));
         Ok(())
     }
