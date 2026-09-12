@@ -99,6 +99,8 @@ interface CodexConfigSectionProps {
   onChange: (value: string) => void;
   providerName?: string;
   showRemoteCompaction?: boolean;
+  showCommonConfigPreview?: boolean;
+  commonConfigSnippet: string;
   onEditCommonConfig: () => void;
   commonConfigError?: string;
   configError?: string;
@@ -113,6 +115,8 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   onChange,
   providerName,
   showRemoteCompaction = true,
+  showCommonConfigPreview = true,
+  commonConfigSnippet,
   onEditCommonConfig,
   commonConfigError,
   configError,
@@ -265,23 +269,7 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
               {t("codexConfig.enableRemoteCompaction")}
             </label>
           )}
-
-          <span className="text-sm text-muted-foreground">
-            {t("codexConfig.globalConfigAlwaysOn", {
-              defaultValue: "通用配置由 OpenAI Official 统一管理",
-            })}
-          </span>
         </div>
-      </div>
-
-      <div className="flex items-center justify-end">
-        <button
-          type="button"
-          onClick={onEditCommonConfig}
-          className="text-xs text-blue-500 dark:text-blue-400 hover:underline"
-        >
-          {t("codexConfig.editCommonConfig")}
-        </button>
       </div>
 
       {commonConfigError && (
@@ -316,6 +304,7 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
       </div>
 
       <JsonEditor
+        ariaLabel={t("codexConfig.configToml")}
         value={localValue}
         onChange={handleLocalChange}
         placeholder=""
@@ -337,6 +326,40 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
               : "codexConfig.configTomlHint",
           )}
         </p>
+      )}
+
+      {showCommonConfigPreview && (
+        <div className="space-y-2 border-t border-border pt-4">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {t("codexConfig.commonConfigPreviewTitle")}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t("codexConfig.commonConfigPreviewHint")}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onEditCommonConfig}
+              className="shrink-0 text-xs text-blue-500 dark:text-blue-400 hover:underline"
+            >
+              {t("codexConfig.editCommonConfig")}
+            </button>
+          </div>
+
+          <JsonEditor
+            ariaLabel={t("codexConfig.commonConfigPreviewTitle")}
+            value={commonConfigSnippet}
+            onChange={() => {}}
+            placeholder={t("codexConfig.commonConfigEmpty")}
+            darkMode={isDarkMode}
+            rows={5}
+            showValidation={false}
+            language="javascript"
+            readOnly
+          />
+        </div>
       )}
     </div>
   );
