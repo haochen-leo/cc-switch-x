@@ -20,10 +20,6 @@ interface CodexConfigEditorProps {
 
   onAuthBlur?: () => void;
 
-  useCommonConfig: boolean;
-
-  onCommonConfigToggle: (checked: boolean) => void | Promise<void>;
-
   commonConfigSnippet: string;
 
   onCommonConfigSnippetChange: (value: string) => boolean | Promise<boolean>;
@@ -50,8 +46,6 @@ const CodexConfigEditor: React.FC<CodexConfigEditorProps> = ({
   onAuthChange,
   onConfigChange,
   onAuthBlur,
-  useCommonConfig,
-  onCommonConfigToggle,
   commonConfigSnippet,
   onCommonConfigSnippetChange,
   onCommonConfigErrorClear,
@@ -94,8 +88,6 @@ const CodexConfigEditor: React.FC<CodexConfigEditorProps> = ({
         onChange={onConfigChange}
         providerName={providerName}
         showRemoteCompaction={showRemoteCompaction}
-        useCommonConfig={useCommonConfig}
-        onCommonConfigToggle={onCommonConfigToggle}
         onEditCommonConfig={() => setIsCommonConfigModalOpen(true)}
         commonConfigError={commonConfigError}
         configError={configError}

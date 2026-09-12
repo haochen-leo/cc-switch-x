@@ -45,8 +45,8 @@ pub(crate) use live::{
 
 // Internal re-exports
 use live::{
-    remove_hermes_provider_from_live, remove_openclaw_provider_from_live,
-    remove_opencode_provider_from_live, write_gemini_live,
+    remove_common_config_from_settings, remove_hermes_provider_from_live,
+    remove_openclaw_provider_from_live, remove_opencode_provider_from_live, write_gemini_live,
 };
 use usage::validate_usage_script;
 
@@ -1880,6 +1880,405 @@ command = "legacy-cmd"
         );
     }
 
+    #[test]
+    fn codex_official_config_setter_strips_provider_specific_fields() {
+        let db = Database::memory().expect("create memory db");
+
+        ProviderService::set_codex_official_config(
+            &db,
+            r#"model_provider = "provider-a"
+model = "model-a"
+experimental_bearer_token = "secret"
+
+[model_providers.provider-a]
+base_url = "https://provider.example/v1"
+wire_api = "responses"
+
+[mcp_servers.private]
+command = "private-command"
+
+[plugins.keep]
+enabled = true
+"#,
+        )
+        .expect("save Codex Official config");
+        let codex = ProviderService::get_codex_official_config(&db)
+            .expect("read Codex Official")
+            .expect("Codex Official exists");
+        assert!(codex.contains("[plugins.keep]"));
+        assert!(!codex.contains("model_provider"));
+        assert!(!codex.contains("provider.example"));
+        assert!(!codex.contains("experimental_bearer_token"));
+        assert!(!codex.contains("mcp_servers"));
+    }
+
+    #[test]
+    fn codex_storage_keeps_only_auth_routing_and_catalog_in_provider() {
+        let db = Database::memory().expect("create memory db");
+        let mut provider = Provider::with_id(
+            "provider-a".to_string(),
+            "Provider A".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "sk-provider" },
+                "config": r#"model_provider = "provider-a"
+model = "model-a"
+
+[model_providers.provider-a]
+name = "Provider A"
+base_url = "https://api.example/v1"
+wire_api = "responses"
+
+[plugins.example]
+enabled = true
+
+[projects."/tmp/project"]
+trust_level = "trusted"
+
+[mcp_servers.local]
+command = "local-mcp"
+"#,
+                "modelCatalog": { "models": [{ "model": "model-a" }] }
+            }),
+            None,
+        );
+
+        ProviderService::normalize_codex_config_ownership_for_storage(
+            &db,
+            &AppType::Codex,
+            &mut provider,
+        )
+        .expect("normalize Codex ownership");
+
+        let stored_config = provider.settings_config["config"]
+            .as_str()
+            .expect("provider config");
+        assert!(stored_config.contains("model_provider = \"provider-a\""));
+        assert!(stored_config.contains("[model_providers.provider-a]"));
+        assert!(!stored_config.contains("[plugins.example]"));
+        assert!(!stored_config.contains("[projects."));
+        assert!(!stored_config.contains("mcp_servers"));
+        assert_eq!(
+            provider.settings_config["auth"]["OPENAI_API_KEY"],
+            json!("sk-provider")
+        );
+        assert_eq!(
+            provider.settings_config["modelCatalog"]["models"][0]["model"],
+            json!("model-a")
+        );
+        assert_eq!(
+            provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.common_config_enabled),
+            Some(true)
+        );
+
+        let global = ProviderService::get_codex_official_config(&db)
+            .expect("read Official config")
+            .expect("Official config exists");
+        assert!(global.contains("[plugins.example]"));
+        assert!(global.contains("[projects."));
+        assert!(!global.contains("model_provider"));
+        assert!(!global.contains("model_providers"));
+        assert!(!global.contains("mcp_servers"));
+
+        let effective =
+            build_effective_settings_with_common_config(&db, &AppType::Codex, &provider)
+                .expect("build effective config");
+        let effective_config = effective["config"].as_str().expect("effective config");
+        assert!(effective_config.contains("[model_providers.provider-a]"));
+        assert!(effective_config.contains("[plugins.example]"));
+        assert!(effective_config.contains("[projects."));
+    }
+
+    #[test]
+    fn codex_route_only_provider_update_does_not_clear_official_config() {
+        let db = Database::memory().expect("create memory db");
+        ProviderService::set_codex_official_config(&db, "[plugins.keep]\nenabled = true\n")
+            .expect("seed Official config");
+        let official_before = ProviderService::get_codex_official_config(&db)
+            .expect("read Official before route-only update");
+
+        let mut provider = Provider::with_id(
+            "provider-a".to_string(),
+            "Provider A".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "sk-provider" },
+                "config": r#"model_provider = "provider-a"
+[model_providers.provider-a]
+name = "Provider A"
+base_url = "https://api.example/v1"
+wire_api = "responses"
+"#,
+                "modelCatalog": { "models": [{ "model": "model-b" }] }
+            }),
+            None,
+        );
+        provider.meta = Some(crate::provider::ProviderMeta {
+            common_config_enabled: Some(true),
+            ..Default::default()
+        });
+
+        ProviderService::normalize_codex_config_ownership_for_storage(
+            &db,
+            &AppType::Codex,
+            &mut provider,
+        )
+        .expect("normalize Codex ownership");
+
+        assert_eq!(
+            ProviderService::get_codex_official_config(&db).expect("read Official config"),
+            official_before
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn codex_upgrade_bootstraps_official_config_from_current_live() {
+        with_test_home(|state, _| {
+            state
+                .db
+                .ensure_official_seed_by_id(
+                    crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                    AppType::Codex,
+                )
+                .expect("seed Official");
+            let mut official = state
+                .db
+                .get_provider_by_id(
+                    crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                    AppType::Codex.as_str(),
+                )
+                .expect("read Official")
+                .expect("Official exists");
+            official.meta = managed_codex_provider(
+                crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                "managed-account-a",
+            )
+            .meta;
+            state
+                .db
+                .save_provider(AppType::Codex.as_str(), &official)
+                .expect("bind managed OAuth account");
+
+            let mut provider = Provider::with_id(
+                "provider-a".to_string(),
+                "Provider A".to_string(),
+                json!({
+                    "auth": { "OPENAI_API_KEY": "sk-provider" },
+                    "config": r#"model_provider = "provider-a"
+[model_providers.provider-a]
+base_url = "https://api.example/v1"
+
+[plugins.stale]
+enabled = true
+"#
+                }),
+                None,
+            );
+            provider.category = Some("custom".to_string());
+            state
+                .db
+                .save_provider(AppType::Codex.as_str(), &provider)
+                .expect("save historical provider");
+            state
+                .db
+                .set_current_provider(AppType::Codex.as_str(), &provider.id)
+                .expect("set current provider");
+            crate::settings::set_current_provider(&AppType::Codex, Some(&provider.id))
+                .expect("set local current provider");
+            state
+                .db
+                .set_config_snippet(
+                    AppType::Codex.as_str(),
+                    Some("[plugins.legacy]\nenabled = true\n".to_string()),
+                )
+                .expect("seed legacy common config");
+
+            let config_path = crate::codex_config::get_codex_config_path();
+            fs::create_dir_all(config_path.parent().expect("Codex config parent"))
+                .expect("create Codex dir");
+            fs::write(
+                &config_path,
+                r#"model_provider = "provider-a"
+model = "model-a"
+
+[model_providers.provider-a]
+base_url = "https://api.example/v1"
+wire_api = "responses"
+
+[plugins.live]
+enabled = true
+
+[projects."/tmp/current"]
+trust_level = "trusted"
+"#,
+            )
+            .expect("seed current live config");
+
+            ProviderService::migrate_codex_config_to_official(state)
+                .expect("migrate Codex config ownership");
+
+            let official_config = ProviderService::get_codex_official_config(state.db.as_ref())
+                .expect("read Official config")
+                .expect("Official config exists");
+            assert!(official_config.contains("[plugins.live]"));
+            assert!(official_config.contains("[projects.\"/tmp/current\"]"));
+            assert!(!official_config.contains("[plugins.legacy]"));
+            assert!(!official_config.contains("model_provider"));
+            assert!(!official_config.contains("api.example"));
+            let migrated_official = state
+                .db
+                .get_provider_by_id(
+                    crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                    AppType::Codex.as_str(),
+                )
+                .expect("read migrated Official")
+                .expect("migrated Official exists");
+            assert_eq!(
+                ProviderService::managed_codex_oauth_account_id(&migrated_official).as_deref(),
+                Some("managed-account-a")
+            );
+
+            let stored = state
+                .db
+                .get_provider_by_id(&provider.id, AppType::Codex.as_str())
+                .expect("read normalized provider")
+                .expect("provider exists");
+            let stored_config = stored.settings_config["config"]
+                .as_str()
+                .expect("provider config");
+            assert!(stored_config.contains("model_provider = \"provider-a\""));
+            assert!(!stored_config.contains("[plugins.stale]"));
+            assert!(state
+                .db
+                .get_bool_flag("codex_official_config_owner_v1")
+                .expect("read migration flag"));
+            assert!(state
+                .db
+                .get_config_snippet(AppType::Codex.as_str())
+                .expect("read retired legacy config")
+                .is_none());
+            assert!(state
+                .db
+                .get_setting("codex_official_config_owner_v1_legacy_common")
+                .expect("read retired archive setting")
+                .is_none());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn codex_upgrade_ignores_restore_backup_and_uses_only_current_live() {
+        with_test_home(|state, _| {
+            state
+                .db
+                .ensure_official_seed_by_id(
+                    crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                    AppType::Codex,
+                )
+                .expect("seed Official");
+
+            let config_path = crate::codex_config::get_codex_config_path();
+            fs::create_dir_all(config_path.parent().expect("Codex config parent"))
+                .expect("create Codex dir");
+            fs::write(
+                &config_path,
+                r#"model_provider = "cc-switch-proxy"
+[model_providers.cc-switch-proxy]
+base_url = "http://127.0.0.1:15721/v1"
+"#,
+            )
+            .expect("seed proxy-owned live");
+            futures::executor::block_on(
+                state.db.save_live_backup(
+                    AppType::Codex.as_str(),
+                    &json!({
+                        "auth": {},
+                        "config": "[plugins.before_takeover]\nenabled = true\n"
+                    })
+                    .to_string(),
+                ),
+            )
+            .expect("seed restore backup");
+
+            ProviderService::migrate_codex_config_to_official(state)
+                .expect("migrate Codex config ownership");
+
+            let official_config = ProviderService::get_codex_official_config(state.db.as_ref())
+                .expect("read Official config")
+                .expect("Official config exists");
+            assert!(official_config.is_empty());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn switching_to_official_captures_live_common_config_into_official() {
+        with_test_home(|state, _| {
+            crate::settings::reload_settings().expect("reload settings");
+            state
+                .db
+                .ensure_official_seed_by_id(
+                    crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                    AppType::Codex,
+                )
+                .expect("seed Official");
+            let source = Provider::with_id(
+                "provider-a".to_string(),
+                "Provider A".to_string(),
+                codex_settings("https://api.example/v1", "sk-provider"),
+                None,
+            );
+            state
+                .db
+                .save_provider(AppType::Codex.as_str(), &source)
+                .expect("save source provider");
+            state
+                .db
+                .set_current_provider(AppType::Codex.as_str(), &source.id)
+                .expect("set database current");
+            crate::settings::set_current_provider(&AppType::Codex, Some(&source.id))
+                .expect("set local current");
+
+            let config_path = crate::codex_config::get_codex_config_path();
+            fs::create_dir_all(config_path.parent().expect("Codex config parent"))
+                .expect("create Codex dir");
+            fs::write(
+                &config_path,
+                r#"model_provider = "provider-a"
+[model_providers.provider-a]
+base_url = "https://api.example/v1"
+wire_api = "responses"
+
+[plugins.from_live]
+enabled = true
+"#,
+            )
+            .expect("seed live config");
+            write_json_file(
+                &crate::codex_config::get_codex_auth_path(),
+                &json!({ "OPENAI_API_KEY": "sk-provider" }),
+            )
+            .expect("seed live auth");
+
+            ProviderService::switch(
+                state,
+                AppType::Codex,
+                crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+            )
+            .expect("switch to Official");
+
+            let official_config = ProviderService::get_codex_official_config(state.db.as_ref())
+                .expect("read Official config")
+                .expect("Official config exists");
+            assert!(official_config.contains("[plugins.from_live]"));
+            assert!(!official_config.contains("api.example"));
+            let written_live = fs::read_to_string(config_path).expect("read switched live config");
+            assert!(written_live.contains("[plugins.from_live]"));
+        });
+    }
+
     #[tokio::test]
     #[serial]
     async fn update_current_claude_provider_syncs_live_when_proxy_takeover_detected_without_backup()
@@ -2468,7 +2867,15 @@ requires_openai_auth = true
     fn add_first_managed_codex_with_missing_account_leaves_no_provider_or_live_state() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
-            let provider = managed_codex_provider("managed-missing", "acct-missing");
+            ProviderService::set_codex_official_config(
+                state.db.as_ref(),
+                "[plugins.stable]\nenabled = true\n",
+            )
+            .expect("seed stable Official config");
+            let mut provider = managed_codex_provider("managed-missing", "acct-missing");
+            provider.settings_config["config"] = Value::String(
+                "model = \"gpt-5\"\n[plugins.attempted]\nenabled = true\n".to_string(),
+            );
             let live_before = crate::codex_config::CodexLiveStateSnapshot::capture()
                 .expect("capture empty Codex live state");
 
@@ -2495,6 +2902,14 @@ requires_openai_auth = true
                     .expect("capture Codex live after failed add"),
                 live_before,
                 "failed preflight must not mutate Codex live files"
+            );
+            let official = ProviderService::get_codex_official_config(state.db.as_ref())
+                .expect("read Official after failed add")
+                .expect("Official exists");
+            assert!(official.contains("[plugins.stable]"));
+            assert!(
+                !official.contains("plugins.attempted"),
+                "a failed provider save must roll back its attempted Official common config"
             );
         });
     }
@@ -4592,6 +5007,64 @@ impl ProviderService {
         }
     }
 
+    fn normalize_codex_config_ownership_for_storage(
+        db: &crate::database::Database,
+        app_type: &AppType,
+        provider: &mut Provider,
+    ) -> Result<(), AppError> {
+        if !matches!(app_type, AppType::Codex) {
+            return Ok(());
+        }
+
+        let common_config = Self::extract_codex_common_config(&provider.settings_config)?;
+        let is_config_owner = provider.id == crate::database::CODEX_OFFICIAL_PROVIDER_ID;
+
+        if is_config_owner {
+            if let Some(settings) = provider.settings_config.as_object_mut() {
+                settings.insert("config".to_string(), Value::String(common_config));
+            }
+        } else {
+            // 非 Official 卡提交的完整编辑态中若带有通用项，先更新 Codex 主配置；
+            // 已标准化的纯路由快照不会清空主配置。
+            if !common_config.trim().is_empty() && !provider.is_codex_aggregate() {
+                Self::set_codex_official_config(db, &common_config)?;
+            }
+            provider.settings_config = remove_common_config_from_settings(
+                app_type,
+                &provider.settings_config,
+                &common_config,
+            )?;
+        }
+        crate::codex_config::strip_codex_mcp_servers_from_settings(&mut provider.settings_config)?;
+        provider
+            .meta
+            .get_or_insert_with(Default::default)
+            .common_config_enabled = Some(true);
+        Ok(())
+    }
+
+    fn official_config_owner_snapshot(
+        db: &crate::database::Database,
+        app_type: &AppType,
+    ) -> Result<Option<Provider>, AppError> {
+        let official_id = match app_type {
+            AppType::Codex => crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+            _ => return Ok(None),
+        };
+        db.get_provider_by_id(official_id, app_type.as_str())
+    }
+
+    fn restore_official_config_owner_after_failed_save(
+        db: &crate::database::Database,
+        app_type: &AppType,
+        snapshot: Option<&Provider>,
+    ) -> Result<(), AppError> {
+        if let Some(snapshot) = snapshot {
+            db.save_provider(app_type.as_str(), snapshot)?;
+        }
+        Ok(())
+    }
+
     fn should_clear_usage_api_key_override(
         script_api_key: &str,
         current_credentials: &(String, String),
@@ -4664,6 +5137,31 @@ impl ProviderService {
         provider: Provider,
         add_to_live: bool,
     ) -> Result<bool, AppError> {
+        let official_snapshot = Self::official_config_owner_snapshot(state.db.as_ref(), &app_type)?;
+        let result = Self::add_inner(state, app_type.clone(), provider, add_to_live);
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if let Err(rollback_error) = Self::restore_official_config_owner_after_failed_save(
+                    state.db.as_ref(),
+                    &app_type,
+                    official_snapshot.as_ref(),
+                ) {
+                    return Err(AppError::Message(format!(
+                        "新增供应商失败: {error}; 恢复 Official 通用配置同时失败: {rollback_error}"
+                    )));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn add_inner(
+        state: &AppState,
+        app_type: AppType,
+        provider: Provider,
+        add_to_live: bool,
+    ) -> Result<bool, AppError> {
         if app_type == AppType::Pi {
             return pi::add(state, provider, add_to_live);
         }
@@ -4672,6 +5170,11 @@ impl ProviderService {
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
         Self::validate_provider_settings(&app_type, &provider)?;
+        Self::normalize_codex_config_ownership_for_storage(
+            state.db.as_ref(),
+            &app_type,
+            &mut provider,
+        )?;
         normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
         Self::normalize_usage_script_credential_overrides(&app_type, &mut provider);
         if app_type.is_additive_mode() {
@@ -4783,6 +5286,31 @@ impl ProviderService {
         original_id: Option<&str>,
         provider: Provider,
     ) -> Result<bool, AppError> {
+        let official_snapshot = Self::official_config_owner_snapshot(state.db.as_ref(), &app_type)?;
+        let result = Self::update_inner(state, app_type.clone(), original_id, provider);
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if let Err(rollback_error) = Self::restore_official_config_owner_after_failed_save(
+                    state.db.as_ref(),
+                    &app_type,
+                    official_snapshot.as_ref(),
+                ) {
+                    return Err(AppError::Message(format!(
+                        "更新供应商失败: {error}; 恢复 Official 通用配置同时失败: {rollback_error}"
+                    )));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn update_inner(
+        state: &AppState,
+        app_type: AppType,
+        original_id: Option<&str>,
+        provider: Provider,
+    ) -> Result<bool, AppError> {
         if app_type == AppType::Pi {
             return pi::update(state, original_id, provider);
         }
@@ -4790,6 +5318,11 @@ impl ProviderService {
         let mut provider = provider;
         let original_id = original_id.unwrap_or(provider.id.as_str()).to_string();
         let provider_id_changed = original_id != provider.id;
+        if provider_id_changed && !app_type.is_additive_mode() {
+            return Err(AppError::Message(
+                "Only additive-mode providers support changing provider key".to_string(),
+            ));
+        }
         // Serialize the read/decide/commit window for every Codex update. We do
         // not yet know whether the stored row is managed (the request may be an
         // unbind), so the existing row and effective current must both be read
@@ -4814,6 +5347,11 @@ impl ProviderService {
             }
         }
         Self::validate_provider_settings(&app_type, &provider)?;
+        Self::normalize_codex_config_ownership_for_storage(
+            state.db.as_ref(),
+            &app_type,
+            &mut provider,
+        )?;
         normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
         if matches!(app_type, AppType::Codex) && provider.category.as_deref() == Some("official") {
             crate::codex_config::strip_codex_unified_session_bucket_from_settings(
@@ -4823,12 +5361,6 @@ impl ProviderService {
         Self::normalize_usage_script_credential_overrides(&app_type, &mut provider);
 
         if provider_id_changed {
-            if !app_type.is_additive_mode() {
-                return Err(AppError::Message(
-                    "Only additive-mode providers support changing provider key".to_string(),
-                ));
-            }
-
             let Some(existing_provider) = existing_provider else {
                 return Err(AppError::Message(format!(
                     "Original provider '{}' does not exist in app '{}'",
@@ -5443,13 +5975,27 @@ impl ProviderService {
                                 &mut result,
                             );
 
-                            current_provider.settings_config =
-                                strip_common_config_from_live_settings(
-                                    state.db.as_ref(),
-                                    &app_type,
-                                    &current_provider,
-                                    live_config,
-                                );
+                            let current_is_config_owner = matches!(app_type, AppType::Codex)
+                                && current_provider.id
+                                    == crate::database::CODEX_OFFICIAL_PROVIDER_ID;
+                            if current_is_config_owner {
+                                // live 的通用部分已回写 Official；重新读取，避免
+                                // 随后的普通 backfill 用旧快照覆盖刚写入的主配置。
+                                if let Some(updated_official) = state
+                                    .db
+                                    .get_provider_by_id(&current_provider.id, app_type.as_str())?
+                                {
+                                    current_provider = updated_official;
+                                }
+                            } else {
+                                current_provider.settings_config =
+                                    strip_common_config_from_live_settings(
+                                        state.db.as_ref(),
+                                        &app_type,
+                                        &current_provider,
+                                        live_config,
+                                    );
+                            }
                             if let Err(e) =
                                 state.db.save_provider(app_type.as_str(), &current_provider)
                             {
@@ -5465,6 +6011,18 @@ impl ProviderService {
                 }
             }
         }
+
+        let refreshed_official = if matches!(app_type, AppType::Codex)
+            && provider.id == crate::database::CODEX_OFFICIAL_PROVIDER_ID
+        {
+            state.db.get_provider_by_id(
+                crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                app_type.as_str(),
+            )?
+        } else {
+            None
+        };
+        let provider = refreshed_official.as_ref().unwrap_or(provider);
 
         let target_managed_codex_account_id = Self::managed_codex_oauth_account_id(provider);
         let outgoing_managed_codex_account_id = current_managed_codex_account_id
@@ -5792,9 +6350,9 @@ impl ProviderService {
     /// fallback、`model_catalog_json`、`web_search = "disabled"` 哨兵——密钥与
     /// 注入产物不会进共享片段。Gemini 暂未纳入，如需支持应单独验证后再加。
     ///
-    /// 仅对**显式勾选"写入通用配置"**（`meta.common_config_enabled == Some(true)`）的
-    /// 供应商生效；用户**显式清空**过片段（`_cleared`）时跳过，避免把用户主动清掉的
-    /// 配置又塞回来。所有失败均为非致命，只记 warning，绝不阻断切换。
+    /// Codex 始终同步到固定的 OpenAI Official；其它进入本函数的应用保持旧 snippet
+    /// 语义，只在供应商显式勾选通用配置时同步。所有失败均为非致命，只记 warning，
+    /// 绝不阻断切换。
     fn sync_common_config_snippet_from_live(
         state: &AppState,
         app_type: &AppType,
@@ -5802,8 +6360,23 @@ impl ProviderService {
         live_config: &Value,
         result: &mut SwitchResult,
     ) {
-        // 作用域限定 Claude + Codex（见函数文档）。
         if !matches!(app_type, AppType::Claude | AppType::Codex) {
+            return;
+        }
+
+        if matches!(app_type, AppType::Codex) {
+            if let Err(err) =
+                Self::sync_codex_official_config_from_settings(state.db.as_ref(), live_config)
+            {
+                log::warn!(
+                    "Failed to persist {} Official config while switching '{}': {err}",
+                    app_type.as_str(),
+                    provider.id
+                );
+                result
+                    .warnings
+                    .push(format!("common_config_sync_failed:{}", provider.id));
+            }
             return;
         }
 
@@ -5817,7 +6390,7 @@ impl ProviderService {
         }
 
         match state.db.is_config_snippet_cleared(app_type.as_str()) {
-            Ok(true) => return, // 用户显式清空过通用配置，尊重其选择，不再自动塞回
+            Ok(true) => return,
             Ok(false) => {}
             Err(err) => {
                 log::warn!(
@@ -5843,7 +6416,6 @@ impl ProviderService {
             }
         };
 
-        // 未变化则跳过，避免无谓写库（不切 live 配置时这是常态路径）。
         let current = state
             .db
             .get_config_snippet(app_type.as_str())
@@ -5876,6 +6448,10 @@ impl ProviderService {
         state: &AppState,
         app_type: AppType,
     ) -> Result<String, AppError> {
+        if matches!(app_type, AppType::Codex) {
+            return Ok(Self::get_codex_official_config(state.db.as_ref())?.unwrap_or_default());
+        }
+
         // Get current provider
         let current_id = Self::current(state, app_type.clone())?;
         if current_id.is_empty() {
@@ -5890,7 +6466,7 @@ impl ProviderService {
         match app_type {
             AppType::Claude => Self::extract_claude_common_config(&provider.settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
-            AppType::Codex => Self::extract_codex_common_config(&provider.settings_config),
+            AppType::Codex => unreachable!("Codex returns its Official config above"),
             AppType::Gemini => Self::extract_gemini_common_config(&provider.settings_config),
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
@@ -5916,6 +6492,110 @@ impl ProviderService {
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
             AppType::Pi => Ok(String::new()),
         }
+    }
+
+    pub(crate) fn get_codex_official_config(
+        db: &crate::database::Database,
+    ) -> Result<Option<String>, AppError> {
+        live::common_config_snippet(db, &AppType::Codex)
+    }
+
+    pub(crate) fn set_codex_official_config(
+        db: &crate::database::Database,
+        config: &str,
+    ) -> Result<(), AppError> {
+        db.ensure_official_seed_by_id(crate::database::CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex)?;
+        let mut official = db
+            .get_provider_by_id(
+                crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                AppType::Codex.as_str(),
+            )?
+            .ok_or_else(|| AppError::Message("OpenAI Official 供应商不存在".to_string()))?;
+        // 与 Live 回流使用完全相同的提取器。直接编辑 Official 时输入仍可能含
+        // model_provider、profiles 路由或 bearer token，不能只做 TOML 语法检查。
+        let common = Self::extract_codex_common_config(&serde_json::json!({
+            "config": config
+        }))?;
+        let settings = official
+            .settings_config
+            .as_object_mut()
+            .ok_or_else(|| AppError::Config("OpenAI Official 配置必须是 JSON 对象".to_string()))?;
+        settings.insert("config".to_string(), Value::String(common));
+        crate::codex_config::strip_codex_mcp_servers_from_settings(&mut official.settings_config)?;
+        official
+            .meta
+            .get_or_insert_with(Default::default)
+            .common_config_enabled = Some(true);
+        db.save_provider(AppType::Codex.as_str(), &official)
+    }
+
+    /// 把 live 中的非认证、非路由配置回写到固定的 codex-official 主配置。
+    pub(crate) fn sync_codex_official_config_from_settings(
+        db: &crate::database::Database,
+        settings_config: &Value,
+    ) -> Result<(), AppError> {
+        let config = Self::extract_codex_common_config(settings_config)?;
+        Self::set_codex_official_config(db, &config)
+    }
+
+    /// 历史版本首次升级：从当前实际生效配置构建第一份 Codex 主配置，然后把
+    /// 非 Official 卡规范化成只含认证、路由和模型目录的差量。
+    ///
+    /// 这是一次有意的语义收敛：当前 Live 是升级时唯一保留的通用配置基准，旧的
+    /// per-provider 通用配置和 common_config_enabled=false 不再延续。这样牺牲旧版
+    /// 的独立通用配置能力，换取升级后只有 codex-official 一份可维护的主配置。
+    /// Claude 的通用配置开关和存储语义不受此迁移影响。
+    pub fn migrate_codex_config_to_official(state: &AppState) -> Result<(), AppError> {
+        const MIGRATION_KEY: &str = "codex_official_config_owner_v1";
+        if state.db.get_bool_flag(MIGRATION_KEY)? {
+            return Ok(());
+        }
+
+        // 供应商历史快照会被规范化；文件数据库先做一致性备份，确保可回滚。
+        state.db.backup_database_file()?;
+        let live_settings = read_live_settings(AppType::Codex)?;
+        let initial_config = Self::extract_codex_common_config(&live_settings)?;
+        Self::set_codex_official_config(state.db.as_ref(), &initial_config)?;
+
+        let providers = state.db.get_all_providers(AppType::Codex.as_str())?;
+        for mut provider in providers.into_values() {
+            if provider.id == crate::database::CODEX_OFFICIAL_PROVIDER_ID {
+                continue;
+            }
+            let original_settings = provider.settings_config.clone();
+            let original_common_enabled = provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.common_config_enabled);
+            let private_common = Self::extract_codex_common_config(&provider.settings_config)?;
+            if !private_common.trim().is_empty() {
+                provider.settings_config = remove_common_config_from_settings(
+                    &AppType::Codex,
+                    &provider.settings_config,
+                    &private_common,
+                )?;
+            }
+            crate::codex_config::strip_codex_mcp_servers_from_settings(
+                &mut provider.settings_config,
+            )?;
+            provider
+                .meta
+                .get_or_insert_with(Default::default)
+                .common_config_enabled = Some(true);
+
+            if provider.settings_config != original_settings
+                || original_common_enabled != Some(true)
+            {
+                state.db.save_provider(AppType::Codex.as_str(), &provider)?;
+            }
+        }
+
+        state.db.set_config_snippet(AppType::Codex.as_str(), None)?;
+        state
+            .db
+            .set_config_snippet_cleared(AppType::Codex.as_str(), false)?;
+        state.db.set_setting(MIGRATION_KEY, "true")?;
+        Ok(())
     }
 
     /// 判断一个 env / 顶层配置键名是否为凭据/机密：凡命中一律不得写入共享的
@@ -6095,6 +6775,31 @@ impl ProviderService {
 
         // Remove entire model_providers table (provider-specific configuration)
         root.remove("model_providers");
+
+        if let Some(profiles) = root
+            .get_mut("profiles")
+            .and_then(|item| item.as_table_like_mut())
+        {
+            let profile_names: Vec<String> =
+                profiles.iter().map(|(name, _)| name.to_string()).collect();
+            for profile_name in profile_names {
+                let mut remove_profile = false;
+                if let Some(profile) = profiles
+                    .get_mut(&profile_name)
+                    .and_then(|item| item.as_table_like_mut())
+                {
+                    profile.remove("model");
+                    profile.remove("model_provider");
+                    remove_profile = profile.is_empty();
+                }
+                if remove_profile {
+                    profiles.remove(&profile_name);
+                }
+            }
+            if profiles.is_empty() {
+                root.remove("profiles");
+            }
+        }
 
         // MCP 服务器归 DB mcp_servers 表所有：进了共享片段会绕过按应用的
         // 启用状态被合并进所有勾选通用配置的供应商，且在通用配置编辑框里
