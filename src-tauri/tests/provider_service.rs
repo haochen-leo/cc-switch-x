@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use cc_switch_lib::{
-    get_claude_settings_path, read_json_file, write_codex_live_atomic, AppError, AppType, McpApps,
-    McpServer, MultiAppConfig, Provider, ProviderMeta, ProviderService,
+    get_claude_settings_path, read_json_file, write_codex_live_atomic, AppError, AppState, AppType,
+    McpApps, McpServer, MultiAppConfig, Provider, ProviderMeta, ProviderService,
 };
 
 #[path = "support.rs"]
@@ -20,6 +20,35 @@ fn sanitize_provider_name(name: &str) -> String {
         })
         .collect::<String>()
         .to_lowercase()
+}
+
+fn set_codex_official_common(state: &AppState, config: &str) {
+    state
+        .db
+        .ensure_official_seed_by_id("codex-official", AppType::Codex)
+        .expect("seed Codex Official");
+    let mut official = state
+        .db
+        .get_provider_by_id("codex-official", AppType::Codex.as_str())
+        .expect("read Codex Official")
+        .expect("Codex Official exists");
+    official.settings_config["config"] = json!(config);
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &official)
+        .expect("save Codex Official");
+}
+
+fn codex_official_common(state: &AppState) -> String {
+    state
+        .db
+        .get_provider_by_id("codex-official", AppType::Codex.as_str())
+        .expect("read Codex Official")
+        .expect("Codex Official exists")
+        .settings_config["config"]
+        .as_str()
+        .expect("Codex Official config")
+        .to_string()
 }
 
 #[test]
@@ -2925,22 +2954,12 @@ command = "ghost-cmd"
     }
 
     let state = create_test_state_with_config(&config).expect("create test state");
-    state
-        .db
-        .set_config_snippet(
-            AppType::Codex.as_str(),
-            Some("[tui]\nnotifications = true\n".to_string()),
-        )
-        .expect("seed codex common config snippet");
+    set_codex_official_common(&state, "[tui]\nnotifications = true\n");
 
     ProviderService::switch(&state, AppType::Codex, "b").expect("switch should succeed");
 
     // 片段：捕获新增共享键、保留既有共享键；专属字段/密钥/注入产物一律不进
-    let snippet = state
-        .db
-        .get_config_snippet(AppType::Codex.as_str())
-        .expect("read snippet")
-        .expect("snippet present");
+    let snippet = codex_official_common(&state);
     assert!(
         snippet.contains("disable_response_storage = true"),
         "newly added shared key should be captured, got: {snippet}"
@@ -3075,21 +3094,14 @@ wire_api = "responses"
     }
 
     let state = create_test_state_with_config(&config).expect("create test state");
-    state
-        .db
-        .set_config_snippet(
-            AppType::Codex.as_str(),
-            Some("disable_response_storage = true\n\n[tui]\nnotifications = true\n".to_string()),
-        )
-        .expect("seed codex common config snippet");
+    set_codex_official_common(
+        &state,
+        "disable_response_storage = true\n\n[tui]\nnotifications = true\n",
+    );
 
     ProviderService::switch(&state, AppType::Codex, "b").expect("switch should succeed");
 
-    let snippet = state
-        .db
-        .get_config_snippet(AppType::Codex.as_str())
-        .expect("read snippet")
-        .expect("snippet present");
+    let snippet = codex_official_common(&state);
     assert!(
         !snippet.contains("disable_response_storage"),
         "deleted shared key must be removed from the snippet, got: {snippet}"

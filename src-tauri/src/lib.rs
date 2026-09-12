@@ -2040,10 +2040,21 @@ async fn restore_proxy_state_on_startup(state: &store::AppState) {
 }
 
 fn initialize_common_config_snippets(state: &store::AppState) {
+    // Codex 的 config.toml 除认证/路由外统一归固定的 codex-official 所有。
+    // 首次升级以实际生效配置构建主配置，并清掉各供应商卡中的重复副本。
+    if let Err(error) =
+        crate::services::provider::ProviderService::migrate_codex_config_to_official(state)
+    {
+        log::warn!("迁移 Codex Official 主配置失败: {error}");
+    }
+
     // Auto-extract common config snippets from clean live files when snippet is missing.
     // This must run before proxy takeover is restored on startup, otherwise we'd read
     // proxy-placeholder configs instead of the user's actual live settings.
     for app_type in crate::app_config::AppType::all() {
+        if matches!(app_type, crate::app_config::AppType::Codex) {
+            continue;
+        }
         if !state
             .db
             .should_auto_extract_config_snippet(app_type.as_str())
