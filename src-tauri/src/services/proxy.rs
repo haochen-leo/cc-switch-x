@@ -744,7 +744,7 @@ impl ProxyService {
         .map_err(|e| format!("构建 codex 有效配置失败: {e}"))?
         .settings_config;
         if let Some(existing_live) = existing_live.as_ref() {
-            Self::preserve_toml_mcp_servers_from_existing_config(
+            self.preserve_toml_mcp_servers_from_existing_config(
                 &mut effective_settings,
                 existing_live,
             )?;
@@ -783,7 +783,7 @@ impl ProxyService {
         )
         .map_err(|e| format!("构建 Grok Build 有效配置失败: {e}"))?;
         if let Some(existing_live) = existing_live.as_ref() {
-            Self::preserve_toml_mcp_servers_from_existing_config(
+            self.preserve_toml_mcp_servers_from_existing_config(
                 &mut effective_settings,
                 existing_live,
             )?;
@@ -2892,7 +2892,7 @@ impl ProxyService {
                 existing_backup_value.or_else(|| self.read_codex_live().ok());
 
             if let Some(existing_value) = existing_backup_value.as_ref() {
-                Self::preserve_toml_mcp_servers_from_existing_config(
+                self.preserve_toml_mcp_servers_from_existing_config(
                     &mut effective_settings,
                     existing_value,
                 )?;
@@ -2951,7 +2951,7 @@ impl ProxyService {
                 .transpose()?
                 .or_else(|| self.read_grok_live().ok());
             if let Some(existing_value) = existing_value.as_ref() {
-                Self::preserve_toml_mcp_servers_from_existing_config(
+                self.preserve_toml_mcp_servers_from_existing_config(
                     &mut effective_settings,
                     existing_value,
                 )?;
@@ -3301,64 +3301,50 @@ impl ProxyService {
         self.switch_locks.lock_for_app(app_type).await
     }
 
+    /// 把现有配置中"DB 不认识"的 `[mcp_servers]` 条目并入即将写入的目标配置。
+    ///
+    /// 归属规则：DB 里的 MCP id（无论启用与否）由 MCP 投影全权管理——启用的
+    /// 由投影写入，禁用/删除的不保留；DB 不认识的（如 Codex 内置 `node_repl`）
+    /// 不归 CC Switch 所有，整体重写/接管/恢复时原样保留。
+    ///
+    /// DB 读取失败时降级为空已知集（= 保留现有配置的全部 MCP 条目）：宁可多留，
+    /// 不丢用户配置。
     fn preserve_toml_mcp_servers_from_existing_config(
+        &self,
         target_settings: &mut Value,
         existing_config: &Value,
     ) -> Result<(), String> {
+        let known_ids: std::collections::HashSet<String> = match self.db.get_all_mcp_servers() {
+            Ok(servers) => servers.keys().cloned().collect(),
+            Err(err) => {
+                log::warn!("读取 MCP 数据库失败（{err}），降级为保留现有配置的全部 MCP 条目");
+                Default::default()
+            }
+        };
+
         let target_obj = target_settings
             .as_object_mut()
             .ok_or_else(|| "TOML 应用备份必须是 JSON 对象".to_string())?;
-
         let target_config = target_obj
             .get("config")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let mut target_doc = if target_config.trim().is_empty() {
-            toml_edit::DocumentMut::new()
-        } else {
-            target_config
-                .parse::<toml_edit::DocumentMut>()
-                .map_err(|e| format!("解析新的 config.toml 失败: {e}"))?
-        };
-
-        let existing_config = existing_config
+            .unwrap_or("")
+            .to_string();
+        let existing_config_text = existing_config
             .get("config")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if existing_config.trim().is_empty() {
-            target_obj.insert("config".to_string(), json!(target_doc.to_string()));
+        if existing_config_text.trim().is_empty() {
             return Ok(());
         }
 
-        let existing_doc = existing_config
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|e| format!("解析现有 config.toml 备份失败: {e}"))?;
-
-        if let Some(existing_mcp_servers) = existing_doc.get("mcp_servers") {
-            match target_doc.get_mut("mcp_servers") {
-                Some(target_mcp_servers) => {
-                    if let (Some(target_table), Some(existing_table)) = (
-                        target_mcp_servers.as_table_like_mut(),
-                        existing_mcp_servers.as_table_like(),
-                    ) {
-                        for (server_id, server_item) in existing_table.iter() {
-                            if target_table.get(server_id).is_none() {
-                                target_table.insert(server_id, server_item.clone());
-                            }
-                        }
-                    } else {
-                        log::warn!(
-                            "config.toml contains a non-table mcp_servers section; skipping MCP merge"
-                        );
-                    }
-                }
-                None => {
-                    target_doc["mcp_servers"] = existing_mcp_servers.clone();
-                }
-            }
-        }
-
-        target_obj.insert("config".to_string(), json!(target_doc.to_string()));
+        let merged = crate::mcp::merge_non_db_mcp_servers_into_config_text(
+            &target_config,
+            existing_config_text,
+            &known_ids,
+        )
+        .map_err(|e| e.to_string())?;
+        target_obj.insert("config".to_string(), json!(merged));
         Ok(())
     }
 
