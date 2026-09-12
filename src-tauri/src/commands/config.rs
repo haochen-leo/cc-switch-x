@@ -293,6 +293,13 @@ pub async fn get_common_config_snippet(
     app_type: String,
     state: tauri::State<'_, crate::store::AppState>,
 ) -> Result<Option<String>, String> {
+    if app_type == "codex" {
+        return crate::services::provider::ProviderService::get_codex_official_config(
+            state.db.as_ref(),
+        )
+        .map_err(|e| e.to_string());
+    }
+
     state
         .db
         .get_config_snippet(&app_type)
@@ -323,12 +330,27 @@ pub async fn set_common_config_snippet(
     state: tauri::State<'_, crate::store::AppState>,
 ) -> Result<(), String> {
     let is_cleared = snippet.trim().is_empty();
+
+    validate_common_config_snippet(&app_type, &snippet)?;
+
+    if app_type == "codex" {
+        crate::services::provider::ProviderService::set_codex_official_config(
+            state.db.as_ref(),
+            &snippet,
+        )
+        .map_err(|e| e.to_string())?;
+        crate::services::provider::ProviderService::sync_current_provider_for_app(
+            state.inner(),
+            AppType::Codex,
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     let old_snippet = state
         .db
         .get_config_snippet(&app_type)
         .map_err(|e| e.to_string())?;
-
-    validate_common_config_snippet(&app_type, &snippet)?;
 
     let value = if is_cleared { None } else { Some(snippet) };
 
