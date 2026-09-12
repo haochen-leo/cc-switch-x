@@ -1020,10 +1020,6 @@ function ProviderFormFull({
     clearCommonConfigError: clearCodexCommonConfigError,
   } = useCodexCommonConfig({
     codexConfig,
-    onConfigChange: handleCodexConfigChange,
-    initialData: appId === "codex" ? initialData : undefined,
-    initialEnabled: appId === "codex" ? true : undefined,
-    selectedPresetId: selectedPresetId ?? undefined,
   });
 
   const {
@@ -2874,6 +2870,7 @@ function ProviderFormFull({
                 configValue={codexConfig}
                 providerName={form.watch("name")}
                 showRemoteCompaction={category !== "official"}
+                showCommonConfigPreview={category !== "official"}
                 isProxyTakeover={isProxyTakeover}
                 onAuthChange={setCodexAuth}
                 onConfigChange={handleCodexConfigChange}
