@@ -716,7 +716,9 @@ impl ProxyService {
             .await
     }
 
-    fn capture_codex_official_config_from_live(&self) -> Result<(), String> {
+    /// 把当前 Codex live 的通用配置回流到 Official 主配置（带防毒化护栏）。
+    /// live 读取失败只告警跳过——调用方（启动/热切换）不应因此被阻断。
+    pub(crate) fn capture_codex_official_config_from_live(&self) -> Result<(), String> {
         let live_settings = match self.read_codex_live() {
             Ok(settings) => settings,
             Err(error) => {
