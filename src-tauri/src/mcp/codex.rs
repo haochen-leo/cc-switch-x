@@ -346,6 +346,84 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 把现有 live 中"DB 不认识"的 `[mcp_servers]` 条目合并进目标 config TOML 文本。
+///
+/// Codex live 的重写是整体替换（供应商差量 + 通用配置），而 `[mcp_servers]`
+/// 不在任何一侧存储里：通用配置提取时明确剔除它（归 DB mcp_servers 表所有），
+/// 供应商快照写入前也会 strip。如果重写前不从现有 live 保留，一次供应商切换 /
+/// 代理接管 / 恢复就会把 Codex 内置 `node_repl` 这类外部 MCP 从 config.toml 抹掉。
+///
+/// 归属规则：
+/// - `known_ids`（DB 里的 MCP id，无论启用与否）：不从此处保留。启用的随后由
+///   MCP 投影写入；禁用/删除的必须留在 live 之外。
+/// - 其余 id：视为外部配置，从现有 live 原样并入（保持 live 中的顺序）。
+///
+/// 目标文本已有 `mcp_servers` 时只补缺、不覆盖目标条目；任一文本为空或现有
+/// live 没有 `mcp_servers` 时原样返回目标文本。
+pub fn merge_non_db_mcp_servers_into_config_text(
+    target_config: &str,
+    existing_config: &str,
+    known_ids: &std::collections::HashSet<String>,
+) -> Result<String, AppError> {
+    use toml_edit::DocumentMut;
+
+    if existing_config.trim().is_empty() {
+        return Ok(target_config.to_string());
+    }
+    let existing_doc = existing_config
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::McpValidation(format!("解析现有 config.toml 失败: {e}")))?;
+    let Some(existing_mcp) = existing_doc
+        .get("mcp_servers")
+        .and_then(|item| item.as_table_like())
+    else {
+        return Ok(target_config.to_string());
+    };
+
+    // 收集 DB 不认识的条目（保持 live 中的原有顺序）
+    let preserved: Vec<(&str, toml_edit::Item)> = existing_mcp
+        .iter()
+        .filter(|(id, _)| !known_ids.contains(*id))
+        .map(|(id, item)| (id, item.clone()))
+        .collect();
+    if preserved.is_empty() {
+        return Ok(target_config.to_string());
+    }
+
+    let mut target_doc = if target_config.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        target_config
+            .parse::<DocumentMut>()
+            .map_err(|e| AppError::McpValidation(format!("解析目标 config.toml 失败: {e}")))?
+    };
+
+    // 目标里 mcp_servers 不是表时归一化为空表（与 upsert_mcp_server_table 同理，
+    // 避免后续插入触发 toml_edit 的 IndexMut panic）。目标内容来自机器生成
+    // （供应商差量 + 通用配置），此分支基本不会命中，命中必须留痕。
+    if target_doc
+        .get("mcp_servers")
+        .and_then(|item| item.as_table_like())
+        .is_none()
+    {
+        if target_doc.get("mcp_servers").is_some_and(|i| !i.is_none()) {
+            log::warn!("目标 config 的 mcp_servers 不是表，已重置为空表以并入保留项");
+        }
+        target_doc["mcp_servers"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let target_tbl = target_doc
+        .get_mut("mcp_servers")
+        .and_then(|item| item.as_table_like_mut())
+        .ok_or_else(|| AppError::McpValidation("目标 config.toml 的 mcp_servers 不是表".into()))?;
+
+    for (id, item) in preserved {
+        if target_tbl.get(id).is_none() {
+            target_tbl.insert(id, item);
+        }
+    }
+    Ok(target_doc.to_string())
+}
+
 /// 将单个 MCP 服务器同步到 Codex live 配置
 /// 始终使用 Codex 官方格式 [mcp_servers]，并清理可能存在的错误格式 [mcp.servers]
 /// 把单个 MCP server 表写入 `[mcp_servers]`，并保证该键是「表」。
@@ -730,6 +808,81 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn known_ids(ids: &[&str]) -> std::collections::HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn merge_preserves_live_mcp_servers_unknown_to_db() {
+        // Codex 内置 node_repl 不在 CC Switch DB：整体重写 live 时必须原样保留，
+        // 含其 env 子表（NODE_USE_ENV_PROXY 这类用户手写字段）。
+        let existing = "[mcp_servers.node_repl]\ncommand = \"/app/node_repl\"\n\n[mcp_servers.node_repl.env]\nNODE_USE_ENV_PROXY = \"1\"\n";
+        let target = "model_provider = \"custom\"\n";
+
+        let merged = merge_non_db_mcp_servers_into_config_text(target, existing, &known_ids(&[]))
+            .expect("merge");
+
+        assert!(merged.contains("model_provider = \"custom\""));
+        assert!(merged.contains("[mcp_servers.node_repl]"));
+        assert!(merged.contains("NODE_USE_ENV_PROXY = \"1\""));
+    }
+
+    #[test]
+    fn merge_drops_db_known_ids_so_disabled_servers_stay_removed() {
+        // DB 认识的 id 不归 preserve 管：禁用的由投影负责移除，不能因为还在
+        // live 里就被捞回来（否则"在 CC Switch 里禁用"会被重写悄悄复活）。
+        let existing = "[mcp_servers.chrome]\ncommand = \"chrome-mcp\"\n\n[mcp_servers.node_repl]\ncommand = \"/app/node_repl\"\n";
+        let target = "model_provider = \"custom\"\n";
+
+        let merged =
+            merge_non_db_mcp_servers_into_config_text(target, existing, &known_ids(&["chrome"]))
+                .expect("merge");
+
+        assert!(
+            !merged.contains("chrome-mcp"),
+            "DB-known id must not be preserved from live"
+        );
+        assert!(merged.contains("[mcp_servers.node_repl]"));
+    }
+
+    #[test]
+    fn merge_fills_missing_keys_without_overwriting_target_servers() {
+        let existing = "[mcp_servers.node_repl]\ncommand = \"/old\"\n\n[mcp_servers.extra]\ncommand = \"extra\"\n";
+        let target = "[mcp_servers.node_repl]\ncommand = \"/new\"\n";
+
+        let merged = merge_non_db_mcp_servers_into_config_text(target, existing, &known_ids(&[]))
+            .expect("merge");
+
+        assert!(merged.contains("command = \"/new\""), "target entry wins");
+        assert!(!merged.contains("command = \"/old\""));
+        assert!(merged.contains("[mcp_servers.extra]"));
+    }
+
+    #[test]
+    fn merge_is_noop_when_either_side_has_nothing_to_preserve() {
+        let target = "model = \"x\"\n";
+        assert_eq!(
+            merge_non_db_mcp_servers_into_config_text(target, "", &known_ids(&[])).unwrap(),
+            target
+        );
+        // 现有 live 没有 mcp_servers 时也不产生新表
+        assert_eq!(
+            merge_non_db_mcp_servers_into_config_text(target, "model = \"y\"\n", &known_ids(&[]))
+                .unwrap(),
+            target
+        );
+    }
+
+    #[test]
+    fn merge_into_empty_target_creates_mcp_table() {
+        let existing = "[mcp_servers.node_repl]\ncommand = \"/app/node_repl\"\n";
+
+        let merged =
+            merge_non_db_mcp_servers_into_config_text("", existing, &known_ids(&[])).unwrap();
+
+        assert!(merged.contains("[mcp_servers.node_repl]"));
+    }
 
     #[test]
     fn upsert_normalizes_non_table_mcp_servers_without_panicking() {

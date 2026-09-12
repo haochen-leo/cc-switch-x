@@ -779,7 +779,7 @@ pub(crate) fn write_live_with_common_config_for_codex_oauth_manager(
     provider: &Provider,
     codex_oauth_manager: &Arc<CodexOAuthManager>,
 ) -> Result<(), AppError> {
-    let effective_provider = build_effective_provider_for_live_with_codex_oauth_manager(
+    let mut effective_provider = build_effective_provider_for_live_with_codex_oauth_manager(
         db,
         app_type,
         provider,
@@ -796,7 +796,59 @@ pub(crate) fn write_live_with_common_config_for_codex_oauth_manager(
         return Ok(());
     }
 
+    // Codex live 是整体替换：写入前把现有 live 中"DB 不认识"的 [mcp_servers]
+    // （如 Codex 内置 node_repl）并入新配置，否则一次供应商切换/代理恢复就会
+    // 把它们从 config.toml 抹掉。
+    if matches!(app_type, AppType::Codex) {
+        preserve_non_db_codex_mcp_servers_from_live(db, &mut effective_provider);
+    }
+
     write_live_snapshot(app_type, &effective_provider)
+}
+
+/// 整体替换 Codex live 前，把现有 live 中"DB 不认识"的 `[mcp_servers]` 条目并入
+/// 即将写入的新配置。
+///
+/// 归属规则：DB 认识的 id 由 MCP 投影全权管理（写完 live 后启用的重新投影写入，
+/// 禁用/删除的留在 live 之外）；DB 不认识的（如 Codex 内置 `node_repl`）不归
+/// CC Switch 所有，必须随重写原样保留——通用配置提取与供应商快照都会 strip 掉
+/// MCP，它们不在任何存储里，live 是唯一副本。
+///
+/// 尽力而为：live 缺失/读不出来时跳过（写入层照常处理）；DB 读取失败时降级为
+/// 保留全部现有 MCP（宁可多留，不丢用户配置）；合并失败只告警不阻断切换。
+fn preserve_non_db_codex_mcp_servers_from_live(db: &Database, provider: &mut Provider) {
+    let Some(settings) = provider.settings_config.as_object_mut() else {
+        return;
+    };
+    let Some(target_config) = settings
+        .get("config")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let existing_config = match crate::codex_config::read_codex_config_text() {
+        Ok(text) if !text.trim().is_empty() => text,
+        _ => return,
+    };
+    let known_ids: std::collections::HashSet<String> = match db.get_all_mcp_servers() {
+        Ok(servers) => servers.keys().cloned().collect(),
+        Err(err) => {
+            log::warn!("读取 MCP 数据库失败（{err}），降级为保留 live 全部 MCP 条目");
+            Default::default()
+        }
+    };
+    match crate::mcp::merge_non_db_mcp_servers_into_config_text(
+        &target_config,
+        &existing_config,
+        &known_ids,
+    ) {
+        Ok(merged) if merged != target_config => {
+            settings.insert("config".to_string(), Value::String(merged));
+        }
+        Ok(_) => {}
+        Err(err) => log::warn!("保留 live 中的外部 MCP 条目失败: {err}"),
+    }
 }
 
 pub(crate) fn build_effective_provider_for_live_with_codex_oauth_manager(
