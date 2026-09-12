@@ -260,6 +260,77 @@ mod tests {
         })
     }
 
+    fn rich_codex_live_settings(keys: usize) -> Value {
+        let config = (1..=keys)
+            .map(|i| format!("user_key_{i} = {i}\n"))
+            .collect::<String>();
+        json!({ "auth": {}, "config": config })
+    }
+
+    fn stored_official_config(db: &crate::database::Database) -> String {
+        db.get_provider_by_id(crate::database::CODEX_OFFICIAL_PROVIDER_ID, "codex")
+            .expect("read official provider")
+            .expect("official provider exists")
+            .settings_config
+            .get("config")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    #[test]
+    fn capture_refuses_catastrophic_shrink_of_official_master() {
+        with_test_home(|state, _home| {
+            let db = state.db.as_ref();
+            // 先建立丰富的主配置（20 个叶子键）
+            ProviderService::sync_codex_official_config_from_settings(
+                db,
+                &rich_codex_live_settings(20),
+            )
+            .expect("initial capture");
+            assert!(stored_official_config(db).contains("user_key_20 = 20"));
+
+            // live 被截断成 2 个键：判定精简/损坏，拒绝覆盖且不报错
+            ProviderService::sync_codex_official_config_from_settings(
+                db,
+                &rich_codex_live_settings(2),
+            )
+            .expect("shrunk capture must not error");
+
+            assert!(
+                stored_official_config(db).contains("user_key_20 = 20"),
+                "catastrophic shrink must not overwrite the master config"
+            );
+        });
+    }
+
+    #[test]
+    fn capture_skips_identical_and_accepts_normal_evolution() {
+        with_test_home(|state, _home| {
+            let db = state.db.as_ref();
+            ProviderService::sync_codex_official_config_from_settings(
+                db,
+                &rich_codex_live_settings(3),
+            )
+            .expect("first capture");
+
+            // 相同内容回流：内部直接跳过写库，不报错
+            ProviderService::sync_codex_official_config_from_settings(
+                db,
+                &rich_codex_live_settings(3),
+            )
+            .expect("identical capture");
+
+            // 正常演进（3 → 4 键）：放行
+            ProviderService::sync_codex_official_config_from_settings(
+                db,
+                &rich_codex_live_settings(4),
+            )
+            .expect("normal capture");
+            assert!(stored_official_config(db).contains("user_key_4 = 4"));
+        });
+    }
+
     #[test]
     fn aggregate_provider_update_preserves_generated_catalog_and_routes() {
         let mut existing = Provider::with_id(
@@ -6530,12 +6601,66 @@ impl ProviderService {
     }
 
     /// 把 live 中的非认证、非路由配置回写到固定的 codex-official 主配置。
+    ///
+    /// 防毒化护栏：live 可能处于精简/损坏态（崩溃恢复出的旧备份、被外部工具
+    /// 截断……），盲覆盖主配置会丢掉 projects/features/hooks 等通用配置，之后
+    /// 所有写入都产出精简 live——配置丢失会自我强化。因此：
+    /// - 提取结果与现存主配置一致：不写库（避免触发无谓的 S3/WebDAV 自动同步）；
+    /// - 现存主配置 >= 10 个叶子键而新提取不足其一半：判定 live 精简/损坏，
+    ///   拒绝覆盖并告警（返回 Ok，切换/启动流程不受影响，行为退化为旧逻辑）。
     pub(crate) fn sync_codex_official_config_from_settings(
         db: &crate::database::Database,
         settings_config: &Value,
     ) -> Result<(), AppError> {
         let config = Self::extract_codex_common_config(settings_config)?;
+        if let Some(stored) =
+            Self::official_config_owner_snapshot(db, &AppType::Codex)?.and_then(|provider| {
+                provider
+                    .settings_config
+                    .get("config")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+        {
+            if stored.trim() == config.trim() {
+                return Ok(());
+            }
+            let stored_keys = Self::count_toml_leaf_keys(&stored);
+            let new_keys = Self::count_toml_leaf_keys(&config);
+            if stored_keys >= 10 && new_keys * 2 < stored_keys {
+                log::warn!(
+                    "Codex live 通用配置提取结果（{new_keys} 叶子键）不足现存主配置（{stored_keys} 叶子键）的一半，判定 live 处于精简/损坏态，已拒绝回流覆盖主配置"
+                );
+                return Ok(());
+            }
+        }
         Self::set_codex_official_config(db, &config)
+    }
+
+    /// 统计 TOML 文本的叶子键数量（递归进入表、inline 表与表数组）。
+    /// 解析失败按 0 计——防毒化护栏把"无法评估"当小值处理。
+    fn count_toml_leaf_keys(toml_text: &str) -> usize {
+        fn walk_value(value: &toml_edit::Value) -> usize {
+            match value {
+                toml_edit::Value::InlineTable(t) => t.iter().map(|(_, v)| walk_value(v)).sum(),
+                _ => 1,
+            }
+        }
+        fn walk_item(item: &toml_edit::Item) -> usize {
+            match item {
+                toml_edit::Item::Table(t) => t.iter().map(|(_, v)| walk_item(v)).sum(),
+                toml_edit::Item::Value(v) => walk_value(v),
+                toml_edit::Item::ArrayOfTables(a) => a
+                    .iter()
+                    .map(|t| t.iter().map(|(_, v)| walk_item(v)).sum::<usize>())
+                    .sum(),
+                toml_edit::Item::None => 0,
+            }
+        }
+        let Ok(doc) = toml_text.parse::<toml_edit::DocumentMut>() else {
+            return 0;
+        };
+        doc.as_table().iter().map(|(_, item)| walk_item(item)).sum()
     }
 
     /// 历史版本首次升级：从当前实际生效配置构建第一份 Codex 主配置，然后把
