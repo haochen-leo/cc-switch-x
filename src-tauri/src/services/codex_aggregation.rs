@@ -15,6 +15,9 @@ pub const CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING: &str = "codex_aggregate_pre
 pub const CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING: &str = "codex_aggregate_source_providers";
 pub const CODEX_AGGREGATE_UPSTREAM_MODEL_KEY: &str = "codexAggregateUpstreamModel";
 pub const CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING: &str = "codex_aggregate_models_cache_hash";
+/// 模型级过滤（排除列表）：{ 供应商ID: [排除的上游模型ID...] }。
+/// 采用排除而非白名单：默认全收，供应商后续新增的模型自动进入目录，不会被静默漏掉。
+pub const CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING: &str = "codex_aggregate_model_excludes";
 
 /// 聚合目录成功重建后，把当前 `models_cache.json` 的 hash 记到 DB，
 /// 作为下次启动时的基线。读取失败时静默跳过（不影响聚合功能）。
@@ -36,6 +39,26 @@ pub struct CodexAggregationSourceProvider {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CodexAggregationSourceModel {
+    pub model: String,
+    pub display_name: String,
+}
+
+/// 单家来源供应商的可过滤模型列表（模型过滤选择器用）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAggregationSourceModels {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub official: bool,
+    pub selected: bool,
+    pub models: Vec<CodexAggregationSourceModel>,
+    pub excluded_models: Vec<String>,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodexAggregationStatus {
     pub enabled: bool,
     pub provider_id: String,
@@ -43,6 +66,8 @@ pub struct CodexAggregationStatus {
     pub source_provider_count: usize,
     pub selected_provider_ids: Vec<String>,
     pub source_providers: Vec<CodexAggregationSourceProvider>,
+    /// 各来源供应商当前排除的模型（上游模型 ID），键为供应商 ID。
+    pub model_excludes: HashMap<String, Vec<String>>,
     pub warnings: Vec<String>,
 }
 
@@ -55,6 +80,7 @@ impl CodexAggregationStatus {
             source_provider_count: 0,
             selected_provider_ids: Vec::new(),
             source_providers: Vec::new(),
+            model_excludes: HashMap::new(),
             warnings: Vec::new(),
         }
     }
@@ -199,6 +225,195 @@ pub fn serialize_codex_aggregation_source_ids(
         .map_err(|error| format!("保存 Codex 聚合来源设置失败: {error}"))
 }
 
+fn read_model_excludes(db: &Database) -> Result<HashMap<String, HashSet<String>>, String> {
+    let Some(raw) = db
+        .get_setting(CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING)
+        .map_err(|error| format!("读取 Codex 聚合模型过滤设置失败: {error}"))?
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(HashMap::new());
+    };
+
+    let raw_map = serde_json::from_str::<HashMap<String, Vec<String>>>(&raw)
+        .map_err(|error| format!("Codex 聚合模型过滤设置格式错误: {error}"))?;
+
+    Ok(raw_map
+        .into_iter()
+        .map(|(provider_id, models)| {
+            (
+                provider_id.trim().to_string(),
+                models
+                    .into_iter()
+                    .map(|model| model.trim().to_string())
+                    .filter(|model| !model.is_empty())
+                    .collect::<HashSet<_>>(),
+            )
+        })
+        .filter(|(provider_id, models)| !provider_id.is_empty() && !models.is_empty())
+        .collect())
+}
+
+fn is_model_excluded(
+    excludes: &HashMap<String, HashSet<String>>,
+    provider_id: &str,
+    model: &str,
+) -> bool {
+    excludes
+        .get(provider_id)
+        .is_some_and(|models| models.contains(model))
+}
+
+/// 某家来源供应商当前排除的模型列表（上游模型 ID，排序后返回，供过滤选择器回显）。
+pub fn codex_aggregation_model_excludes(
+    db: &Database,
+    provider_id: &str,
+) -> Result<Vec<String>, String> {
+    let excludes = read_model_excludes(db)?;
+    let mut models = excludes
+        .get(provider_id)
+        .map(|models| models.iter().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    models.sort();
+    Ok(models)
+}
+
+/// 全部来源供应商的排除列表（排序后），供聚合状态回显"已排除 N 个"。
+pub fn codex_aggregation_all_model_excludes(
+    db: &Database,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    let excludes = read_model_excludes(db)?;
+    Ok(excludes
+        .into_iter()
+        .map(|(provider_id, models)| {
+            let mut models = models.into_iter().collect::<Vec<_>>();
+            models.sort();
+            (provider_id, models)
+        })
+        .collect())
+}
+
+/// 持久化某家来源供应商的排除列表；空列表则移除该家条目，全空时写空串
+///（与来源供应商设置"空 = 默认全收"的约定一致）。
+pub fn save_codex_aggregation_model_excludes(
+    db: &Database,
+    provider_id: &str,
+    excluded_models: &[String],
+) -> Result<(), String> {
+    let mut excludes = read_model_excludes(db)?;
+    let cleaned = excluded_models
+        .iter()
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .collect::<HashSet<_>>();
+    if cleaned.is_empty() {
+        excludes.remove(provider_id);
+    } else {
+        excludes.insert(provider_id.to_string(), cleaned);
+    }
+
+    if excludes.is_empty() {
+        return db
+            .set_setting(CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING, "")
+            .map_err(|error| format!("保存 Codex 聚合模型过滤设置失败: {error}"));
+    }
+    let sorted: BTreeMap<String, Vec<String>> = excludes
+        .into_iter()
+        .map(|(provider_id, models)| {
+            let mut models = models.into_iter().collect::<Vec<_>>();
+            models.sort();
+            (provider_id, models)
+        })
+        .collect();
+    let serialized = serde_json::to_string(&sorted)
+        .map_err(|error| format!("保存 Codex 聚合模型过滤设置失败: {error}"))?;
+    db.set_setting(CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING, &serialized)
+        .map_err(|error| format!("保存 Codex 聚合模型过滤设置失败: {error}"))
+}
+
+/// 单家来源供应商的模型列表，与聚合 build 同源：官方读本地 models_cache.json，
+/// 第三方优先已存 modelCatalog、未配置时实时调用其 /models。供模型过滤选择器
+/// 按家懒加载，避免一次探测全部供应商。
+pub async fn codex_aggregation_source_models(
+    db: &Database,
+    provider_id: &str,
+) -> Result<CodexAggregationSourceModels, String> {
+    let providers = real_codex_source_providers(
+        db.get_all_providers(AppType::Codex.as_str())
+            .map_err(|error| format!("读取 Codex 供应商失败: {error}"))?
+            .into_values(),
+    );
+    let provider = providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .cloned()
+        .ok_or_else(|| format!("Codex 聚合来源供应商不存在: {provider_id}"))?;
+    let configured = read_configured_source_provider_ids(db)?;
+    let selected =
+        resolve_selected_provider_ids(&providers, configured.as_ref()).contains(provider_id);
+    let excluded_models = codex_aggregation_model_excludes(db, provider_id)?;
+
+    let mut warning = None;
+    let mut models = Vec::new();
+    if provider.id == CODEX_OFFICIAL_PROVIDER_ID {
+        match read_official_catalog_models() {
+            Ok(entries) => {
+                for entry in entries {
+                    let Some(model) = catalog_model_id(&entry) else {
+                        continue;
+                    };
+                    let display_name = entry
+                        .get("displayName")
+                        .or_else(|| entry.get("display_name"))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or(&model)
+                        .to_string();
+                    models.push(CodexAggregationSourceModel {
+                        model,
+                        display_name,
+                    });
+                }
+                if models.is_empty() {
+                    warning = Some(
+                        "官方模型缓存为空：请先用官方供应商打开一次 Codex 模型列表".to_string(),
+                    );
+                }
+            }
+            Err(error) => warning = Some(error),
+        }
+    } else {
+        let loaded = load_provider_models(provider.clone()).await;
+        warning = loaded.warning;
+        for entry in loaded.models {
+            let Some((model, entry)) = normalize_catalog_entry(entry, None) else {
+                continue;
+            };
+            let display_name = entry
+                .get("displayName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(&model)
+                .to_string();
+            models.push(CodexAggregationSourceModel {
+                model,
+                display_name,
+            });
+        }
+    }
+
+    Ok(CodexAggregationSourceModels {
+        provider_id: provider.id.clone(),
+        provider_name: provider.name.clone(),
+        official: provider.id == CODEX_OFFICIAL_PROVIDER_ID,
+        selected,
+        models,
+        excluded_models,
+        warning,
+    })
+}
+
 /// 从真实 Codex Provider 与官方本地模型缓存生成一个统一 Provider。
 ///
 /// 官方模型固定路由到内置 `codex-official`；第三方模型优先读取各 Provider 已保存的
@@ -241,14 +456,21 @@ pub async fn build_codex_aggregate_provider(
     let mut seen_catalog_models = HashSet::new();
     let mut source_provider_ids = HashSet::new();
     let mut warnings = Vec::new();
+    let model_excludes = read_model_excludes(db)?;
 
     if selected_provider_ids.contains(CODEX_OFFICIAL_PROVIDER_ID) {
-        match read_official_catalog_models() {
+        // 缓存本身读不出来（缺失/为空/解析失败）才算"官方源为空"；用户主动把
+        // 官方模型全部过滤掉是合法意图，走后面的 warning，不触发拒绝重建。
+        let official_cache_empty = match read_official_catalog_models() {
             Ok(official_models) => {
+                let cache_empty = official_models.is_empty();
                 for entry in official_models {
                     let Some((model, entry)) = normalize_catalog_entry(entry, None) else {
                         continue;
                     };
+                    if is_model_excluded(&model_excludes, CODEX_OFFICIAL_PROVIDER_ID, &model) {
+                        continue;
+                    }
                     let (catalog_model, entry) = namespace_catalog_entry(&official, &model, entry);
                     if seen_catalog_models.insert(catalog_model.clone()) {
                         routes.insert(catalog_model, aggregate_route(&official.id, model.as_str()));
@@ -256,13 +478,17 @@ pub async fn build_codex_aggregate_provider(
                         source_provider_ids.insert(CODEX_OFFICIAL_PROVIDER_ID.to_string());
                     }
                 }
+                cache_empty
             }
-            Err(error) => warnings.push(error),
-        }
+            Err(error) => {
+                warnings.push(error);
+                true
+            }
+        };
         // 官方源读空时拒绝重建：否则残缺的聚合目录会顶掉现有官方路由，而
         // models_cache.json 回流一旦断裂就无法自愈（2026-09-03 事故）。确实不想聚合
         // 官方模型时，应把 OpenAI Official 从聚合来源中移除，而不是带着空源重建。
-        if !source_provider_ids.contains(CODEX_OFFICIAL_PROVIDER_ID) {
+        if official_cache_empty {
             let detail = if warnings.is_empty() {
                 "OpenAI Official 模型缓存为空".to_string()
             } else {
@@ -271,6 +497,11 @@ pub async fn build_codex_aggregate_provider(
             return Err(format!(
                 "Codex 聚合官方源为空，已拒绝重建以保护现有目录。请先用官方供应商打开一次 Codex 模型列表以恢复 models_cache.json，或从聚合来源中移除 OpenAI Official。详情: {detail}"
             ));
+        }
+        if !source_provider_ids.contains(CODEX_OFFICIAL_PROVIDER_ID) {
+            warnings.push(
+                "OpenAI Official 的模型已被全部过滤，本次聚合目录不包含官方模型".to_string(),
+            );
         }
     }
 
@@ -285,6 +516,9 @@ pub async fn build_codex_aggregate_provider(
             else {
                 continue;
             };
+            if is_model_excluded(&model_excludes, &loaded_provider.provider.id, &model) {
+                continue;
+            }
             let (catalog_model, entry) =
                 namespace_catalog_entry(&loaded_provider.provider, &model, entry);
             if !seen_catalog_models.insert(catalog_model.clone()) {
@@ -1134,5 +1368,230 @@ mod tests {
         );
 
         assert_eq!(aggregate_provider_stats(&provider), (2, 2));
+    }
+
+    #[test]
+    fn model_excludes_roundtrip() {
+        let db = Database::memory().expect("in-memory database");
+
+        save_codex_aggregation_model_excludes(
+            &db,
+            "provider-a",
+            &[String::from("model-b"), String::from("model-a")],
+        )
+        .expect("save excludes");
+        assert_eq!(
+            codex_aggregation_model_excludes(&db, "provider-a").expect("read excludes"),
+            vec!["model-a", "model-b"]
+        );
+        assert_eq!(
+            codex_aggregation_all_model_excludes(&db).expect("all excludes")["provider-a"],
+            vec!["model-a", "model-b"]
+        );
+
+        // 清空该家后整个设置回到空串（默认全收）
+        save_codex_aggregation_model_excludes(&db, "provider-a", &[]).expect("clear excludes");
+        assert!(codex_aggregation_model_excludes(&db, "provider-a")
+            .expect("read excludes")
+            .is_empty());
+        assert_eq!(
+            db.get_setting(CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING)
+                .expect("get setting")
+                .as_deref(),
+            Some("")
+        );
+    }
+
+    #[tokio::test]
+    async fn aggregate_build_applies_model_excludes_to_third_party() {
+        let db = Database::memory().expect("in-memory database");
+        let official = Provider::with_id(
+            CODEX_OFFICIAL_PROVIDER_ID.to_string(),
+            "OpenAI Official".to_string(),
+            json!({ "auth": {}, "config": "" }),
+            None,
+        );
+        let provider_a = Provider::with_id(
+            "provider-a".to_string(),
+            "Provider A".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "a" },
+                "config": "",
+                "modelCatalog": {
+                    "models": [
+                        { "model": "model-a1", "displayName": "Model A1" },
+                        { "model": "model-a2", "displayName": "Model A2" }
+                    ]
+                }
+            }),
+            None,
+        );
+        db.save_provider(AppType::Codex.as_str(), &official)
+            .expect("save official");
+        db.save_provider(AppType::Codex.as_str(), &provider_a)
+            .expect("save provider a");
+        db.set_setting(
+            CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING,
+            r#"["provider-a"]"#,
+        )
+        .expect("save source selection");
+        db.set_setting(
+            CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING,
+            r#"{"provider-a":["model-a1"]}"#,
+        )
+        .expect("save model excludes");
+
+        let build = build_codex_aggregate_provider(&db)
+            .await
+            .expect("build aggregate");
+        let models = build
+            .provider
+            .settings_config
+            .pointer("/modelCatalog/models")
+            .and_then(Value::as_array)
+            .expect("model catalog");
+
+        assert_eq!(build.model_count, 1);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["model"], "model-a2/Provider A");
+        let routes = build.provider.settings_config["codexAggregateRoutes"]
+            .as_object()
+            .expect("routes");
+        assert!(routes.contains_key("model-a2/Provider A"));
+        assert!(!routes.contains_key("model-a1/Provider A"));
+    }
+
+    /// 官方源模型级过滤：从 models_cache.json 中排除指定模型，其余保留原名进目录。
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn aggregate_build_applies_model_excludes_to_official() {
+        let dir = tempfile::tempdir().expect("create isolated home");
+        let codex_dir = dir.path().join(".codex");
+        fs::create_dir_all(&codex_dir).expect("create .codex dir");
+        fs::write(
+            codex_dir.join("models_cache.json"),
+            r#"{"models":[
+                {"slug":"gpt-5.5","display_name":"GPT-5.5"},
+                {"slug":"gpt-6-astra","display_name":"GPT-6-Astra"}
+            ]}"#,
+        )
+        .expect("write models cache");
+        let original_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+        let _ = crate::settings::reload_settings();
+
+        let db = Database::memory().expect("in-memory database");
+        let official = Provider::with_id(
+            CODEX_OFFICIAL_PROVIDER_ID.to_string(),
+            "OpenAI Official".to_string(),
+            json!({ "auth": {}, "config": "" }),
+            None,
+        );
+        db.save_provider(AppType::Codex.as_str(), &official)
+            .expect("save official");
+        db.set_setting(
+            CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING,
+            r#"["codex-official"]"#,
+        )
+        .expect("save source selection");
+        db.set_setting(
+            CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING,
+            r#"{"codex-official":["gpt-5.5"]}"#,
+        )
+        .expect("save model excludes");
+
+        let result = build_codex_aggregate_provider(&db).await;
+
+        match &original_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let _ = crate::settings::reload_settings();
+
+        let build = result.expect("build aggregate");
+        let models = build
+            .provider
+            .settings_config
+            .pointer("/modelCatalog/models")
+            .and_then(Value::as_array)
+            .expect("model catalog");
+        assert_eq!(build.model_count, 1);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["model"], "gpt-6-astra");
+        let routes = build.provider.settings_config["codexAggregateRoutes"]
+            .as_object()
+            .expect("routes");
+        assert!(routes.contains_key("gpt-6-astra"));
+        assert!(!routes.contains_key("gpt-5.5"));
+        assert!(build.warnings.is_empty());
+    }
+
+    /// 官方模型被用户全部过滤时不算"官方源为空"：允许重建（其他来源仍可聚合），
+    /// 但附 warning 提醒官方模型未纳入。
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn aggregate_build_allows_fully_excluded_official_with_warning() {
+        let dir = tempfile::tempdir().expect("create isolated home");
+        let codex_dir = dir.path().join(".codex");
+        fs::create_dir_all(&codex_dir).expect("create .codex dir");
+        fs::write(
+            codex_dir.join("models_cache.json"),
+            r#"{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5"}]}"#,
+        )
+        .expect("write models cache");
+        let original_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+        let _ = crate::settings::reload_settings();
+
+        let db = Database::memory().expect("in-memory database");
+        let official = Provider::with_id(
+            CODEX_OFFICIAL_PROVIDER_ID.to_string(),
+            "OpenAI Official".to_string(),
+            json!({ "auth": {}, "config": "" }),
+            None,
+        );
+        let provider_a = Provider::with_id(
+            "provider-a".to_string(),
+            "Provider A".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "a" },
+                "config": "",
+                "modelCatalog": {
+                    "models": [{ "model": "model-a", "displayName": "Model A" }]
+                }
+            }),
+            None,
+        );
+        db.save_provider(AppType::Codex.as_str(), &official)
+            .expect("save official");
+        db.save_provider(AppType::Codex.as_str(), &provider_a)
+            .expect("save provider a");
+        db.set_setting(
+            CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING,
+            r#"{"codex-official":["gpt-5.5"]}"#,
+        )
+        .expect("save model excludes");
+
+        let result = build_codex_aggregate_provider(&db).await;
+
+        match &original_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let _ = crate::settings::reload_settings();
+
+        let build = result.expect("build aggregate");
+        let models = build
+            .provider
+            .settings_config
+            .pointer("/modelCatalog/models")
+            .and_then(Value::as_array)
+            .expect("model catalog");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["model"], "model-a/Provider A");
+        assert!(build
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("全部过滤")));
     }
 }

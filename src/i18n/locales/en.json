@@ -2944,7 +2944,13 @@
       "groupLabel": "Multi-model aggregation",
       "sourceProvidersLabel": "Model source providers",
       "conversionRequired": "Needs Routing",
-      "official": "Official"
+      "official": "Official",
+      "modelFilterExcludedCount": "{{count}} excluded",
+      "modelFilterTitle": "{{name}} models",
+      "modelFilterLoading": "Loading models…",
+      "modelFilterFailed": "Failed to load model list: {{error}}",
+      "modelFilterEmpty": "No filterable models for this provider",
+      "modelExcludesUpdateFailed": "Failed to update model filter: {{error}}"
     },
     "takeover": {
       "ariaLabel": "{{appLabel}} local routing",

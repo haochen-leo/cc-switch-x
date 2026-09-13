@@ -124,6 +124,32 @@ pub async fn set_codex_aggregation_sources(
         .await
 }
 
+/// 读取 Codex 聚合某家来源供应商的模型列表（模型过滤选择器按家懒加载）。
+#[tauri::command]
+pub async fn get_codex_aggregation_source_models(
+    state: tauri::State<'_, AppState>,
+    provider_id: String,
+) -> Result<crate::services::codex_aggregation::CodexAggregationSourceModels, String> {
+    crate::services::codex_aggregation::codex_aggregation_source_models(
+        &state.db,
+        provider_id.trim(),
+    )
+    .await
+}
+
+/// 保存 Codex 聚合某家来源供应商的模型级过滤（排除列表）。
+#[tauri::command]
+pub async fn set_codex_aggregation_model_excludes(
+    state: tauri::State<'_, AppState>,
+    provider_id: String,
+    excluded_models: Vec<String>,
+) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+    state
+        .proxy_service
+        .set_codex_aggregation_model_excludes(&provider_id, excluded_models)
+        .await
+}
+
 /// 获取代理服务器状态
 #[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
