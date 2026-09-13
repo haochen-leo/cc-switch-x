@@ -1581,6 +1581,8 @@ pub fn run() {
             commands::get_codex_aggregation_status,
             commands::set_codex_aggregation,
             commands::set_codex_aggregation_sources,
+            commands::get_codex_aggregation_source_models,
+            commands::set_codex_aggregation_model_excludes,
             commands::get_proxy_status,
             commands::get_proxy_config,
             commands::update_proxy_config,

@@ -59,6 +59,8 @@ export interface CodexAggregationStatus {
   sourceProviderCount: number;
   selectedProviderIds: string[];
   sourceProviders: CodexAggregationSourceProvider[];
+  /** 各来源供应商当前排除的模型（上游模型 ID），键为供应商 ID */
+  modelExcludes: Record<string, string[]>;
   warnings: string[];
 }
 
@@ -68,6 +70,21 @@ export interface CodexAggregationSourceProvider {
   official: boolean;
   selected: boolean;
   conversionRequired: boolean;
+}
+
+export interface CodexAggregationSourceModel {
+  model: string;
+  displayName: string;
+}
+
+export interface CodexAggregationSourceModels {
+  providerId: string;
+  providerName: string;
+  official: boolean;
+  selected: boolean;
+  models: CodexAggregationSourceModel[];
+  excludedModels: string[];
+  warning: string | null;
 }
 
 export interface ProviderHealth {
