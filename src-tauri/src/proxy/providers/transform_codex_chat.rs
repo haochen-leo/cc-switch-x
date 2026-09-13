@@ -677,26 +677,32 @@ impl CodexToolContext {
         self.add_chat_tool(name, spec, chat_tool);
     }
 
-    fn add_tool_search_tool(&mut self) {
+    fn add_tool_search_tool(&mut self, tool: &Value) {
+        let description = tool.get("description").cloned().unwrap_or_else(|| {
+            json!("Search and load Codex tools, plugins, connectors, and MCP namespaces for the current task.")
+        });
+        let parameters = tool.get("parameters").cloned().unwrap_or_else(|| {
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query for tools or connectors to load."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of tool groups to return."
+                    }
+                },
+                "required": ["query"]
+            })
+        });
         let chat_tool = json!({
             "type": "function",
             "function": {
                 "name": TOOL_SEARCH_PROXY_NAME,
-                "description": "Search and load Codex tools, plugins, connectors, and MCP namespaces for the current task.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query for tools or connectors to load."
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of tool groups to return."
-                        }
-                    },
-                    "required": ["query"]
-                }
+                "description": description,
+                "parameters": parameters
             }
         });
         let spec = CodexToolSpec {
@@ -737,7 +743,7 @@ impl CodexToolContext {
             Value::Object(_) => match tool.get("type").and_then(|v| v.as_str()) {
                 Some("function") => self.add_function_tool(tool, None),
                 Some("custom") => self.add_custom_tool(tool),
-                Some("tool_search") => self.add_tool_search_tool(),
+                Some("tool_search") => self.add_tool_search_tool(tool),
                 Some("namespace") => self.add_namespace_tool(tool),
                 _ => {}
             },
@@ -3990,6 +3996,44 @@ mod tests {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn responses_request_to_chat_preserves_tool_search_contract() {
+        let parameters = json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search all deferred tools by capability."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        });
+        let input = json!({
+            "model": "gpt-5.4",
+            "tools": [{
+                "type": "tool_search",
+                "description": "Available sources: GitHub, Sites, and Codex Apps.",
+                "parameters": parameters
+            }],
+            "input": "Find a tool."
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        let tool = &result["tools"][0]["function"];
+
+        assert_eq!(
+            tool["description"],
+            "Available sources: GitHub, Sites, and Codex Apps."
+        );
+        assert_eq!(tool["parameters"], parameters);
     }
 
     #[test]
