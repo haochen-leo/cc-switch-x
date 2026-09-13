@@ -2944,7 +2944,13 @@
       "groupLabel": "多模型聚合",
       "sourceProvidersLabel": "模型來源供應商",
       "conversionRequired": "需要路由",
-      "official": "官方"
+      "official": "官方",
+      "modelFilterExcludedCount": "已排除 {{count}}",
+      "modelFilterTitle": "{{name}} 的模型",
+      "modelFilterLoading": "模型載入中…",
+      "modelFilterFailed": "模型清單載入失敗：{{error}}",
+      "modelFilterEmpty": "該供應商暫無可過濾的模型",
+      "modelExcludesUpdateFailed": "更新模型過濾失敗：{{error}}"
     },
     "takeover": {
       "ariaLabel": "{{appLabel}} 本地路由",

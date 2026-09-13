@@ -3537,6 +3537,10 @@ impl ProxyService {
             .filter(|source| source.selected)
             .map(|source| source.provider_id.clone())
             .collect();
+        let model_excludes =
+            crate::services::codex_aggregation::codex_aggregation_all_model_excludes(
+                self.db.as_ref(),
+            )?;
 
         Ok(CodexAggregationStatus {
             enabled: takeover_enabled
@@ -3546,6 +3550,7 @@ impl ProxyService {
             source_provider_count,
             selected_provider_ids,
             source_providers,
+            model_excludes,
             warnings: Vec::new(),
         })
     }
@@ -3595,6 +3600,10 @@ impl ProxyService {
 
         record_models_cache_hash(self.db.as_ref());
 
+        let model_excludes =
+            crate::services::codex_aggregation::codex_aggregation_all_model_excludes(
+                self.db.as_ref(),
+            )?;
         Ok(Some(CodexAggregationStatus {
             enabled: true,
             provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
@@ -3602,6 +3611,7 @@ impl ProxyService {
             source_provider_count: build.source_provider_count,
             selected_provider_ids: build.selected_provider_ids,
             source_providers: build.source_providers,
+            model_excludes,
             warnings: build.warnings,
         }))
     }
@@ -3640,6 +3650,54 @@ impl ProxyService {
                         previous_setting.as_deref().unwrap_or(""),
                     ) {
                         log::error!("恢复原 Codex 聚合来源设置失败: {restore_error}");
+                    }
+                    return Err(error);
+                }
+            }
+        }
+
+        self.get_codex_aggregation_status().await
+    }
+
+    /// 保存某家聚合来源供应商的模型级过滤（排除列表）。聚合已启用时重建目录
+    /// 并热切换，失败则回滚过滤设置，行为与来源供应商保存一致。
+    pub async fn set_codex_aggregation_model_excludes(
+        &self,
+        provider_id: &str,
+        excluded_models: Vec<String>,
+    ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
+        use crate::services::codex_aggregation::{
+            codex_aggregation_source_providers, save_codex_aggregation_model_excludes,
+            CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING,
+        };
+
+        let provider_id = provider_id.trim();
+        let sources = codex_aggregation_source_providers(self.db.as_ref())?;
+        if !sources
+            .iter()
+            .any(|source| source.provider_id == provider_id)
+        {
+            return Err(format!("Codex 聚合来源供应商不存在: {provider_id}"));
+        }
+
+        let previous_setting = self
+            .db
+            .get_setting(CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING)
+            .map_err(|error| format!("读取原 Codex 聚合模型过滤设置失败: {error}"))?;
+        let was_enabled = self.get_codex_aggregation_status().await?.enabled;
+
+        save_codex_aggregation_model_excludes(self.db.as_ref(), provider_id, &excluded_models)?;
+
+        if was_enabled {
+            match self.refresh_codex_aggregation_if_enabled().await {
+                Ok(Some(status)) => return Ok(status),
+                Ok(None) => {}
+                Err(error) => {
+                    if let Err(restore_error) = self.db.set_setting(
+                        CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING,
+                        previous_setting.as_deref().unwrap_or(""),
+                    ) {
+                        log::error!("恢复原 Codex 聚合模型过滤设置失败: {restore_error}");
                     }
                     return Err(error);
                 }
@@ -3730,6 +3788,10 @@ impl ProxyService {
 
             record_models_cache_hash(self.db.as_ref());
 
+            let model_excludes =
+                crate::services::codex_aggregation::codex_aggregation_all_model_excludes(
+                    self.db.as_ref(),
+                )?;
             return Ok(CodexAggregationStatus {
                 enabled: true,
                 provider_id: CODEX_AGGREGATE_PROVIDER_ID.to_string(),
@@ -3737,6 +3799,7 @@ impl ProxyService {
                 source_provider_count: build.source_provider_count,
                 selected_provider_ids: build.selected_provider_ids,
                 source_providers: build.source_providers,
+                model_excludes,
                 warnings: build.warnings,
             });
         }
