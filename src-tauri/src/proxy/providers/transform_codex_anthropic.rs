@@ -1796,6 +1796,37 @@ mod tests {
     }
 
     #[test]
+    fn test_request_preserves_tool_search_contract() {
+        let parameters = json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 8}
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        });
+        let input = json!({
+            "model": "claude-3-5-sonnet",
+            "tools": [{
+                "type": "tool_search",
+                "description": "Available sources: GitHub, Sites, and Codex Apps.",
+                "parameters": parameters
+            }],
+            "input": "Find a tool."
+        });
+
+        let result = responses_request_to_anthropic(input, 4096).unwrap();
+        let tool = &result["tools"][0];
+
+        assert_eq!(
+            tool["description"],
+            "Available sources: GitHub, Sites, and Codex Apps."
+        );
+        assert_eq!(tool["input_schema"], parameters);
+    }
+
+    #[test]
     fn test_request_simple_text() {
         let input = json!({
             "model": "claude-3-5-sonnet",
