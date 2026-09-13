@@ -7,6 +7,7 @@ import type {
   GlobalProxyConfig,
   AppProxyConfig,
   CodexAggregationStatus,
+  CodexAggregationSourceModels,
 } from "@/types/proxy";
 
 export const proxyApi = {
@@ -59,6 +60,22 @@ export const proxyApi = {
     sourceProviderIds: string[],
   ): Promise<CodexAggregationStatus> {
     return invoke("set_codex_aggregation_sources", { sourceProviderIds });
+  },
+
+  async getCodexAggregationSourceModels(
+    providerId: string,
+  ): Promise<CodexAggregationSourceModels> {
+    return invoke("get_codex_aggregation_source_models", { providerId });
+  },
+
+  async setCodexAggregationModelExcludes(
+    providerId: string,
+    excludedModels: string[],
+  ): Promise<CodexAggregationStatus> {
+    return invoke("set_codex_aggregation_model_excludes", {
+      providerId,
+      excludedModels,
+    });
   },
 
   // ========== Legacy 代理配置 API (兼容) ==========
