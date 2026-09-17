@@ -328,6 +328,10 @@ export interface RectifierConfig {
   requestToolUseId: boolean;
   requestMediaFallback: boolean;
   requestMediaHeuristic: boolean;
+  requestMediaOcrFallback: boolean;
+  requestMediaOcrProviderAppType: "claude" | "codex";
+  requestMediaOcrProviderId: string;
+  requestMediaOcrModel: string;
 }
 
 export interface OptimizerConfig {

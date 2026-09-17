@@ -22,6 +22,69 @@ static CODEX_CLIENT_REGEX: LazyLock<Regex> =
 /// Codex 适配器
 pub struct CodexAdapter;
 
+/// Resolve the protocol explicitly configured for a Codex provider.
+///
+/// This intentionally does not infer a protocol from a vendor host. The only
+/// URL-based fallback accepted here is an exact `/chat/completions` endpoint,
+/// which is itself an explicit protocol declaration. Aggregate providers do
+/// not have one direct upstream protocol and therefore return `None`.
+pub fn get_codex_api_format(provider: &Provider) -> Option<&'static str> {
+    if provider.is_codex_aggregate() {
+        return None;
+    }
+    if is_codex_official_provider(provider) || provider.is_xai_oauth() {
+        return Some("openai_responses");
+    }
+
+    if let Some(api_format) = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.api_format.as_deref())
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("api_format")
+                .and_then(|value| value.as_str())
+        })
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("apiFormat")
+                .and_then(|value| value.as_str())
+        })
+    {
+        return normalize_codex_api_format(api_format);
+    }
+
+    if let Some(wire_api) = provider
+        .settings_config
+        .get("config")
+        .and_then(|value| value.as_str())
+        .and_then(extract_codex_wire_api_from_toml)
+    {
+        return normalize_codex_api_format(&wire_api);
+    }
+
+    let base_url = provider
+        .settings_config
+        .get("base_url")
+        .or_else(|| provider.settings_config.get("baseURL"))
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("config")
+                .and_then(|value| value.as_str())
+                .and_then(extract_codex_base_url_from_toml)
+        });
+
+    base_url
+        .as_deref()
+        .filter(|url| is_chat_completions_url(url))
+        .map(|_| "openai_chat")
+}
+
 /// Whether this Codex provider's real upstream should be called through
 /// OpenAI Chat Completions, even if the local Codex client is talking to CC
 /// Switch through the Responses API.
@@ -981,6 +1044,22 @@ fn is_anthropic_wire_api(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "anthropic" | "anthropic_messages" | "anthropic-messages" | "claude" | "messages"
     )
+}
+
+fn normalize_codex_api_format(value: &str) -> Option<&'static str> {
+    if is_chat_wire_api(value) {
+        return Some("openai_chat");
+    }
+    if is_anthropic_wire_api(value) {
+        return Some("anthropic");
+    }
+    if matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "responses" | "openai_responses" | "openai-responses"
+    ) {
+        return Some("openai_responses");
+    }
+    None
 }
 
 fn is_chat_completions_url(value: &str) -> bool {
