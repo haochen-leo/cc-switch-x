@@ -1943,7 +1943,8 @@
       "syncNow": "Sync now"
     },
     "cacheReadCostPerMillion": "Cache Read Cost (per million tokens, USD)",
-    "cacheCreationCostPerMillion": "Cache Write Cost (per million tokens, USD)"
+    "cacheCreationCostPerMillion": "Cache Write Cost (per million tokens, USD)",
+    "outputTokenSpeed": "Output Speed"
   },
   "usageScript": {
     "title": "Configure Usage Query",

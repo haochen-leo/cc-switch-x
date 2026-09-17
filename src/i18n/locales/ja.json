@@ -1943,7 +1943,8 @@
       "syncNow": "今すぐ同期"
     },
     "cacheReadCostPerMillion": "キャッシュ読み取りコスト（100万トークンあたり、USD）",
-    "cacheCreationCostPerMillion": "キャッシュ書き込みコスト（100万トークンあたり、USD）"
+    "cacheCreationCostPerMillion": "キャッシュ書き込みコスト（100万トークンあたり、USD）",
+    "outputTokenSpeed": "出力速度"
   },
   "usageScript": {
     "title": "利用状況を設定",
