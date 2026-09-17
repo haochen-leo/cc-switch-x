@@ -18,13 +18,26 @@ pub const UNSUPPORTED_IMAGE_MARKER: &str = "[Unsupported Image]";
 /// - the confirmed text-only registry is used for proactive replacement only
 ///   when `allow_heuristic` is true. This switch controls silent request-body
 ///   mutation, not the capability truth advertised by the Codex model catalog.
+#[cfg(test)]
 pub fn replace_images_for_text_only_model(
     body: &mut Value,
     provider: &Provider,
     allow_heuristic: bool,
 ) -> usize {
-    if !contains_image_blocks(body) {
+    if !is_text_only_model_for_provider(body, provider, allow_heuristic) {
         return 0;
+    }
+
+    replace_images_in_body(body)
+}
+
+pub fn is_text_only_model_for_provider(
+    body: &Value,
+    provider: &Provider,
+    allow_heuristic: bool,
+) -> bool {
+    if !contains_image_blocks(body) {
+        return false;
     }
 
     let model = body
@@ -33,13 +46,8 @@ pub fn replace_images_for_text_only_model(
         .map(str::trim)
         .unwrap_or("");
 
-    if image_input_capability_from_settings(&provider.settings_config, model, allow_heuristic)
-        != ImageInputCapability::Unsupported
-    {
-        return 0;
-    }
-
-    replace_images_in_body(body)
+    image_input_capability_from_settings(&provider.settings_config, model, allow_heuristic)
+        == ImageInputCapability::Unsupported
 }
 
 pub fn contains_image_blocks(body: &Value) -> bool {

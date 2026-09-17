@@ -64,7 +64,7 @@ pub use codex::CodexAdapter;
 pub use codex::{
     apply_codex_chat_upstream_model, apply_codex_upstream_model, codex_anthropic_thinking_policy,
     codex_native_responses_uses_openai_private_contract, codex_provider_upstream_model,
-    codex_provider_uses_anthropic, codex_provider_uses_chat_completions,
+    codex_provider_uses_anthropic, codex_provider_uses_chat_completions, get_codex_api_format,
     inject_codex_chat_prompt_cache_key, is_codex_official_provider,
     provider_needs_responses_apply_patch_bridge, provider_needs_responses_namespace_flatten,
     provider_needs_responses_tool_search_bridge, provider_needs_xai_responses_sanitize,

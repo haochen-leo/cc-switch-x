@@ -91,6 +91,7 @@ const SYNC_SKIP_TABLES: &[&str] = &[
     "usage_daily_rollups",
     "session_log_sync",
     "session_usage_dedup",
+    "media_ocr_cache",
 ];
 
 /// Tables whose local data is preserved from the live database during WebDAV import.
@@ -102,6 +103,7 @@ const SYNC_PRESERVE_TABLES: &[&str] = &[
     "usage_daily_rollups",
     "session_log_sync",
     "session_usage_dedup",
+    "media_ocr_cache",
 ];
 
 /// A database backup entry for the UI
@@ -2158,6 +2160,47 @@ mod tests {
                 "本地保留表 {table} 也必须从远端 payload 中排除"
             );
         }
+    }
+
+    #[test]
+    #[serial]
+    fn sync_keeps_media_ocr_cache_local() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let source = Database::memory()?;
+        source.put_media_ocr_cache(
+            "source-key",
+            "source-image",
+            "codex",
+            "source-provider",
+            "vision",
+            "v1",
+            "source OCR text",
+        )?;
+
+        let remote_sql = source.export_sql_string_for_sync()?;
+        let exported = Connection::open_in_memory()?;
+        exported.execute_batch(&remote_sql)?;
+        let remote_count: i64 =
+            exported.query_row("SELECT COUNT(*) FROM media_ocr_cache", [], |row| row.get(0))?;
+        assert_eq!(remote_count, 0, "同步快照不得包含本机 OCR 文本");
+
+        let local = Database::memory()?;
+        local.put_media_ocr_cache(
+            "local-key",
+            "local-image",
+            "claude",
+            "local-provider",
+            "vision",
+            "v1",
+            "local OCR text",
+        )?;
+        local.import_sql_string_for_sync(&remote_sql)?;
+        assert_eq!(
+            local.get_media_ocr_cache("local-key")?.as_deref(),
+            Some("local OCR text"),
+            "下载远端配置时必须保留本机 OCR 缓存"
+        );
+        Ok(())
     }
 
     #[test]
