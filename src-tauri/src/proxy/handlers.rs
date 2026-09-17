@@ -1390,6 +1390,7 @@ async fn handle_responses_for_app(
         response,
         &ctx,
         &state,
+        is_stream,
         connection_guard,
         transform_context,
     )
@@ -1631,6 +1632,7 @@ async fn handle_responses_compact_for_app(
         response,
         &ctx,
         &state,
+        is_stream,
         connection_guard,
         transform_context,
     )
@@ -1658,6 +1660,7 @@ async fn handle_codex_native_responses_transform(
     response: super::hyper_client::ProxyResponse,
     ctx: &RequestContext,
     state: &ProxyState,
+    is_stream: bool,
     connection_guard: Option<ActiveConnectionGuard>,
     transform_context: transform_codex_responses::TransformContext,
 ) -> Result<axum::response::Response, ProxyError> {
@@ -1669,7 +1672,10 @@ async fn handle_codex_native_responses_transform(
             .await;
     }
 
-    if response.is_sse() {
+    // Preserve the streaming usage path when the request asked for stream:true
+    // but the upstream omits the explicit SSE media type. Explicit JSON still
+    // uses the buffered transform below.
+    if response.is_sse() || (is_stream && !response.is_json()) {
         let mut response_headers = response.headers().clone();
         strip_hop_by_hop_response_headers(&mut response_headers);
         let mut builder = axum::response::Response::builder().status(status);
