@@ -1410,7 +1410,11 @@
     "claudeRoutingProxyNotRunning": "Local routing service is not running; model routing settings will not take effect.",
     "claudeRoutingTakeoverNotEnabled": "Claude takeover is not enabled; model routing settings will not take effect.",
     "claudeRoutingRectifierSuggested": "Model routing provider is configured; for continuing history across providers, enable Rectifier and Tool Use ID rectification in Settings.",
-    "requiredFields": "Please fill in provider name, API endpoint, API Key and model"
+    "requiredFields": "Please fill in provider name, API endpoint, API Key and model",
+    "modelImageSupportHeader": "Image",
+    "modelImageSupportAuto": "Auto",
+    "modelImageSupportSupported": "Supported",
+    "modelImageSupportUnsupported": "Not supported"
   },
   "copilot": {
     "authSection": "GitHub Copilot Authentication",
@@ -1639,7 +1643,8 @@
     "reasoningGroupTitle": "Reasoning Capability",
     "reasoningSectionHint": "Preset providers are configured automatically; custom providers are inferred from name/URL. Override manually only when auto-detection is wrong.",
     "advancedSectionHint": "Includes upstream format, model mapping, reasoning overrides and custom User-Agent. Providers using the Chat Completions protocol require routing takeover to be enabled.",
-    "noCommonConfigToApply": "The common config snippet is empty or contains nothing to write"
+    "noCommonConfigToApply": "The common config snippet is empty or contains nothing to write",
+    "catalogColumnImage": "Image"
   },
   "geminiConfig": {
     "envFile": "Environment Variables (.env)",

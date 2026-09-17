@@ -87,6 +87,8 @@ const renderCopilotForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     defaultFableModelName: "",
     subagentModel: "",
     onModelChange: vi.fn(),
+    getModelImageSupport: vi.fn(() => "auto" as const),
+    onModelImageSupportChange: vi.fn(),
     speedTestEndpoints: [],
     apiFormat: "anthropic",
     onApiFormatChange: vi.fn(),
@@ -214,6 +216,63 @@ describe("ClaudeFormFields", () => {
     expect(
       screen.getByText(/当前已路由到 Provider B，.*Sonnet 槽位/),
     ).toBeInTheDocument();
+  });
+
+  it("按模型展示图片输入声明，空模型与路由命中的行禁用", () => {
+    const getModelImageSupport = vi.fn((model: string) =>
+      model === "a-sonnet-model" ? ("unsupported" as const) : ("auto" as const),
+    );
+    renderCopilotForm({
+      category: "third_party",
+      defaultSonnetModel: "a-sonnet-model",
+      claudeModel: "a-fallback-model",
+      getModelImageSupport,
+    });
+
+    // sonnet / opus / fable / haiku / subagent / 默认兜底
+    const selects = screen.getAllByLabelText("图片");
+    expect(selects).toHaveLength(6);
+    expect(selects[0]).toHaveTextContent("不支持");
+    expect(selects[0]).toBeEnabled();
+    // opus / fable / haiku / subagent 模型为空，禁用
+    expect(selects[1]).toBeDisabled();
+    expect(selects[2]).toBeDisabled();
+    expect(selects[3]).toBeDisabled();
+    expect(selects[4]).toBeDisabled();
+    expect(selects[5]).toHaveTextContent("自动");
+    expect(selects[5]).toBeEnabled();
+  });
+
+  it("路由到其他供应商的行禁止修改图片输入声明", () => {
+    renderCopilotForm({
+      category: "third_party",
+      defaultSonnetModel: "a-sonnet-model",
+      claudeModelRoutingEnabled: true,
+      claudeModelRouting: {
+        sonnetProviderId: "provider-b",
+      },
+      routingProviderOptions: [
+        {
+          id: "provider-b",
+          name: "Provider B",
+          slots: {
+            defaultModel: "",
+            defaultDisplayName: "",
+            haikuModel: "",
+            haikuDisplayName: "",
+            sonnetModel: "b-sonnet-model",
+            sonnetDisplayName: "B Sonnet",
+            opusModel: "",
+            opusDisplayName: "",
+            fableModel: "",
+            fableDisplayName: "",
+          },
+        },
+      ],
+    });
+
+    const selects = screen.getAllByLabelText("图片");
+    expect(selects[0]).toBeDisabled();
   });
 
   it("一键设置会同时写入 Subagent 模型", () => {
