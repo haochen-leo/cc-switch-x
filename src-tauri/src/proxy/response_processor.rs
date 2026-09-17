@@ -902,11 +902,13 @@ mod tests {
     use crate::error::AppError;
     use crate::provider::ProviderMeta;
     use crate::proxy::failover_switch::FailoverSwitchManager;
+    use crate::proxy::handler_config::codex_stream_usage_event_filter;
     use crate::proxy::provider_router::ProviderRouter;
     use crate::proxy::providers::{
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore,
     };
     use crate::proxy::types::{ProxyConfig, ProxyStatus};
+    use futures::StreamExt;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -1091,6 +1093,58 @@ mod tests {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_codex_stream_usage_collector_captures_first_token_and_usage() {
+        let collector = SseUsageCollector::new(
+            std::time::Instant::now(),
+            Some(codex_stream_usage_event_filter),
+            |events: Vec<Value>, first_token_ms: Option<u64>| {
+                assert!(first_token_ms.is_some());
+                assert!(first_token_ms.unwrap() < 120);
+
+                let usage =
+                    TokenUsage::from_codex_stream_events_auto(&events).expect("usage is parsed");
+                assert_eq!(usage.model.as_deref(), Some("gpt-model"));
+                assert_eq!(usage.input_tokens, 239672);
+                assert_eq!(usage.output_tokens, 1009);
+            },
+        );
+
+        let chunks = vec![
+            Bytes::from_static(
+                b"event: response.created\n",
+            ),
+            Bytes::from_static(
+                b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-test\",\"model\":\"gpt-model\"}}\n\n",
+            ),
+            Bytes::from_static(
+                b"event: response.output_text.delta\n",
+            ),
+            Bytes::from_static(
+                b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n",
+            ),
+            Bytes::from_static(
+                b"event: response.completed\n",
+            ),
+            Bytes::from_static(
+                b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-test\",\"model\":\"gpt-model\",\"usage\":{\"input_tokens\":239672,\"output_tokens\":1009}}}\n\n",
+            ),
+        ];
+        let stream = create_logged_passthrough_stream(
+            futures::stream::iter(chunks.into_iter().map(Ok::<Bytes, std::io::Error>)),
+            "Codex",
+            Some(collector),
+            StreamingTimeoutConfig {
+                first_byte_timeout: 0,
+                idle_timeout: 0,
+            },
+            None,
+            None,
+        );
+        tokio::pin!(stream);
+        while stream.next().await.transpose().unwrap().is_some() {}
     }
 
     fn insert_provider(
