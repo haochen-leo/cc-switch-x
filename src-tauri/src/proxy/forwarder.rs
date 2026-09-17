@@ -42,6 +42,7 @@ use tokio::sync::RwLock;
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
 const DEFAULT_UPSTREAM_RESPONSE_TIMEOUT_SECS: u64 = 60;
+const MEDIA_OCR_TIMEOUT_SECS: u64 = 120;
 
 fn codex_bearer_access_token(headers: &http::HeaderMap) -> Option<&str> {
     let authorization = headers
@@ -231,20 +232,83 @@ impl RequestForwarder {
         provider_body
     }
 
-    /// 预防式 media 降级：发送前对 text-only 模型把图片块替换为标记。
+    /// 预防式 media 降级：发送前对 text-only 模型处理图片块。
     ///
     /// 受 `enabled && request_media_fallback` 管辖；其中"启发式模型名单预测"
     /// 再受 `request_media_heuristic` 单独管辖（显式声明 text-only 始终生效）。
+    /// 开启 `request_media_ocr_fallback` 时先按目标供应商已配置的协议做 OCR，
+    /// OCR 不可用或失败时退回 [Unsupported Image] 标记。
     /// 返回被替换的图片块数量（0 = 未触发或开关关闭）。
-    fn apply_media_prevention(&self, body: &mut Value, provider: &Provider) -> usize {
+    async fn apply_media_prevention(&self, body: &mut Value, provider: &Provider) -> usize {
         if !(self.rectifier_config.enabled && self.rectifier_config.request_media_fallback) {
             return 0;
         }
-        let replaced_images = super::media_sanitizer::replace_images_for_text_only_model(
+        if !super::media_sanitizer::is_text_only_model_for_provider(
             body,
             provider,
             self.rectifier_config.request_media_heuristic,
-        );
+        ) {
+            return 0;
+        }
+
+        if self.rectifier_config.request_media_ocr_fallback {
+            let image_urls = super::media_ocr::collect_image_urls(body);
+            let model = self.rectifier_config.request_media_ocr_model.trim();
+
+            if image_urls.is_empty() {
+                log::warn!(
+                    "[Media OCR] text-only provider={} 未找到可提交给 OCR 的图片 URL",
+                    provider.id
+                );
+            } else if model.is_empty() {
+                log::warn!("[Media OCR] 未配置 OCR 模型，退回图片占位符");
+            } else if let Some((ocr_provider_app_type, ocr_provider)) =
+                self.resolve_media_ocr_provider()
+            {
+                match super::media_ocr::transcribe_images(
+                    self.db.as_ref(),
+                    &ocr_provider_app_type,
+                    &ocr_provider,
+                    model,
+                    &image_urls,
+                    std::time::Duration::from_secs(MEDIA_OCR_TIMEOUT_SECS),
+                )
+                .await
+                {
+                    Ok((protocol, results, cache_hits)) => {
+                        let replaced_images =
+                            super::media_ocr::replace_images_with_ocr_results(body, &results);
+                        let succeeded = results.iter().filter(|result| result.is_some()).count();
+
+                        log::info!(
+                            "[Media OCR] provider={} app_type={} protocol={} model={} converted {}/{} image block(s), cache_hits={}/{}, replaced={} for text-only provider={}",
+                            ocr_provider.id,
+                            ocr_provider_app_type,
+                            protocol.as_str(),
+                            model,
+                            succeeded,
+                            image_urls.len(),
+                            cache_hits,
+                            image_urls.len(),
+                            replaced_images,
+                            provider.id
+                        );
+                        return replaced_images;
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "[Media OCR] provider={} app_type={} model={} unavailable: {}; 退回图片占位符",
+                            ocr_provider.id,
+                            ocr_provider_app_type,
+                            model,
+                            error
+                        );
+                    }
+                }
+            }
+        }
+
+        let replaced_images = super::media_sanitizer::replace_image_blocks_with_marker(body);
         if replaced_images > 0 {
             let model = body.get("model").and_then(Value::as_str).unwrap_or("");
             log::info!(
@@ -255,6 +319,35 @@ impl RequestForwarder {
             );
         }
         replaced_images
+    }
+
+    fn resolve_media_ocr_provider(&self) -> Option<(String, Provider)> {
+        let provider_id = self.rectifier_config.request_media_ocr_provider_id.trim();
+        if provider_id.is_empty() {
+            log::warn!("[Media OCR] 未配置 OCR 供应商，退回图片占位符");
+            return None;
+        }
+
+        let app_type = self
+            .rectifier_config
+            .request_media_ocr_provider_app_type
+            .trim();
+        if !matches!(app_type, "claude" | "codex") {
+            log::warn!("[Media OCR] 不支持的 OCR 供应商类型: {app_type}");
+            return None;
+        }
+
+        match self.db.get_provider_by_id(provider_id, app_type) {
+            Ok(Some(provider)) => Some((app_type.to_string(), provider)),
+            Ok(None) => {
+                log::warn!("[Media OCR] OCR 供应商不存在: {app_type}/{provider_id}");
+                None
+            }
+            Err(error) => {
+                log::warn!("[Media OCR] 读取 Codex OCR 供应商失败: {error}");
+                None
+            }
+        }
     }
 
     /// 反应式 media 重试判定：上游因图片输入报错后，是否应替换图片块并对同一供应商重试一次。
@@ -1602,7 +1695,8 @@ impl RequestForwarder {
                     provider,
                     api_format,
                 );
-                self.apply_media_prevention(&mut mapped_body, provider);
+                self.apply_media_prevention(&mut mapped_body, provider)
+                    .await;
             }
         }
         let needs_transform = match resolved_claude_api_format.as_deref() {
@@ -1841,7 +1935,8 @@ impl RequestForwarder {
         }
 
         if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
-            self.apply_media_prevention(&mut request_body, provider);
+            self.apply_media_prevention(&mut request_body, provider)
+                .await;
         }
 
         // 过滤私有参数（以 `_` 开头的字段），防止内部信息泄露到上游
@@ -5870,20 +5965,20 @@ mod tests {
             retry_after_ms: None,
         }
     }
-    #[test]
-    fn prevention_replaces_when_all_switches_on_and_model_in_heuristic_list() {
+    #[tokio::test]
+    async fn prevention_replaces_when_all_switches_on_and_model_in_heuristic_list() {
         let fwd = forwarder_with_rectifier(RectifierConfig::default());
         let provider = provider_with_settings(json!({}));
         let mut body = body_with_image("deepseek-v4-pro");
 
-        let replaced = fwd.apply_media_prevention(&mut body, &provider);
+        let replaced = fwd.apply_media_prevention(&mut body, &provider).await;
 
         assert_eq!(replaced, 1, "默认全开 + 名单内模型应预替换");
         assert_eq!(body["messages"][0]["content"][0]["type"], "text");
     }
 
-    #[test]
-    fn prevention_skipped_when_media_fallback_off() {
+    #[tokio::test]
+    async fn prevention_skipped_when_media_fallback_off() {
         // 关闭 request_media_fallback：即使名单命中也不预替换。
         let fwd = forwarder_with_rectifier(RectifierConfig {
             request_media_fallback: false,
@@ -5892,14 +5987,14 @@ mod tests {
         let provider = provider_with_settings(json!({}));
         let mut body = body_with_image("deepseek-v4-pro");
 
-        let replaced = fwd.apply_media_prevention(&mut body, &provider);
+        let replaced = fwd.apply_media_prevention(&mut body, &provider).await;
 
         assert_eq!(replaced, 0);
         assert_eq!(body["messages"][0]["content"][0]["type"], "image");
     }
 
-    #[test]
-    fn prevention_skipped_when_master_switch_off() {
+    #[tokio::test]
+    async fn prevention_skipped_when_master_switch_off() {
         let fwd = forwarder_with_rectifier(RectifierConfig {
             enabled: false,
             ..RectifierConfig::default()
@@ -5907,12 +6002,12 @@ mod tests {
         let provider = provider_with_settings(json!({}));
         let mut body = body_with_image("deepseek-v4-pro");
 
-        assert_eq!(fwd.apply_media_prevention(&mut body, &provider), 0);
+        assert_eq!(fwd.apply_media_prevention(&mut body, &provider).await, 0);
         assert_eq!(body["messages"][0]["content"][0]["type"], "image");
     }
 
-    #[test]
-    fn prevention_heuristic_off_skips_list_but_keeps_explicit_text_only() {
+    #[tokio::test]
+    async fn prevention_heuristic_off_skips_list_but_keeps_explicit_text_only() {
         // 关闭 request_media_heuristic：名单预测失效，但显式声明 text-only 仍预替换。
         let fwd = forwarder_with_rectifier(RectifierConfig {
             request_media_heuristic: false,
@@ -5923,7 +6018,8 @@ mod tests {
         let bare_provider = provider_with_settings(json!({}));
         let mut list_body = body_with_image("deepseek-v4-pro");
         assert_eq!(
-            fwd.apply_media_prevention(&mut list_body, &bare_provider),
+            fwd.apply_media_prevention(&mut list_body, &bare_provider)
+                .await,
             0,
             "heuristic 关闭后名单模型不应被预替换"
         );
@@ -5935,7 +6031,8 @@ mod tests {
         }));
         let mut declared_body = body_with_image("some-text-model");
         assert_eq!(
-            fwd.apply_media_prevention(&mut declared_body, &declared_provider),
+            fwd.apply_media_prevention(&mut declared_body, &declared_provider)
+                .await,
             1,
             "显式 text-only 即使关闭 heuristic 也应预替换"
         );
