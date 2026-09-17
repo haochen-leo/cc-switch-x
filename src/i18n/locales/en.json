@@ -1414,7 +1414,11 @@
     "claudeRoutingRectifierSuggested": "Model routing provider is configured; for continuing history across providers, enable Rectifier and Tool Use ID rectification in Settings.",
     "claudeRoutingEffectiveSlotHint": "Currently routed to {{provider}} — the displayed and effective {{role}} slot belongs to that provider; this provider's own {{role}} slot does not apply.",
     "claudeRoutingMissingSlotHint": "Currently routed to {{provider}}, but that provider has no {{role}} slot configured yet — please fill it in on the target provider.",
-    "requiredFields": "Please fill in provider name, API endpoint, API Key and model"
+    "requiredFields": "Please fill in provider name, API endpoint, API Key and model",
+    "modelImageSupportHeader": "Image",
+    "modelImageSupportAuto": "Auto",
+    "modelImageSupportSupported": "Supported",
+    "modelImageSupportUnsupported": "Not supported"
   },
   "copilot": {
     "authSection": "GitHub Copilot Authentication",
@@ -1644,7 +1648,8 @@
     "reasoningGroupTitle": "Reasoning Capability",
     "reasoningSectionHint": "Preset providers are configured automatically; custom providers are inferred from name/URL. Override manually only when auto-detection is wrong.",
     "advancedSectionHint": "Includes upstream format, model mapping, reasoning overrides and custom User-Agent. Providers using the Chat Completions protocol require routing takeover to be enabled.",
-    "noCommonConfigToApply": "The common config snippet is empty or contains nothing to write"
+    "noCommonConfigToApply": "The common config snippet is empty or contains nothing to write",
+    "catalogColumnImage": "Image"
   },
   "geminiConfig": {
     "envFile": "Environment Variables (.env)",

@@ -1414,7 +1414,11 @@
     "claudeRoutingRectifierSuggested": "已設定「模型路由供應商」；跨供應商繼續歷史對話時，建議在設定中啟用整流器與 Tool Use ID 整流。",
     "claudeRoutingEffectiveSlotHint": "目前已路由至 {{provider}}，此處顯示並使用的是該供應商的 {{role}} 槽位；目前供應商的同名槽位不會生效。",
     "claudeRoutingMissingSlotHint": "目前已路由至 {{provider}}，但該供應商尚未設定 {{role}} 槽位，請到目標供應商中補齊。",
-    "requiredFields": "請填寫供應商名稱、API 位址、API Key 和模型"
+    "requiredFields": "請填寫供應商名稱、API 位址、API Key 和模型",
+    "modelImageSupportHeader": "圖片",
+    "modelImageSupportAuto": "自動",
+    "modelImageSupportSupported": "支援",
+    "modelImageSupportUnsupported": "不支援"
   },
   "copilot": {
     "authSection": "GitHub Copilot 驗證",
@@ -1644,7 +1648,8 @@
     "reasoningGroupTitle": "思考能力",
     "reasoningSectionHint": "預設供應商已自動設定；自訂供應商會按名稱/位址自動推斷。僅當自動識別不準時才需手動覆寫。",
     "advancedSectionHint": "包含上游格式、模型映射、思考能力與自訂 User-Agent。使用 Chat Completions 協定的供應商需開啟路由接管才能使用。",
-    "noCommonConfigToApply": "通用設定片段為空或沒有可寫入的內容"
+    "noCommonConfigToApply": "通用設定片段為空或沒有可寫入的內容",
+    "catalogColumnImage": "圖片"
   },
   "geminiConfig": {
     "envFile": "環境變數 (.env)",

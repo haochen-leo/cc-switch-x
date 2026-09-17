@@ -42,8 +42,17 @@ import {
 } from "lucide-react";
 import EndpointSpeedTest from "./EndpointSpeedTest";
 import { CodexOAuthSection } from "./CodexOAuthSection";
-import { ApiKeySection, EndpointField, ModelDropdown } from "./shared";
+import {
+  ApiKeySection,
+  EndpointField,
+  ModelDropdown,
+  ModelImageSupportSelect,
+} from "./shared";
 import { XaiOAuthSection } from "./XaiOAuthSection";
+import {
+  getImageSupportFromModalities,
+  withImageSupportInModalities,
+} from "./hooks/useModelImageSupport";
 import {
   fetchModelsForConfig,
   fetchXaiOauthModels,
@@ -1235,7 +1244,7 @@ export function CodexFormFields({
                         "hidden gap-2 px-1 text-xs font-medium text-muted-foreground md:grid",
                         catalogReadOnly
                           ? "grid-cols-[1fr_1fr_140px]"
-                          : "grid-cols-[1fr_1fr_140px_1fr_36px]",
+                          : "grid-cols-[1fr_1fr_140px_104px_1fr_36px]",
                       )}
                     >
                       <span>
@@ -1256,6 +1265,11 @@ export function CodexFormFields({
                       {!catalogReadOnly && (
                         <>
                           <span>
+                            {t("codexConfig.catalogColumnImage", {
+                              defaultValue: "图片",
+                            })}
+                          </span>
+                          <span>
                             {t("codexConfig.catalogColumnReasoning", {
                               defaultValue: "思考等级",
                             })}
@@ -1272,7 +1286,7 @@ export function CodexFormFields({
                           "grid grid-cols-1 gap-2",
                           catalogReadOnly
                             ? "md:grid-cols-[1fr_1fr_140px]"
-                            : "md:grid-cols-[1fr_1fr_140px_1fr_36px]",
+                            : "md:grid-cols-[1fr_1fr_140px_104px_1fr_36px]",
                         )}
                       >
                         <Input
@@ -1353,6 +1367,23 @@ export function CodexFormFields({
                         />
                         {!catalogReadOnly && (
                           <>
+                            <ModelImageSupportSelect
+                              value={getImageSupportFromModalities(
+                                row.inputModalities,
+                              )}
+                              onChange={(support) =>
+                                handleUpdateCatalogRow(index, {
+                                  inputModalities: withImageSupportInModalities(
+                                    row.inputModalities,
+                                    support,
+                                  ),
+                                })
+                              }
+                              disabled={!row.model.trim()}
+                              ariaLabel={t("codexConfig.catalogColumnImage", {
+                                defaultValue: "图片",
+                              })}
+                            />
                             <ReasoningLevelsEditor
                               levels={row.reasoningLevels}
                               defaultLevel={row.defaultReasoningLevel}
