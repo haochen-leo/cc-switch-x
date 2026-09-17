@@ -99,7 +99,17 @@ impl<'a> UsageLogger<'a> {
 
     /// 记录成功的请求
     pub fn log_request(&self, log: &RequestLog) -> Result<(), AppError> {
+        self.log_request_with_data_source(log, None)
+    }
+
+    /// 记录请求，并显式标记非普通代理流量来源（例如 media_ocr）。
+    pub fn log_request_with_data_source(
+        &self,
+        log: &RequestLog,
+        data_source: Option<&str>,
+    ) -> Result<(), AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
+        let data_source = data_source.unwrap_or("proxy");
 
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) =
             if let Some(cost) = &log.cost {
@@ -173,8 +183,8 @@ impl<'a> UsageLogger<'a> {
                 input_token_semantics,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
-                provider_type, is_streaming, cost_multiplier, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"
+                provider_type, is_streaming, cost_multiplier, data_source, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)"
         );
         let affected_rows = conn
             .execute(
@@ -204,6 +214,7 @@ impl<'a> UsageLogger<'a> {
                     log.provider_type,
                     log.is_streaming as i64,
                     log.cost_multiplier,
+                    data_source,
                     created_at,
                 ],
             )
@@ -460,6 +471,45 @@ impl<'a> UsageLogger<'a> {
         provider_type: Option<String>,
         is_streaming: bool,
     ) -> Result<(), AppError> {
+        self.log_with_calculation_with_data_source(
+            request_id,
+            provider_id,
+            app_type,
+            model,
+            request_model,
+            pricing_model,
+            usage,
+            cost_multiplier,
+            latency_ms,
+            first_token_ms,
+            status_code,
+            session_id,
+            provider_type,
+            is_streaming,
+            None,
+        )
+    }
+
+    /// 计算并记录请求，同时写入明确的 data_source（例如 media_ocr）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn log_with_calculation_with_data_source(
+        &self,
+        request_id: String,
+        provider_id: String,
+        app_type: String,
+        model: String,
+        request_model: String,
+        pricing_model: String,
+        usage: TokenUsage,
+        cost_multiplier: Decimal,
+        latency_ms: u64,
+        first_token_ms: Option<u64>,
+        status_code: u16,
+        session_id: Option<String>,
+        provider_type: Option<String>,
+        is_streaming: bool,
+        data_source: Option<&str>,
+    ) -> Result<(), AppError> {
         let pricing = self.get_model_pricing(&pricing_model)?;
 
         let has_usage = usage.input_tokens > 0
@@ -497,7 +547,7 @@ impl<'a> UsageLogger<'a> {
             cost_multiplier: cost_multiplier.to_string(),
         };
 
-        self.log_request(&log)
+        self.log_request_with_data_source(&log, data_source)
     }
 }
 
@@ -587,6 +637,24 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(request_model, "req-model");
+        Ok(())
+    }
+
+    #[test]
+    fn data_source_can_mark_media_ocr_requests() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let logger = UsageLogger::new(&db);
+
+        logger
+            .log_request_with_data_source(&request_log("media-ocr:test", 12), Some("media_ocr"))?;
+
+        let conn = crate::database::lock_conn!(db.conn);
+        let data_source: String = conn.query_row(
+            "SELECT data_source FROM proxy_request_logs WHERE request_id = 'media-ocr:test'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(data_source, "media_ocr");
         Ok(())
     }
 
