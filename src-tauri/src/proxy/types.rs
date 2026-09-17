@@ -262,7 +262,7 @@ fn default_true() -> bool {
 }
 
 fn default_media_ocr_model() -> String {
-    "qwen3.5-ocr".to_string()
+    "qwen3.8-flash".to_string()
 }
 
 fn default_media_ocr_provider_app_type() -> String {
@@ -481,7 +481,7 @@ mod tests {
         );
         assert_eq!(config.request_media_ocr_provider_app_type, "codex");
         assert!(config.request_media_ocr_provider_id.is_empty());
-        assert_eq!(config.request_media_ocr_model, "qwen3.5-ocr");
+        assert_eq!(config.request_media_ocr_model, "qwen3.8-flash");
     }
 
     #[test]
@@ -504,7 +504,7 @@ mod tests {
         );
         assert!(!config.request_media_ocr_fallback);
         assert_eq!(config.request_media_ocr_provider_app_type, "codex");
-        assert_eq!(config.request_media_ocr_model, "qwen3.5-ocr");
+        assert_eq!(config.request_media_ocr_model, "qwen3.8-flash");
     }
 
     #[test]
@@ -520,7 +520,7 @@ mod tests {
         assert!(config.request_media_heuristic);
         assert!(!config.request_media_ocr_fallback);
         assert_eq!(config.request_media_ocr_provider_app_type, "codex");
-        assert_eq!(config.request_media_ocr_model, "qwen3.5-ocr");
+        assert_eq!(config.request_media_ocr_model, "qwen3.8-flash");
     }
 
     #[test]
@@ -536,7 +536,7 @@ mod tests {
         assert!(config.request_media_heuristic);
         assert!(!config.request_media_ocr_fallback);
         assert_eq!(config.request_media_ocr_provider_app_type, "codex");
-        assert_eq!(config.request_media_ocr_model, "qwen3.5-ocr");
+        assert_eq!(config.request_media_ocr_model, "qwen3.8-flash");
     }
 
     #[test]
