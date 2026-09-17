@@ -99,6 +99,7 @@ import {
   useApiKeyState,
   useBaseUrlState,
   useModelState,
+  useModelImageSupport,
   useCodexConfigState,
   useApiKeyLink,
   useTemplateValues,
@@ -651,6 +652,11 @@ function ProviderFormFull({
     subagentModel,
     handleModelChange,
   } = useModelState({
+    settingsConfig: form.getValues("settingsConfig"),
+    onConfigChange: handleSettingsConfigChange,
+  });
+
+  const { getModelImageSupport, setModelImageSupport } = useModelImageSupport({
     settingsConfig: form.getValues("settingsConfig"),
     onConfigChange: handleSettingsConfigChange,
   });
@@ -2648,6 +2654,8 @@ function ProviderFormFull({
               defaultFableModelName={defaultFableModelName}
               subagentModel={subagentModel}
               onModelChange={handleModelChange}
+              getModelImageSupport={getModelImageSupport}
+              onModelImageSupportChange={setModelImageSupport}
               speedTestEndpoints={speedTestEndpoints}
               apiFormat={localApiFormat}
               onApiFormatChange={handleApiFormatChange}
