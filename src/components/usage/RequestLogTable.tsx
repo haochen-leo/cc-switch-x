@@ -43,6 +43,8 @@ interface RequestLogTableProps {
   onRangeChange?: (range: UsageRangeSelection) => void;
 }
 
+const MIN_GENERATION_MS_FOR_TOKEN_SPEED = 1000;
+
 export function RequestLogTable({
   range,
   rangeLabel,
@@ -291,12 +293,36 @@ export function RequestLogTable({
                             )}
                         </TableCell>
                         <TableCell className="text-center whitespace-nowrap text-xs tabular-nums">
-                          {(log.latencyMs / 1000).toFixed(1)}s
-                          {log.firstTokenMs != null && (
-                            <span className="text-muted-foreground">
-                              /{(log.firstTokenMs / 1000).toFixed(1)}s
-                            </span>
-                          )}
+                          {(() => {
+                            const generationMs =
+                              log.firstTokenMs != null
+                                ? log.latencyMs - log.firstTokenMs
+                                : null;
+                            const outputTokensPerSecond =
+                              generationMs != null &&
+                              generationMs >= MIN_GENERATION_MS_FOR_TOKEN_SPEED
+                                ? (log.outputTokens * 1000) / generationMs
+                                : null;
+                            return (
+                              <>
+                                <div>
+                                  {(log.latencyMs / 1000).toFixed(1)}s
+                                  {log.firstTokenMs != null && (
+                                    <span className="text-muted-foreground">
+                                      /{(log.firstTokenMs / 1000).toFixed(1)}s
+                                    </span>
+                                  )}
+                                </div>
+                                {outputTokensPerSecond != null &&
+                                  log.outputTokens > 0 && (
+                                    <div className="text-[10px] text-muted-foreground">
+                                      {t("usage.outputTokenSpeed")}:{" "}
+                                      {outputTokensPerSecond.toFixed(1)} tok/s
+                                    </div>
+                                  )}
+                              </>
+                            );
+                          })()}
                         </TableCell>
                         <TableCell className="text-center">
                           <span

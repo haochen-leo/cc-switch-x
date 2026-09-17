@@ -118,6 +118,108 @@ describe("RequestLogTable", () => {
     });
   });
 
+  it("shows output token speed after TTFT", () => {
+    useRequestLogsMock.mockImplementation(
+      ({ page = 0, pageSize = 20 }: { page?: number; pageSize?: number }) => ({
+        data: {
+          data: [
+            {
+              requestId: "request-speed",
+              providerId: "provider-1",
+              providerName: "Provider 1",
+              appType: "codex",
+              model: "test-model",
+              requestModel: "test-model",
+              costMultiplier: "1",
+              inputTokens: 1000,
+              outputTokens: 900,
+              cacheReadTokens: 0,
+              cacheCreationTokens: 0,
+              inputCostUsd: "0.003",
+              outputCostUsd: "0.0135",
+              cacheReadCostUsd: "0",
+              cacheCreationCostUsd: "0",
+              totalCostUsd: "0.0165",
+              isStreaming: true,
+              latencyMs: 4000,
+              firstTokenMs: 1000,
+              statusCode: 200,
+              createdAt: 1_760_000_000,
+              dataSource: "proxy",
+            },
+          ],
+          total: 1,
+          page,
+          pageSize,
+        },
+        isLoading: false,
+      }),
+    );
+
+    render(
+      <RequestLogTable
+        range={{ preset: "today" }}
+        rangeLabel="Today"
+        refreshIntervalMs={0}
+      />,
+    );
+
+    expect(screen.getByText("4.0s")).toBeInTheDocument();
+    expect(screen.getByText("/1.0s")).toBeInTheDocument();
+    expect(screen.getByText(/300\.0 tok\/s/)).toBeInTheDocument();
+  });
+
+  it("hides output token speed when generation time is too short", () => {
+    useRequestLogsMock.mockImplementation(
+      ({ page = 0, pageSize = 20 }: { page?: number; pageSize?: number }) => ({
+        data: {
+          data: [
+            {
+              requestId: "request-unreliable-speed",
+              providerId: "provider-1",
+              providerName: "Provider 1",
+              appType: "codex",
+              model: "test-model",
+              requestModel: "test-model",
+              costMultiplier: "1",
+              inputTokens: 1000,
+              outputTokens: 900,
+              cacheReadTokens: 0,
+              cacheCreationTokens: 0,
+              inputCostUsd: "0.003",
+              outputCostUsd: "0.0135",
+              cacheReadCostUsd: "0",
+              cacheCreationCostUsd: "0",
+              totalCostUsd: "0.0165",
+              isStreaming: true,
+              latencyMs: 4000,
+              firstTokenMs: 3990,
+              statusCode: 200,
+              createdAt: 1_760_000_000,
+              dataSource: "proxy",
+            },
+          ],
+          total: 1,
+          page,
+          pageSize,
+        },
+        isLoading: false,
+      }),
+    );
+
+    render(
+      <RequestLogTable
+        range={{ preset: "today" }}
+        rangeLabel="Today"
+        refreshIntervalMs={0}
+      />,
+    );
+
+    expect(screen.getByText("4.0s")).toBeInTheDocument();
+    expect(screen.getByText("/4.0s")).toBeInTheDocument();
+    expect(screen.queryByText(/tok\/s/)).not.toBeInTheDocument();
+  });
+
   it("resets pagination when the dashboard app filter changes", async () => {
     const range: UsageRangeSelection = { preset: "today" };
     const { rerender } = render(

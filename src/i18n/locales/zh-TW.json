@@ -1943,7 +1943,8 @@
       "syncNow": "立即同步"
     },
     "cacheReadCostPerMillion": "快取讀取成本 (每百萬 tokens, USD)",
-    "cacheCreationCostPerMillion": "快取寫入成本 (每百萬 tokens, USD)"
+    "cacheCreationCostPerMillion": "快取寫入成本 (每百萬 tokens, USD)",
+    "outputTokenSpeed": "輸出速度"
   },
   "usageScript": {
     "title": "設定用量查詢",
