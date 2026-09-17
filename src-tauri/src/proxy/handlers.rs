@@ -3448,7 +3448,9 @@ requires_openai_auth = true
         assert!(!codex_live_config_is_official_takeover(
             "base_url = \"http://127.0.0.1:15721/v1\"\n"
         ));
-        assert!(!codex_live_config_is_official_takeover("not toml at all {{{"));
+        assert!(!codex_live_config_is_official_takeover(
+            "not toml at all {{{"
+        ));
     }
 
     #[test]
@@ -3466,7 +3468,8 @@ requires_openai_auth = true
         assert!(body_looks_like_sse("\u{feff}\n  data: {}\n\n"));
         // HTML 拦截页与普通文本不应误判为 SSE
         assert!(!body_looks_like_sse("<html><body>blocked</body></html>"));
-        assert!(!body_looks_like_sse("Bad Gateway"));        assert!(!body_looks_like_sse(""));
+        assert!(!body_looks_like_sse("Bad Gateway"));
+        assert!(!body_looks_like_sse(""));
     }
 
     #[test]
