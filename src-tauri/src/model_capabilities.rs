@@ -74,6 +74,7 @@ pub(crate) fn is_confirmed_text_only_model(model: &str) -> bool {
         "deepseek-chat",
         "deepseek-reasoner",
         "deepseek-v4-flash",
+        "deepseek-v4-flash-0731",
         "deepseek-v4-pro",
         "glm-5.1",
         // Exact rather than prefix matching: GLM visual models use a `v`
@@ -217,6 +218,7 @@ mod tests {
     #[test]
     fn confirmed_text_only_registry_normalizes_namespaces_and_context_markers() {
         assert!(is_confirmed_text_only_model("deepseek/deepseek-v4-pro"));
+        assert!(is_confirmed_text_only_model("deepseek-v4-flash-0731"));
         assert!(is_confirmed_text_only_model("GLM-5.2[1M]"));
         assert!(is_confirmed_text_only_model("GLM-5.3[1M]"));
         assert!(is_confirmed_text_only_model("qwen/qwen3-coder-plus"));
@@ -227,6 +229,13 @@ mod tests {
         assert!(is_confirmed_text_only_model("step-3.5-flash-2603"));
         assert!(!is_confirmed_text_only_model("glm-5.2v"));
         assert!(!is_confirmed_text_only_model("glm-5.3v"));
+    }
+
+    #[test]
+    fn aggregate_route_keeps_image_input_open_for_proxy_ocr() {
+        assert!(!is_confirmed_text_only_model(
+            "deepseek-v4-flash-0731/dashscope"
+        ));
     }
 
     #[test]
