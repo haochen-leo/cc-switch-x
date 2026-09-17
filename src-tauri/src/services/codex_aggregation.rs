@@ -499,9 +499,8 @@ pub async fn build_codex_aggregate_provider(
             ));
         }
         if !source_provider_ids.contains(CODEX_OFFICIAL_PROVIDER_ID) {
-            warnings.push(
-                "OpenAI Official 的模型已被全部过滤，本次聚合目录不包含官方模型".to_string(),
-            );
+            warnings
+                .push("OpenAI Official 的模型已被全部过滤，本次聚合目录不包含官方模型".to_string());
         }
     }
 
