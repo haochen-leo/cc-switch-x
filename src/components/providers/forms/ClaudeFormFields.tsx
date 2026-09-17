@@ -30,6 +30,7 @@ import {
   ApiKeySection,
   EndpointField,
   ModelDropdown,
+  ModelImageSupportSelect,
   ModelInputWithFetch,
 } from "./shared";
 import { CopilotAuthSection } from "./CopilotAuthSection";
@@ -62,6 +63,7 @@ import {
   stripClaudeOneMMarker,
   type ClaudeModelEnvField,
 } from "./hooks/useModelState";
+import type { ModelImageSupport } from "./hooks/useModelImageSupport";
 import {
   providerPresets,
   type TemplateValueConfig,
@@ -155,6 +157,13 @@ interface ClaudeFormFieldsProps {
   defaultFableModelName: string;
   subagentModel: string;
   onModelChange: (field: ClaudeModelEnvField, value: string) => void;
+
+  // 按模型声明图片输入能力（写入 settings.modelCatalog.models）
+  getModelImageSupport: (model: string) => ModelImageSupport;
+  onModelImageSupportChange: (
+    model: string,
+    support: ModelImageSupport,
+  ) => void;
 
   // Speed Test Endpoints
   speedTestEndpoints: EndpointCandidate[];
@@ -250,6 +259,8 @@ export function ClaudeFormFields({
   defaultFableModelName,
   subagentModel,
   onModelChange,
+  getModelImageSupport,
+  onModelImageSupportChange,
   speedTestEndpoints,
   apiFormat,
   onApiFormatChange,
@@ -1065,7 +1076,7 @@ export function ClaudeFormFields({
             </div>
 
             <div className="space-y-3">
-              <div className="hidden grid-cols-[120px_1fr_minmax(0,1fr)_104px] gap-2 px-1 text-xs font-medium text-muted-foreground md:grid">
+              <div className="hidden grid-cols-[120px_1fr_minmax(0,1fr)_104px_96px] gap-2 px-1 text-xs font-medium text-muted-foreground md:grid">
                 <span>
                   {t("providerForm.modelRoleLabel", {
                     defaultValue: "模型角色",
@@ -1084,6 +1095,11 @@ export function ClaudeFormFields({
                 <span>
                   {t("providerForm.modelOneMHeader", {
                     defaultValue: "声明支持 1M",
+                  })}
+                </span>
+                <span>
+                  {t("providerForm.modelImageSupportHeader", {
+                    defaultValue: "图片",
                   })}
                 </span>
               </div>
@@ -1125,7 +1141,7 @@ export function ClaudeFormFields({
 
                 return (
                   <div key={row.role} className="space-y-1.5">
-                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[120px_1fr_minmax(0,1fr)_104px]">
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[120px_1fr_minmax(0,1fr)_104px_96px]">
                       <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm font-medium text-muted-foreground">
                         {row.label}
                       </div>
@@ -1170,7 +1186,7 @@ export function ClaudeFormFields({
                           ),
                         Boolean(routedProvider),
                       )}
-                      {row.supportsOneM && (
+                      {row.supportsOneM ? (
                         <label className="flex h-9 items-center gap-2 text-sm text-muted-foreground">
                           <Checkbox
                             checked={effectiveUsesOneM}
@@ -1183,7 +1199,18 @@ export function ClaudeFormFields({
                             defaultValue: "1M",
                           })}
                         </label>
+                      ) : (
+                        <span className="hidden md:block" />
                       )}
+                      <ModelImageSupportSelect
+                        value={getModelImageSupport(effectiveModelBase)}
+                        onChange={(support) =>
+                          onModelImageSupportChange(effectiveModelBase, support)
+                        }
+                        disabled={
+                          Boolean(routedProvider) || !effectiveModelBase.trim()
+                        }
+                      />
                     </div>
                     {routedProvider && (
                       <p className="text-xs text-muted-foreground md:pl-[128px]">
@@ -1213,7 +1240,7 @@ export function ClaudeFormFields({
                   defaultValue: "默认兜底模型",
                 })}
               </FormLabel>
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_minmax(0,104px)]">
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_minmax(0,104px)_96px]">
                 {renderModelInput(
                   "claudeModel",
                   stripClaudeOneMMarker(claudeModel),
@@ -1243,6 +1270,18 @@ export function ClaudeFormFields({
                     defaultValue: "1M",
                   })}
                 </label>
+                <ModelImageSupportSelect
+                  value={getModelImageSupport(
+                    stripClaudeOneMMarker(claudeModel),
+                  )}
+                  onChange={(support) =>
+                    onModelImageSupportChange(
+                      stripClaudeOneMMarker(claudeModel),
+                      support,
+                    )
+                  }
+                  disabled={!stripClaudeOneMMarker(claudeModel).trim()}
+                />
               </div>
               <p className="text-xs text-muted-foreground">
                 {t("providerForm.fallbackModelHint", {

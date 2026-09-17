@@ -1396,7 +1396,11 @@
     "claudeRoutingDefault": "預設兜底",
     "claudeRoutingFable": "Fable",
     "claudeRoutingHint": "可選：按模型類型將請求優先路由到指定供應商；留空則跟隨當前供應商與故障轉移鏈。",
-    "requiredFields": "請填寫供應商名稱、API 位址、API Key 和模型"
+    "requiredFields": "請填寫供應商名稱、API 位址、API Key 和模型",
+    "modelImageSupportHeader": "圖片",
+    "modelImageSupportAuto": "自動",
+    "modelImageSupportSupported": "支援",
+    "modelImageSupportUnsupported": "不支援"
   },
   "copilot": {
     "authSection": "GitHub Copilot 驗證",
@@ -1625,7 +1629,8 @@
     "reasoningGroupTitle": "思考能力",
     "reasoningSectionHint": "預設供應商已自動設定；自訂供應商會按名稱/位址自動推斷。僅當自動識別不準時才需手動覆寫。",
     "advancedSectionHint": "包含上游格式、模型映射、思考能力與自訂 User-Agent。使用 Chat Completions 協定的供應商需開啟路由接管才能使用。",
-    "noCommonConfigToApply": "通用設定片段為空或沒有可寫入的內容"
+    "noCommonConfigToApply": "通用設定片段為空或沒有可寫入的內容",
+    "catalogColumnImage": "圖片"
   },
   "geminiConfig": {
     "envFile": "環境變數 (.env)",
