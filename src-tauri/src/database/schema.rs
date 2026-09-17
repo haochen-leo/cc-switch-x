@@ -336,7 +336,12 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 19. Profiles 表（全应用共享的项目实体，payload 按 app 分槽快照
+        // 19. Media OCR Cache 表
+        // 图片内容与 OCR 供应商/模型/提示词版本共同决定 cache_key；
+        // last_used_at 用于有界 LRU 清理，避免识别结果无限增长。
+        Self::create_media_ocr_cache_table(conn)?;
+
+        // 20. Profiles 表（全应用共享的项目实体，payload 按 app 分槽快照
         //     供应商/MCP/Skills/Prompt；各应用分组的 current 标记在 settings 表）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS profiles (
@@ -548,6 +553,11 @@ impl Database {
                         log::info!("迁移数据库从 v17 到 v18（会话日志字节游标列）");
                         Self::migrate_v17_to_v18(conn)?;
                         Self::set_user_version(conn, 18)?;
+                    }
+                    18 => {
+                        log::info!("迁移数据库从 v18 到 v19（图片 OCR 结果缓存）");
+                        Self::migrate_v18_to_v19(conn)?;
+                        Self::set_user_version(conn, 19)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1597,6 +1607,30 @@ impl Database {
             )?;
         }
         Ok(())
+    }
+
+    fn create_media_ocr_cache_table(conn: &Connection) -> Result<(), AppError> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS media_ocr_cache (
+                cache_key TEXT PRIMARY KEY,
+                image_hash TEXT NOT NULL,
+                provider_app_type TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                ocr_text TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_used_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_media_ocr_cache_last_used
+             ON media_ocr_cache(last_used_at);",
+        )
+        .map_err(|error| AppError::Database(format!("创建图片 OCR 缓存失败: {error}")))
+    }
+
+    /// v18 -> v19: 图片 OCR 结果缓存。
+    fn migrate_v18_to_v19(conn: &Connection) -> Result<(), AppError> {
+        Self::create_media_ocr_cache_table(conn)
     }
 
     /// 插入默认模型定价数据
@@ -3709,6 +3743,27 @@ mod tests {
         )?;
         assert_eq!(byte_offset, None, "存量行的字节游标必须为 NULL");
         assert_eq!(fingerprint, None, "存量行的尾部指纹必须为 NULL");
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v18_to_v19_creates_media_ocr_cache() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        Database::set_user_version(&conn, 18)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        assert!(Database::table_exists(&conn, "media_ocr_cache")?);
+        let index_exists: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'index' AND name = 'idx_media_ocr_cache_last_used'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(index_exists);
         Ok(())
     }
 }

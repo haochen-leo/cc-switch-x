@@ -240,10 +240,33 @@ pub struct RectifierConfig {
     /// 仍保留「显式声明」与「上游兜底」，且不改变 Codex 模型目录声明。
     #[serde(default = "default_true")]
     pub request_media_heuristic: bool,
+    /// 请求整流：图片 OCR 前置（默认关闭）
+    ///
+    /// 命中 text-only 模型时，先按目标供应商已配置的协议把图片转成文字，
+    /// OCR 失败或未配置供应商时退回 [Unsupported Image]。
+    #[serde(default)]
+    pub request_media_ocr_fallback: bool,
+    /// 图片 OCR 供应商所属应用（claude / codex）
+    #[serde(default = "default_media_ocr_provider_app_type")]
+    pub request_media_ocr_provider_app_type: String,
+    /// 图片 OCR 使用的供应商 ID
+    #[serde(default)]
+    pub request_media_ocr_provider_id: String,
+    /// 图片 OCR 使用的上游模型
+    #[serde(default = "default_media_ocr_model")]
+    pub request_media_ocr_model: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_media_ocr_model() -> String {
+    "qwen3.5-ocr".to_string()
+}
+
+fn default_media_ocr_provider_app_type() -> String {
+    "codex".to_string()
 }
 
 fn default_log_level() -> String {
@@ -259,6 +282,10 @@ impl Default for RectifierConfig {
             request_tool_use_id: true,
             request_media_fallback: true,
             request_media_heuristic: true,
+            request_media_ocr_fallback: false,
+            request_media_ocr_provider_app_type: default_media_ocr_provider_app_type(),
+            request_media_ocr_provider_id: String::new(),
+            request_media_ocr_model: default_media_ocr_model(),
         }
     }
 }
@@ -448,6 +475,13 @@ mod tests {
             config.request_media_heuristic,
             "启发式 text-only 模型识别默认应为 true"
         );
+        assert!(
+            !config.request_media_ocr_fallback,
+            "图片 OCR 前置默认应为 false"
+        );
+        assert_eq!(config.request_media_ocr_provider_app_type, "codex");
+        assert!(config.request_media_ocr_provider_id.is_empty());
+        assert_eq!(config.request_media_ocr_model, "qwen3.5-ocr");
     }
 
     #[test]
@@ -468,6 +502,9 @@ mod tests {
             config.request_media_heuristic,
             "缺 requestMediaHeuristic 时应回退默认值 true"
         );
+        assert!(!config.request_media_ocr_fallback);
+        assert_eq!(config.request_media_ocr_provider_app_type, "codex");
+        assert_eq!(config.request_media_ocr_model, "qwen3.5-ocr");
     }
 
     #[test]
@@ -481,6 +518,9 @@ mod tests {
         assert!(config.request_tool_use_id);
         assert!(config.request_media_fallback);
         assert!(config.request_media_heuristic);
+        assert!(!config.request_media_ocr_fallback);
+        assert_eq!(config.request_media_ocr_provider_app_type, "codex");
+        assert_eq!(config.request_media_ocr_model, "qwen3.5-ocr");
     }
 
     #[test]
@@ -494,6 +534,9 @@ mod tests {
         assert!(config.request_tool_use_id);
         assert!(config.request_media_fallback);
         assert!(config.request_media_heuristic);
+        assert!(!config.request_media_ocr_fallback);
+        assert_eq!(config.request_media_ocr_provider_app_type, "codex");
+        assert_eq!(config.request_media_ocr_model, "qwen3.5-ocr");
     }
 
     #[test]
@@ -507,6 +550,22 @@ mod tests {
         assert!(config.enabled);
         assert!(config.request_thinking_signature);
         assert!(config.request_thinking_budget);
+    }
+
+    #[test]
+    fn test_rectifier_config_media_ocr_fields_round_trip() {
+        let json = r#"{
+            "requestMediaOcrFallback": true,
+            "requestMediaOcrProviderAppType": "claude",
+            "requestMediaOcrProviderId": "provider-ocr",
+            "requestMediaOcrModel": "qwen3-vl-plus"
+        }"#;
+        let config: RectifierConfig = serde_json::from_str(json).unwrap();
+
+        assert!(config.request_media_ocr_fallback);
+        assert_eq!(config.request_media_ocr_provider_app_type, "claude");
+        assert_eq!(config.request_media_ocr_provider_id, "provider-ocr");
+        assert_eq!(config.request_media_ocr_model, "qwen3-vl-plus");
     }
 
     #[test]

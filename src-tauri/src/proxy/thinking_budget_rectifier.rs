@@ -151,6 +151,7 @@ mod tests {
             request_tool_use_id: true,
             request_media_fallback: true,
             request_media_heuristic: true,
+            ..RectifierConfig::default()
         }
     }
 
@@ -162,6 +163,7 @@ mod tests {
             request_tool_use_id: true,
             request_media_fallback: true,
             request_media_heuristic: true,
+            ..RectifierConfig::default()
         }
     }
 
@@ -173,6 +175,7 @@ mod tests {
             request_tool_use_id: true,
             request_media_fallback: true,
             request_media_heuristic: true,
+            ..RectifierConfig::default()
         }
     }
 

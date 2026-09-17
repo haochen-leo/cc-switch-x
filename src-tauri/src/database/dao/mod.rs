@@ -4,6 +4,7 @@
 
 pub mod failover;
 pub mod mcp;
+pub mod media_ocr;
 pub mod profiles;
 pub mod prompts;
 pub mod providers;
