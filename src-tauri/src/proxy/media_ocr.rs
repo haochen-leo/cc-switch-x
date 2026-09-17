@@ -1,16 +1,18 @@
 use super::media_sanitizer::UNSUPPORTED_IMAGE_MARKER;
-use crate::database::Database;
+use crate::database::{Database, PRICING_SOURCE_REQUEST};
 use crate::provider::Provider;
 use crate::proxy::http_client;
 use crate::proxy::providers::{
     get_claude_api_format, get_codex_api_format, AuthStrategy, ClaudeAdapter, CodexAdapter,
     ProviderAdapter,
 };
+use crate::proxy::usage::logger::{RequestLog, UsageLogger};
+use crate::proxy::usage::parser::TokenUsage;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use http::{HeaderName, HeaderValue};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const OCR_PROMPT_VERSION: &str = "v2";
 const OCR_PROMPT: &str =
@@ -59,6 +61,8 @@ pub async fn transcribe_images(
     model: &str,
     image_urls: &[String],
     timeout: Duration,
+    parent_request_id: &str,
+    parent_session_id: &str,
 ) -> Result<(MediaOcrProtocol, Vec<Option<String>>, usize), String> {
     let protocol = resolve_ocr_protocol(provider_app_type, provider)?;
     let adapter: Box<dyn ProviderAdapter> = match provider_app_type {
@@ -84,8 +88,13 @@ pub async fn transcribe_images(
     let url = build_ocr_url(adapter.as_ref(), provider, &base_url, protocol);
     let mut results = Vec::with_capacity(image_urls.len());
     let mut cache_hits = 0usize;
+    let usage_logging_enabled = db
+        .get_proxy_config()
+        .await
+        .map(|config| config.enable_logging)
+        .unwrap_or(true);
 
-    for image_url in image_urls {
+    for (image_index, image_url) in image_urls.iter().enumerate() {
         let cache_identity = media_ocr_cache_key(
             provider_app_type,
             &provider.id,
@@ -112,8 +121,14 @@ pub async fn transcribe_images(
             }
         }
 
+        let ocr_request_id = format!(
+            "media-ocr:{}:{}:{}",
+            parent_request_id,
+            image_index,
+            uuid::Uuid::new_v4()
+        );
         match transcribe_image(&url, &auth_headers, protocol, model, image_url, timeout).await {
-            Ok(text) => {
+            Ok(success) => {
                 if let Some((cache_key, image_hash)) = cache_identity {
                     if let Err(error) = db.put_media_ocr_cache(
                         &cache_key,
@@ -122,7 +137,7 @@ pub async fn transcribe_images(
                         &provider.id,
                         model,
                         OCR_PROMPT_VERSION,
-                        &text,
+                        &success.text,
                     ) {
                         log::warn!(
                             "[Media OCR] cache write failed provider={} model={}: {}",
@@ -132,23 +147,151 @@ pub async fn transcribe_images(
                         );
                     }
                 }
-                results.push(Some(text));
+                if usage_logging_enabled {
+                    log_media_ocr_success(
+                        db,
+                        provider_app_type,
+                        provider,
+                        model,
+                        protocol,
+                        &success.response_json,
+                        success.latency_ms,
+                        success.status_code,
+                        ocr_request_id,
+                        parent_session_id,
+                    )
+                    .await;
+                }
+                results.push(Some(success.text));
             }
-            Err(error) => {
+            Err(failure) => {
                 log::warn!(
                     "[Media OCR] provider={} app_type={} protocol={} model={} failed: {}",
                     provider.id,
                     provider_app_type,
                     protocol.as_str(),
                     model,
-                    error
+                    failure.error
                 );
+                if usage_logging_enabled {
+                    log_media_ocr_failure(
+                        db,
+                        provider_app_type,
+                        provider,
+                        model,
+                        failure.status_code,
+                        failure.error,
+                        failure.latency_ms,
+                        ocr_request_id,
+                        parent_session_id,
+                    )
+                    .await;
+                }
                 results.push(None);
             }
         }
     }
 
     Ok((protocol, results, cache_hits))
+}
+
+fn ocr_token_usage(response: &Value, protocol: MediaOcrProtocol) -> TokenUsage {
+    match protocol {
+        MediaOcrProtocol::OpenAiChat => TokenUsage::from_openai_response(response),
+        MediaOcrProtocol::OpenAiResponses => TokenUsage::from_codex_response_auto(response),
+        MediaOcrProtocol::AnthropicMessages => TokenUsage::from_claude_response(response),
+    }
+    .unwrap_or_default()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn log_media_ocr_success(
+    db: &Database,
+    provider_app_type: &str,
+    provider: &Provider,
+    request_model: &str,
+    protocol: MediaOcrProtocol,
+    response: &Value,
+    latency_ms: u64,
+    status_code: u16,
+    request_id: String,
+    parent_session_id: &str,
+) {
+    let logger = UsageLogger::new(db);
+    let (cost_multiplier, pricing_model_source) = logger
+        .resolve_pricing_config(&provider.id, provider_app_type)
+        .await;
+    let usage = ocr_token_usage(response, protocol);
+    let response_model = usage
+        .model
+        .clone()
+        .filter(|model| !model.is_empty())
+        .unwrap_or_else(|| request_model.to_string());
+    let pricing_model = if pricing_model_source == PRICING_SOURCE_REQUEST {
+        request_model.to_string()
+    } else {
+        response_model.clone()
+    };
+
+    if let Err(error) = logger.log_with_calculation_with_data_source(
+        request_id,
+        provider.id.clone(),
+        provider_app_type.to_string(),
+        response_model,
+        request_model.to_string(),
+        pricing_model,
+        usage,
+        cost_multiplier,
+        latency_ms,
+        None,
+        status_code,
+        (!parent_session_id.is_empty()).then(|| parent_session_id.to_string()),
+        Some("media_ocr".to_string()),
+        false,
+        Some("media_ocr"),
+    ) {
+        log::warn!("[Media OCR] 记录使用量失败: {error}");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn log_media_ocr_failure(
+    db: &Database,
+    provider_app_type: &str,
+    provider: &Provider,
+    model: &str,
+    status_code: u16,
+    error_message: String,
+    latency_ms: u64,
+    request_id: String,
+    parent_session_id: &str,
+) {
+    let logger = UsageLogger::new(db);
+    let (cost_multiplier, _) = logger
+        .resolve_pricing_config(&provider.id, provider_app_type)
+        .await;
+    let request = RequestLog {
+        request_id,
+        provider_id: provider.id.clone(),
+        app_type: provider_app_type.to_string(),
+        model: model.to_string(),
+        request_model: model.to_string(),
+        pricing_model: String::new(),
+        usage: TokenUsage::default(),
+        cost: None,
+        latency_ms,
+        first_token_ms: None,
+        status_code,
+        error_message: Some(error_message),
+        session_id: (!parent_session_id.is_empty()).then(|| parent_session_id.to_string()),
+        provider_type: Some("media_ocr".to_string()),
+        is_streaming: false,
+        cost_multiplier: cost_multiplier.to_string(),
+    };
+
+    if let Err(error) = logger.log_request_with_data_source(&request, Some("media_ocr")) {
+        log::warn!("[Media OCR] 记录失败请求失败: {error}");
+    }
 }
 
 fn media_ocr_cache_key(
@@ -286,6 +429,19 @@ mod cache_key_tests {
     }
 }
 
+struct OcrImageSuccess {
+    text: String,
+    response_json: Value,
+    latency_ms: u64,
+    status_code: u16,
+}
+
+struct OcrImageFailure {
+    status_code: u16,
+    error: String,
+    latency_ms: u64,
+}
+
 async fn transcribe_image(
     url: &str,
     auth_headers: &[(HeaderName, HeaderValue)],
@@ -293,8 +449,14 @@ async fn transcribe_image(
     model: &str,
     image_url: &str,
     timeout: Duration,
-) -> Result<String, String> {
-    let payload = build_ocr_payload(protocol, model, image_url)?;
+) -> Result<OcrImageSuccess, OcrImageFailure> {
+    let started_at = Instant::now();
+    let payload =
+        build_ocr_payload(protocol, model, image_url).map_err(|error| OcrImageFailure {
+            status_code: 0,
+            error,
+            latency_ms: started_at.elapsed().as_millis() as u64,
+        })?;
 
     let mut request = http_client::get().post(url).json(&payload);
     for (name, value) in auth_headers {
@@ -306,25 +468,61 @@ async fn transcribe_image(
 
     let response = tokio::time::timeout(timeout, request.send())
         .await
-        .map_err(|_| format!("OCR 请求超过 {} 秒", timeout.as_secs()))?
-        .map_err(|error| format!("OCR 请求发送失败: {error}"))?;
+        .map_err(|_| OcrImageFailure {
+            status_code: 0,
+            error: format!("OCR 请求超过 {} 秒", timeout.as_secs()),
+            latency_ms: started_at.elapsed().as_millis() as u64,
+        })?
+        .map_err(|error| OcrImageFailure {
+            status_code: 0,
+            error: format!("OCR 请求发送失败: {error}"),
+            latency_ms: started_at.elapsed().as_millis() as u64,
+        })?;
     let status = response.status();
     let response_text = tokio::time::timeout(timeout, response.text())
         .await
-        .map_err(|_| format!("OCR 响应读取超过 {} 秒", timeout.as_secs()))?
-        .map_err(|error| format!("OCR 响应读取失败: {error}"))?;
+        .map_err(|_| OcrImageFailure {
+            status_code: status.as_u16(),
+            error: format!("OCR 响应读取超过 {} 秒", timeout.as_secs()),
+            latency_ms: started_at.elapsed().as_millis() as u64,
+        })?
+        .map_err(|error| OcrImageFailure {
+            status_code: status.as_u16(),
+            error: format!("OCR 响应读取失败: {error}"),
+            latency_ms: started_at.elapsed().as_millis() as u64,
+        })?;
+    let latency_ms = started_at.elapsed().as_millis() as u64;
 
     if !status.is_success() {
-        return Err(format!(
-            "OCR 上游返回 HTTP {}: {}",
-            status.as_u16(),
-            truncate_for_log(&response_text)
-        ));
+        return Err(OcrImageFailure {
+            status_code: status.as_u16(),
+            error: format!(
+                "OCR 上游返回 HTTP {}: {}",
+                status.as_u16(),
+                truncate_for_log(&response_text)
+            ),
+            latency_ms,
+        });
     }
 
-    let response_json: Value = serde_json::from_str(&response_text)
-        .map_err(|error| format!("OCR 响应不是有效 JSON: {error}"))?;
-    extract_ocr_text(&response_json, protocol).ok_or_else(|| "OCR 响应缺少文本内容".to_string())
+    let response_json: Value =
+        serde_json::from_str(&response_text).map_err(|error| OcrImageFailure {
+            status_code: status.as_u16(),
+            error: format!("OCR 响应不是有效 JSON: {error}"),
+            latency_ms,
+        })?;
+    let text = extract_ocr_text(&response_json, protocol).ok_or_else(|| OcrImageFailure {
+        status_code: status.as_u16(),
+        error: "OCR 响应缺少文本内容".to_string(),
+        latency_ms,
+    })?;
+
+    Ok(OcrImageSuccess {
+        text,
+        response_json,
+        latency_ms,
+        status_code: status.as_u16(),
+    })
 }
 
 pub fn resolve_ocr_protocol(
@@ -831,6 +1029,40 @@ mod tests {
             extract_ocr_text(&anthropic, MediaOcrProtocol::AnthropicMessages),
             Some("Anthropic 识别".to_string())
         );
+    }
+
+    #[test]
+    fn extracts_usage_for_supported_ocr_protocols() {
+        let responses = json!({
+            "id": "resp-ocr",
+            "model": "qwen3.5-ocr",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "input_tokens_details": {
+                    "cached_tokens": 30
+                }
+            }
+        });
+        let usage = ocr_token_usage(&responses, MediaOcrProtocol::OpenAiResponses);
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cache_read_tokens, 30);
+        assert_eq!(usage.model.as_deref(), Some("qwen3.5-ocr"));
+
+        let anthropic = json!({
+            "id": "msg-ocr",
+            "model": "vision",
+            "usage": {
+                "input_tokens": 80,
+                "output_tokens": 10,
+                "cache_read_input_tokens": 20
+            }
+        });
+        let usage = ocr_token_usage(&anthropic, MediaOcrProtocol::AnthropicMessages);
+        assert_eq!(usage.input_tokens, 80);
+        assert_eq!(usage.output_tokens, 10);
+        assert_eq!(usage.cache_read_tokens, 20);
     }
 
     #[test]

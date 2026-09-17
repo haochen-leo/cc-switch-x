@@ -272,6 +272,8 @@ impl RequestForwarder {
                     model,
                     &image_urls,
                     std::time::Duration::from_secs(MEDIA_OCR_TIMEOUT_SECS),
+                    &self.request_id,
+                    &self.session_id,
                 )
                 .await
                 {

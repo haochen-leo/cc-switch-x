@@ -150,7 +150,7 @@ export function RectifierConfigPanel() {
     requestMediaOcrFallback: false,
     requestMediaOcrProviderAppType: "codex",
     requestMediaOcrProviderId: "",
-    requestMediaOcrModel: "qwen3.5-ocr",
+    requestMediaOcrModel: "qwen3.8-flash",
   });
   const [optimizerConfig, setOptimizerConfig] = useState<OptimizerConfig>({
     enabled: false,
