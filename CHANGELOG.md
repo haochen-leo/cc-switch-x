@@ -9,6 +9,31 @@ Entries at 3.20.1 and below describe the upstream CC Switch baseline that CC
 Switch X is built from. CC Switch X uses an independent version line starting
 at 0.1.0-beta.1.
 
+## [0.1.0-beta.5] - 2026-09-18
+
+This beta adds media OCR to the proxy pipeline, model-level aggregation
+filters, per-model image support declarations, and output token speed in
+usage views.
+
+### Added
+
+- **Media OCR**: The proxy records media OCR requests, runs an OCR preflight,
+  and triggers OCR for DeepSeek flash 0731 so image content becomes text for
+  models without native vision.
+- **Model-Level Aggregation Filters**: Codex aggregation supports per-model
+  filters, letting a provider aggregate only the chosen models.
+- **Per-Model Image Support Declarations**: Provider forms gain a dedicated
+  control to declare image support per model, driving OCR behavior for
+  vision-less models.
+- **Usage Output Speed**: Usage views show output tokens per second for
+  completed requests.
+
+### Fixed
+
+- **Tool Search Contract**: Codex tool search contract is preserved when
+  rewriting between bridge paths, and the xAI strict-sanitizer test dropped
+  from the replay base is restored.
+
 ## [0.1.0-beta.4] - 2026-09-13
 
 This beta unifies Codex common configuration under the official provider,
