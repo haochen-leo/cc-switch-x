@@ -13,7 +13,7 @@
 
 ### Upstream-Projekt: **[CC Switch](https://github.com/farion1231/cc-switch)**
 
-[English](README.md) | [中文](README_ZH.md) | [日本語](README_JA.md) | Deutsch | [Changelog](CHANGELOG.md)
+[中文](README.md) | [English](README_EN.md) | [日本語](README_JA.md) | Deutsch | [Changelog](CHANGELOG.md)
 
 </div>
 

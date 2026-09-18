@@ -2,368 +2,370 @@
 
 # CC Switch X
 
-> Unofficial fork of [CC Switch](https://github.com/farion1231/cc-switch), based on upstream `d8065cc6` (CC Switch 3.20.1). CC Switch X uses an isolated `~/.cc-switch-x` database and does not share the official runtime database.
+> 基于 [CC Switch](https://github.com/farion1231/cc-switch) 的非官方分叉，当前基线为上游 `d8065cc6`（CC Switch 3.20.1）。CC Switch X 使用独立的 `~/.cc-switch-x` 数据库，不与官方版本共用运行数据库。
 
-See the [CC Switch X fork and maintenance policy](docs/cc-switch-x-maintenance.md)
-for database compatibility, future v19 upgrades, and the Git workflow.
+分叉边界、数据库兼容、未来 v19 升级与 Git 维护流程见
+[CC Switch X 分叉与维护策略](docs/cc-switch-x-maintenance-zh.md)。
 
-### Multi-provider routing and compatibility for Claude and Codex, built on CC Switch
+### 基于 CC Switch，强化 Claude 与 Codex 的多供应商路由与协议兼容
 
 [![Version](https://img.shields.io/github/v/release/haochen-leo/cc-switch-x?include_prereleases&color=blue&label=version)](https://github.com/haochen-leo/cc-switch-x/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/haochen-leo/cc-switch-x/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/haochen-leo/cc-switch-x/total)](https://github.com/haochen-leo/cc-switch-x/releases/latest)
 
-### Upstream project: **[CC Switch](https://github.com/farion1231/cc-switch)**
+### 上游项目：**[CC Switch](https://github.com/farion1231/cc-switch)**
 
-English | [中文](README_ZH.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
+中文 | [English](README_EN.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
 
 </div>
 
-## Why CC Switch X?
+## 为什么选择 CC Switch X？
 
-CC Switch X is a focused fork for users who need Claude and Codex to work reliably across multiple official and third-party model providers. It keeps the desktop management foundation of [CC Switch](https://github.com/farion1231/cc-switch), while concentrating X development on provider aggregation, protocol compatibility, routing, and resilience.
+CC Switch X 面向需要在多个官方及第三方模型供应商之间稳定使用 Claude 和 Codex 的用户。它保留 [CC Switch](https://github.com/farion1231/cc-switch) 的桌面管理基础，X 的开发重点放在供应商聚合、协议兼容、模型路由和运行健壮性上。
 
-- **Claude multi-provider, per model role** — Map display names and upstream models for each Claude role (Sonnet / Opus / Fable / Haiku), and route different roles to different providers — for example Opus from one endpoint, background Haiku from a cheaper one.
-- **Codex multi-provider aggregation** — Official and third-party Codex providers are aggregated into a single entry, so models from every source appear side by side in the same Codex model dropdown and switch seamlessly with the official ones.
-- **Deep Responses API adaptation** — Codex speaks the Responses API, whose semantics (reasoning items, tool-call replay, session state, caching behavior) are under-documented and still shifting, while most endpoints that advertise "OpenAI-compatible" behavior silently diverge from it. Making arbitrary upstreams behave correctly under Codex is where most of CC Switch X's adaptation work lives.
-- **Robustness under pressure** — Automatic retry with backoff on 429 / rate-limit responses, circuit breaker, and a priority failover queue keep long sessions alive when a provider degrades.
+- **Claude 多供应商，按模型角色细分** — 为每个 Claude 角色（Sonnet / Opus / Fable / Haiku）分别映射显示名与上游模型，还可以把不同角色路由到不同供应商——比如 Opus 走一个端点，后台 Haiku 走更便宜的另一个。
+- **Codex 多供应商聚合** — 官方与第三方 Codex 供应商聚合为一个入口，各来源的模型并排出现在 Codex 同一个模型下拉列表中，与官方模型无缝切换。
+- **深度 Responses 协议适配** — Codex 通过 Responses API 通信，其协议语义（推理条目、工具调用回放、会话状态、缓存行为）文档缺失且持续变动，多数自称「OpenAI 兼容」的端点存在静默偏离。让任意上游在 Codex 下行为正确，正是 CC Switch X 投入最多的适配工作。
+- **健壮性加强** — 429 / 限流自动重试退避、熔断器、优先级故障转移队列，在供应商抖动时保住长时间会话。
 
-## Screenshots
+## 界面预览
 
-|                  Claude per-role model mapping & routing                  |                 Codex model source aggregation                 |
-| :-----------------------------------------------------------------------: | :------------------------------------------------------------: |
-| ![Claude per-role model mapping](assets/screenshots/claude-models-en.png) | ![Codex model sources](assets/screenshots/codex-models-en.png) |
+|                    Claude 按角色模型映射与路由                    |                    Codex 多模型来源聚合                     |
+| :---------------------------------------------------------------: | :---------------------------------------------------------: |
+| ![Claude 按角色模型映射](assets/screenshots/claude-models-en.png) | ![Codex 多模型来源](assets/screenshots/codex-models-en.png) |
 
-|                                     Codex model picker (desktop app)                                     |
-| :------------------------------------------------------------------------------------------------------: |
-| ![Codex model picker with official and third-party models](assets/screenshots/codex-model-picker-en.png) |
+|                             Codex 模型选择（桌面应用实拍）                              |
+| :-------------------------------------------------------------------------------------: |
+| ![Codex 模型选择器：官方与第三方模型同列](assets/screenshots/codex-model-picker-en.png) |
 
-## Built on CC Switch
+## 基于 CC Switch
 
-[Full Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v0.1.0-beta.5-en.md)
+[完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v0.1.0-beta.5-zh.md)
 
-CC Switch X retains the upstream project's broad desktop-management capabilities: provider and configuration management for nine AI tools, MCP / Prompts / Skills, tray switching, usage tracking, sessions, cloud sync, import/export, backups, and cross-platform support. See the [upstream project](https://github.com/farion1231/cc-switch) for the general feature set and the [user manual](docs/user-manual/en/README.md) for usage details.
+CC Switch X 继承上游的完整桌面管理能力，包括九类 AI 工具的供应商与配置管理、MCP / Prompts / Skills、托盘切换、用量统计、会话管理、云同步、导入导出、备份和跨平台支持。通用功能请参考[上游项目](https://github.com/farion1231/cc-switch)，具体使用方法见[用户手册](docs/user-manual/README.md)。
 
-## FAQ
+## 常见问题
 
 <details>
-<summary><strong>Which AI tools does CC Switch support?</strong></summary>
+<summary><strong>CC Switch 支持哪些 AI 工具？</strong></summary>
 
-CC Switch supports nine tools: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Grok Build**, **OpenCode**, **OpenClaw**, **Hermes**, and **Pi**. Each tool has dedicated provider presets and configuration management.
+CC Switch 支持九个工具：**Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**Grok Build**、**OpenCode**、**OpenClaw**、**Hermes** 和 **Pi**。每个工具都有专属的供应商预设和配置管理。
 
 </details>
 
 <details>
-<summary><strong>Do I need to restart the terminal after switching providers?</strong></summary>
+<summary><strong>切换供应商后需要重启终端吗？</strong></summary>
 
-For most tools, yes — restart your terminal or the CLI tool for changes to take effect. The exception is **Claude Code**, which currently supports hot-switching of provider data without a restart.
-
-</details>
-
-<details>
-<summary><strong>My plugin configuration disappeared after switching providers — what happened?</strong></summary>
-
-CC Switch provides a "Shared Config Snippet" feature to pass common data (beyond API keys and endpoints) between providers. Go to "Edit Provider" → "Shared Config Panel" → click "Extract from Current Provider" to save all common data. When creating a new provider, check "Write Shared Config" (enabled by default) to include plugin data in the new provider. All your configuration items are preserved in the default provider imported when you first launched the app.
+大多数工具需要重启终端或 CLI 工具才能使更改生效。例外的是 **Claude Code**，它目前支持供应商数据的热切换，无需重启。
 
 </details>
 
 <details>
-<summary><strong>macOS installation</strong></summary>
+<summary><strong>切换供应商之后我的插件配置怎么不见了？</strong></summary>
 
-CC Switch X beta builds are not signed or notarized with an X-specific Apple certificate yet. Download only from this repository's Releases page, verify the source, and expect a Gatekeeper warning on first launch. We recommend using the `.dmg` installer when it is available.
-
-</details>
-
-<details>
-<summary><strong>Why can't I delete the currently active provider?</strong></summary>
-
-CC Switch follows a "minimal intrusion" design principle — even if you uninstall the app, your CLI tools will continue to work normally. The system always keeps one active configuration, because deleting all configurations would make the corresponding CLI tool unusable. If you rarely use a specific CLI tool, you can hide it in Settings. To switch back to official login, see the next question.
+CC Switch 使用“通用配置片段”功能，在不同的供应商之间传递 Key 和请求地址之外的通用数据，您可以在“编辑供应商”菜单的“通用配置面板”里，点击“从当前供应商提取”，把所有的通用数据提取到通用配置中，之后在新建“供应商”的时候，只要勾选“应用通用配置”（默认勾选），就会把插件等数据写入到新的供应商配置中。您的所有配置项都会保存在运行本软件的时候，第一次导入的默认供应商里面，不会丢失。
 
 </details>
 
 <details>
-<summary><strong>How do I switch back to official login?</strong></summary>
+<summary><strong>macOS 安装</strong></summary>
 
-Add an official provider from the preset list. After switching to it, run the Log out / Log in flow, and then you can freely switch between the official provider and third-party providers. Codex supports switching between different official providers, making it easy to switch between multiple Plus or Team accounts.
-
-</details>
-
-<details>
-<summary><strong>Where is my data stored?</strong></summary>
-
-- **Database**: `~/.cc-switch-x/cc-switch.db` (SQLite — providers, MCP, prompts, skills)
-- **Local settings**: `~/.cc-switch-x/settings.json` (device-level UI preferences)
-- **Backups**: `~/.cc-switch-x/backups/` (auto-rotated, keeps 10 most recent)
-- **Skills**: `~/.cc-switch-x/skills/` (symlinked to corresponding apps by default)
-- **Skill Backups**: `~/.cc-switch-x/skill-backups/` (created automatically before uninstall, keeps 20 most recent)
+CC Switch X Beta 构建尚未接入独立 Apple 签名与公证。请只从本仓库 Releases 下载并确认来源；首次打开时 macOS 可能显示 Gatekeeper 警告。推荐在有 `.dmg` 安装包时优先使用。
 
 </details>
 
 <details>
-<summary><strong>Linux (Wayland + NVIDIA): clicks don't register and the window black-screens on resize</strong></summary>
+<summary><strong>为什么总有一个正在激活中的供应商无法删除？</strong></summary>
 
-The AppImage forces `GDK_BACKEND=x11` (XWayland) to avoid a historical native-Wayland crash. On newer Wayland + NVIDIA setups this can leave the web content area unclickable (the title-bar buttons still work) and black-screen on resize. Launch with the opt-in escape hatch to switch back to native Wayland:
+本软件的设计原则是“最小侵入性”，即使卸载本软件，也不会影响应用的正常使用。
+
+所以系统总会保留一个正在激活中的配置，因为如果将所有配置全部删除，该应用将无法正常使用。如果你不经常使用某个对应的应用，可以在设置中关掉该应用的显示。如果你想切换回官方登录，可以参考下条。
+
+</details>
+
+<details>
+<summary><strong>如何切换回官方登录？</strong></summary>
+
+可以在预设供应商里面添加一个官方供应商。切换过去之后，执行一遍 Log out / Log in 流程，之后便可以在官方供应商和第三方供应商之间随意切换。CodeX 可以在不同官方供应商之间进行切换，方便多个 Plus 或者 Team 账号之间切换。
+
+</details>
+
+<details>
+<summary><strong>我的数据存储在哪里？</strong></summary>
+
+- **数据库**：`~/.cc-switch-x/cc-switch.db`（SQLite — 供应商、MCP、提示词、技能）
+- **本地设置**：`~/.cc-switch-x/settings.json`（设备级 UI 偏好设置）
+- **备份**：`~/.cc-switch-x/backups/`（自动轮换，保留最近 10 个）
+- **SKILLS**：`~/.cc-switch-x/skills/`（默认通过软链接连接到对应应用）
+- **技能备份**：`~/.cc-switch-x/skill-backups/`（卸载前自动创建，保留最近 20 个）
+
+</details>
+
+<details>
+<summary><strong>Linux（Wayland + NVIDIA）：网页内容点不动、缩放后黑屏</strong></summary>
+
+AppImage 会强制 `GDK_BACKEND=x11`（走 XWayland）以规避历史上的原生 Wayland 崩溃。但在较新的 Wayland + NVIDIA 环境下，这会导致网页内容区点不动（标题栏按钮仍可点）、窗口缩放后黑屏。可用内置的逃生开关切回原生 Wayland：
 
 ```bash
 CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 ```
 
-If you launch from a desktop icon, add it to the `.desktop` `Exec=` line (e.g. `env CC_SWITCH_GDK_BACKEND=wayland /path/to/AppImage`) or set it in your session environment. The variable is generic: on tiling Wayland compositors (sway/Hyprland) where clicks don't register, try `CC_SWITCH_GDK_BACKEND=x11` instead. Leaving it unset keeps the default behavior.
+如果你是从桌面图标启动的，请把它写进 `.desktop` 的 `Exec=` 行（如 `env CC_SWITCH_GDK_BACKEND=wayland /path/to/AppImage`），或在会话环境中设置。该变量是通用的：在 tiling Wayland 合成器（sway/Hyprland）下若出现点击失效，可反过来设 `CC_SWITCH_GDK_BACKEND=x11`。不设置则保持默认行为。
 
 </details>
 
-## Documentation
+## 文档
 
-For detailed guides on every feature, check out the **[User Manual](docs/user-manual/en/README.md)** — covering provider management, MCP/Prompts/Skills, proxy & failover, and more.
+如需了解各项功能的详细使用方法，请查阅 **[用户手册](docs/user-manual/zh/README.md)** — 涵盖供应商管理、MCP/Prompts/Skills、代理与故障转移等全部功能。
 
-## Quick Start
+## 快速开始
 
-### Basic Usage
+### 基本使用
 
-1. **Add Provider**: Click "Add Provider" → Choose a preset or create custom configuration
-2. **Switch Provider**:
-   - Main UI: Select provider → Click "Enable"
-   - System Tray: Click provider name directly (instant effect)
-3. **Takes Effect**: Restart your terminal or the corresponding CLI tool to apply changes (Claude Code does not require a restart)
-4. **Back to Official**: Add an "Official Login" preset, restart the CLI tool, then follow its login/OAuth flow
+1. **添加供应商**：点击"添加供应商" → 选择预设或创建自定义配置
+2. **切换供应商**：
+   - 主界面：选择供应商 → 点击"启用"
+   - 系统托盘：直接点击供应商名称（立即生效）
+3. **生效方式**：重启终端或对应的 CLI 工具以应用更改（Claude Code 无需重启）
+4. **恢复官方登录**：添加"官方登录"预设，重启 CLI 工具后按照其登录/OAuth 流程操作
 
-### MCP, Prompts, Skills & Sessions
+### MCP、Prompts、Skills 与会话
 
-- **MCP**: Click the "MCP" button → Add servers via templates or custom config → Toggle per-app sync
-- **Prompts**: Click "Prompts" → Create presets with Markdown editor → Activate to sync to live files
-- **Skills**: Click "Skills" → Browse GitHub repos → One-click install to supported apps
-- **Sessions**: Click "Sessions" → Browse, search, and restore conversation history across supported session sources
+- **MCP**：点击"MCP"按钮 → 通过模板或自定义配置添加服务器 → 切换各应用同步开关
+- **Prompts**：点击"Prompts" → 使用 Markdown 编辑器创建预设 → 激活后同步到 live 文件
+- **Skills**：点击"Skills" → 浏览 GitHub 仓库 → 一键安装到支持的应用
+- **会话**：点击"Sessions" → 浏览、搜索和恢复支持的会话来源
 
-> **Note**: On first launch, you can manually import existing CLI tool configs as the default provider.
+> **注意**：首次启动可以手动导入现有 CLI 工具配置作为默认供应商。
 
-## Download & Installation
+## 下载安装
 
-### System Requirements
+### 系统要求
 
-- **Windows**: Windows 10 and above
-- **macOS**: macOS 12 (Monterey) and above
-- **Linux**: Ubuntu 22.04+ / Debian 11+ / Fedora 34+ and other mainstream distributions
+- **Windows**：Windows 10 及以上
+- **macOS**：macOS 12 (Monterey) 及以上
+- **Linux**：Ubuntu 22.04+ / Debian 11+ / Fedora 34+ 等主流发行版
 
-### Windows Users
+### Windows 用户
 
-Download the latest `CC-Switch-X-v{version}-Windows.msi` installer or `CC-Switch-X-v{version}-Windows-Portable.zip` portable version from the [Releases](https://github.com/haochen-leo/cc-switch-x/releases) page.
+从 [Releases](https://github.com/haochen-leo/cc-switch-x/releases) 页面下载最新版本的 `CC-Switch-X-v{版本号}-Windows.msi` 安装包或 `CC-Switch-X-v{版本号}-Windows-Portable.zip` 绿色版。
 
-### macOS Users
+### macOS 用户
 
-**Method 1: Homebrew**
+**方式一：Homebrew**
 
-CC Switch X does not have a dedicated Homebrew Cask yet. Use the manual download below or build from source.
+CC Switch X 尚未发布独立 Homebrew Cask。请使用下面的手动下载方式，或从源码构建。
 
-**Method 2: Manual Download**
+**方式二：手动下载**
 
-Download `CC-Switch-X-v{version}-macOS.dmg` (recommended) or `.zip` from the [Releases](https://github.com/haochen-leo/cc-switch-x/releases) page.
+从 [Releases](https://github.com/haochen-leo/cc-switch-x/releases) 页面下载 `CC-Switch-X-v{版本号}-macOS.dmg`（推荐）或 `.zip`。
 
-> **Note**: CC Switch X beta builds are not signed or notarized yet. Verify the download source and expect a Gatekeeper warning.
+> **注意**：CC Switch X Beta 构建尚未签名和公证。请确认下载来源，并预期首次打开可能出现 Gatekeeper 警告。
 
-### Arch Linux Users
+### Arch Linux 用户
 
-CC Switch X does not have a dedicated AUR package yet. The upstream `cc-switch-bin` package installs official CC Switch, not CC Switch X.
+CC Switch X 尚未发布独立 AUR 包。上游 `cc-switch-bin` 安装的是官方 CC Switch，不是 CC Switch X。
 
-### Linux Users
+### Linux 用户
 
-Download the latest Linux build from the [Releases](https://github.com/haochen-leo/cc-switch-x/releases) page:
+从 [Releases](https://github.com/haochen-leo/cc-switch-x/releases) 页面下载最新版本的 Linux 安装包：
 
-- `CC-Switch-X-v{version}-Linux-x86_64.deb` (Debian/Ubuntu)
-- `CC-Switch-X-v{version}-Linux-x86_64.rpm` (Fedora/RHEL/openSUSE)
-- `CC-Switch-X-v{version}-Linux-x86_64.AppImage` (Universal)
+- `CC-Switch-X-v{版本号}-Linux-x86_64.deb`（Debian/Ubuntu）
+- `CC-Switch-X-v{版本号}-Linux-x86_64.rpm`（Fedora/RHEL/openSUSE）
+- `CC-Switch-X-v{版本号}-Linux-x86_64.AppImage`（通用）
 
-> **Flatpak**: Not included in official releases. You can build it yourself from the `.deb` — see [`flatpak/README.md`](flatpak/README.md) for instructions.
+> **Flatpak**：官方 Release 不包含 Flatpak 包。如需使用，可从 `.deb` 自行构建 — 参见 [`flatpak/README.md`](flatpak/README.md)。
 
 <details>
-<summary><strong>Architecture Overview</strong></summary>
+<summary><strong>架构总览</strong></summary>
 
-### Design Principles
+### 设计原则
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Frontend (React + TS)                    │
+│                    前端 (React + TS)                         │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐    │
 │  │ Components  │  │    Hooks     │  │  TanStack Query  │    │
-│  │   (UI)      │──│ (Bus. Logic) │──│   (Cache/Sync)   │    │
+│  │   （UI）     │──│ （业务逻辑）   │──│   （缓存/同步）    │    │
 │  └─────────────┘  └──────────────┘  └──────────────────┘    │
 └────────────────────────┬────────────────────────────────────┘
                          │ Tauri IPC
 ┌────────────────────────▼────────────────────────────────────┐
-│                  Backend (Tauri + Rust)                     │
+│                  后端 (Tauri + Rust)                         │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐    │
 │  │  Commands   │  │   Services   │  │  Models/Config   │    │
-│  │ (API Layer) │──│ (Bus. Layer) │──│     (Data)       │    │
+│  │ （API 层）   │──│  （业务层）    │──│    （数据）       │    │
 │  └─────────────┘  └──────────────┘  └──────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Core Design Patterns**
+**核心设计模式**
 
-- **SSOT** (Single Source of Truth): All data stored in `~/.cc-switch-x/cc-switch.db` (SQLite)
-- **Dual-layer Storage**: SQLite for syncable data, JSON for device-level settings
-- **Dual-way Sync**: Write to live files on switch, backfill from live when editing active provider
-- **Atomic Writes**: Temp file + rename pattern prevents config corruption
-- **Concurrency Safe**: Mutex-protected database connection avoids race conditions
-- **Layered Architecture**: Clear separation (Commands → Services → DAO → Database)
+- **SSOT**（单一事实源）：所有数据存储在 `~/.cc-switch-x/cc-switch.db`（SQLite）
+- **双层存储**：SQLite 存储可同步数据，JSON 存储设备级设置
+- **双向同步**：切换时写入 live 文件，编辑当前供应商时从 live 回填
+- **原子写入**：临时文件 + 重命名模式防止配置损坏
+- **并发安全**：Mutex 保护的数据库连接避免竞态条件
+- **分层架构**：清晰分离（Commands → Services → DAO → Database）
 
-**Key Components**
+**核心组件**
 
-- **ProviderService**: Provider CRUD, switching, backfill, sorting
-- **McpService**: MCP server management, import/export, live file sync
-- **ProxyService**: Local proxy mode with hot-switching and format conversion
-- **SessionManager**: Conversation history browsing across supported session sources
-- **ConfigService**: Config import/export, backup rotation
-- **SpeedtestService**: API endpoint latency measurement
+- **ProviderService**：供应商增删改查、切换、回填、排序
+- **McpService**：MCP 服务器管理、导入导出、live 文件同步
+- **ProxyService**：本地 Proxy 模式，支持热切换和格式转换
+- **SessionManager**：全应用会话历史浏览
+- **ConfigService**：配置导入导出、备份轮换
+- **SpeedtestService**：API 端点延迟测量
 
 </details>
 
 <details>
-<summary><strong>Development Guide</strong></summary>
+<summary><strong>开发指南</strong></summary>
 
-### Environment Requirements
+### 环境要求
 
 - Node.js 18+
 - pnpm 8+
 - Rust 1.85+
 - Tauri CLI 2.8+
 
-### Development Commands
+### 开发命令
 
 ```bash
-# Install dependencies
+# 安装依赖
 pnpm install
 
-# Dev mode (hot reload)
+# 开发模式（热重载）
 pnpm dev
 
-# Type check
+# 类型检查
 pnpm typecheck
 
-# Format code
+# 代码格式化
 pnpm format
 
-# Check code format
+# 检查代码格式
 pnpm format:check
 
-# Run frontend unit tests
+# 运行前端单元测试
 pnpm test:unit
 
-# Run tests in watch mode (recommended for development)
+# 监听模式运行测试（推荐开发时使用）
 pnpm test:unit:watch
 
-# Build application
+# 构建应用
 pnpm build
 
-# Build debug version
+# 构建调试版本
 pnpm tauri build --debug
 ```
 
-### Rust Backend Development
+### Rust 后端开发
 
 ```bash
 cd src-tauri
 
-# Format Rust code
+# 格式化 Rust 代码
 cargo fmt
 
-# Run clippy checks
+# 运行 clippy 检查
 cargo clippy
 
-# Run backend tests
+# 运行后端测试
 cargo test
 
-# Run specific tests
+# 运行特定测试
 cargo test test_name
 
-# Run tests with test-hooks feature
+# 运行带测试 hooks 的测试
 cargo test --features test-hooks
 ```
 
-### Testing Guide
+### 测试说明
 
-**Frontend Testing**:
+**前端测试**：
 
-- Uses **vitest** as test framework
-- Uses **MSW (Mock Service Worker)** to mock Tauri API calls
-- Uses **@testing-library/react** for component testing
+- 使用 **vitest** 作为测试框架
+- 使用 **MSW (Mock Service Worker)** 模拟 Tauri API 调用
+- 使用 **@testing-library/react** 进行组件测试
 
-**Running Tests**:
+**运行测试**：
 
 ```bash
-# Run all tests
+# 运行所有测试
 pnpm test:unit
 
-# Watch mode (auto re-run)
+# 监听模式（自动重跑）
 pnpm test:unit:watch
 
-# With coverage report
+# 带覆盖率报告
 pnpm test:unit --coverage
 ```
 
-### Tech Stack
+### 技术栈
 
-**Frontend**: React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit
+**前端**：React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit
 
-**Backend**: Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-updater/process/dialog/store/log
+**后端**：Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-updater/process/dialog/store/log
 
-**Testing**: vitest · MSW · @testing-library/react
+**测试**：vitest · MSW · @testing-library/react
 
 </details>
 
 <details>
-<summary><strong>Project Structure</strong></summary>
+<summary><strong>项目结构</strong></summary>
 
 ```
-├── src/                        # Frontend (React + TypeScript)
+├── src/                        # 前端 (React + TypeScript)
 │   ├── components/
-│   │   ├── providers/          # Provider management
-│   │   ├── mcp/                # MCP panel
-│   │   ├── prompts/            # Prompts management
-│   │   ├── skills/             # Skills management
-│   │   ├── sessions/           # Session Manager
-│   │   ├── proxy/              # Proxy mode panel
-│   │   ├── openclaw/           # OpenClaw config panels
-│   │   ├── settings/           # Settings (Terminal/Backup/About)
-│   │   ├── deeplink/           # Deep Link import
-│   │   ├── env/                # Environment variable management
-│   │   ├── universal/          # Cross-app configuration
-│   │   ├── usage/              # Usage statistics
-│   │   └── ui/                 # shadcn/ui component library
-│   ├── hooks/                  # Custom hooks (business logic)
+│   │   ├── providers/          # 供应商管理
+│   │   ├── mcp/                # MCP 面板
+│   │   ├── prompts/            # Prompts 管理
+│   │   ├── skills/             # Skills 管理
+│   │   ├── sessions/           # 会话管理器
+│   │   ├── proxy/              # Proxy 模式面板
+│   │   ├── openclaw/           # OpenClaw 配置面板
+│   │   ├── settings/           # 设置（终端/备份/关于）
+│   │   ├── deeplink/           # Deep Link 导入
+│   │   ├── env/                # 环境变量管理
+│   │   ├── universal/          # 跨应用配置
+│   │   ├── usage/              # 用量统计
+│   │   └── ui/                 # shadcn/ui 组件库
+│   ├── hooks/                  # 自定义 hooks（业务逻辑）
 │   ├── lib/
-│   │   ├── api/                # Tauri API wrapper (type-safe)
-│   │   └── query/              # TanStack Query config
-│   ├── i18n/                   # Internationalization
-│   │   └── locales/            # Translations (zh/zh-TW/en/ja)
-│   ├── config/                 # Presets (providers/mcp)
-│   └── types/                  # TypeScript definitions
-├── src-tauri/                  # Backend (Rust)
+│   │   ├── api/                # Tauri API 封装（类型安全）
+│   │   └── query/              # TanStack Query 配置
+│   ├── i18n/                   # 国际化
+│   │   └── locales/            # 翻译 (zh/zh-TW/en/ja)
+│   ├── config/                 # 预设 (providers/mcp)
+│   └── types/                  # TypeScript 类型定义
+├── src-tauri/                  # 后端 (Rust)
 │   └── src/
-│       ├── commands/           # Tauri command layer (by domain)
-│       ├── services/           # Business logic layer
-│       ├── database/           # SQLite DAO layer
-│       ├── proxy/              # Proxy module
-│       ├── session_manager/    # Session management
-│       ├── deeplink/           # Deep Link handling
-│       └── mcp/                # MCP sync module
-├── tests/                      # Frontend tests
-└── assets/                     # Screenshots & partner resources
+│       ├── commands/           # Tauri 命令层（按领域）
+│       ├── services/           # 业务逻辑层
+│       ├── database/           # SQLite DAO 层
+│       ├── proxy/              # Proxy 模块
+│       ├── session_manager/    # 会话管理
+│       ├── deeplink/           # Deep Link 处理
+│       └── mcp/                # MCP 同步模块
+├── tests/                      # 前端测试
+└── assets/                     # 截图 & 合作商资源
 ```
 
 </details>
 
-## Contributing
+## 贡献
 
-Issues and suggestions are welcome!
+欢迎提交 Issue 反馈问题和建议！
 
-Before submitting PRs, please ensure:
+提交 PR 前请确保：
 
-- Pass type check: `pnpm typecheck`
-- Pass format check: `pnpm format:check`
-- Pass unit tests: `pnpm test:unit`
+- 通过类型检查：`pnpm typecheck`
+- 通过格式检查：`pnpm format:check`
+- 通过单元测试：`pnpm test:unit`
 
-For new features, please open an issue for discussion before submitting a PR. PRs for features that are not a good fit for the project may be closed.
+新功能开发前，欢迎先开 Issue 讨论实现方案，不适合项目的功能性 PR 有可能会被关闭。
 
 ## Star History
 
@@ -371,4 +373,4 @@ For new features, please open an issue for discussion before submitting a PR. PR
 
 ## License
 
-MIT © Jason Young; CC Switch X additions © haochen-leo
+MIT © Jason Young；CC Switch X 新增部分 © haochen-leo
