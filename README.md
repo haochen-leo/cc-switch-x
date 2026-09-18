@@ -2,11 +2,6 @@
 
 # CC Switch X
 
-> 基于 [CC Switch](https://github.com/farion1231/cc-switch) 的非官方分叉，当前基线为上游 `d8065cc6`（CC Switch 3.20.1）。CC Switch X 使用独立的 `~/.cc-switch-x` 数据库，不与官方版本共用运行数据库。
-
-分叉边界、数据库兼容、未来 v19 升级与 Git 维护流程见
-[CC Switch X 分叉与维护策略](docs/cc-switch-x-maintenance-zh.md)。
-
 ### 基于 CC Switch，强化 Claude 与 Codex 的多供应商路由与协议兼容
 
 [![Version](https://img.shields.io/github/v/release/haochen-leo/cc-switch-x?include_prereleases&color=blue&label=version)](https://github.com/haochen-leo/cc-switch-x/releases)
@@ -24,10 +19,10 @@
 
 CC Switch X 面向需要在多个官方及第三方模型供应商之间稳定使用 Claude 和 Codex 的用户。它保留 [CC Switch](https://github.com/farion1231/cc-switch) 的桌面管理基础，X 的开发重点放在供应商聚合、协议兼容、模型路由和运行健壮性上。
 
-- **Claude 多供应商，按模型角色细分** — 为每个 Claude 角色（Sonnet / Opus / Fable / Haiku）分别映射显示名与上游模型，还可以把不同角色路由到不同供应商——比如 Opus 走一个端点，后台 Haiku 走更便宜的另一个。
-- **Codex 多供应商聚合** — 官方与第三方 Codex 供应商聚合为一个入口，各来源的模型并排出现在 Codex 同一个模型下拉列表中，与官方模型无缝切换。
-- **深度 Responses 协议适配** — Codex 通过 Responses API 通信，其协议语义（推理条目、工具调用回放、会话状态、缓存行为）文档缺失且持续变动，多数自称「OpenAI 兼容」的端点存在静默偏离。让任意上游在 Codex 下行为正确，正是 CC Switch X 投入最多的适配工作。
-- **健壮性加强** — 429 / 限流自动重试退避、熔断器、优先级故障转移队列，在供应商抖动时保住长时间会话。
+- **Claude 多供应商，按模型角色细分** — Sonnet / Opus / Fable / Haiku 每个角色独立映射模型与供应商；后台角色可走更便宜的端点。
+- **Codex 多供应商聚合** — 官方与第三方聚合为单一入口，各来源模型并列于同一模型列表，无缝切换。
+- **深度 Responses 协议适配** — Responses 协议语义文档缺失且多变，多数「OpenAI 兼容」端点存在静默偏离；修正这些偏离是 X 投入最多的工作。
+- **健壮性加强** — 429 / 限流自动重试退避、熔断器、优先级故障转移，供应商抖动时保住长会话。
 
 ## 界面预览
 
@@ -43,7 +38,7 @@ CC Switch X 面向需要在多个官方及第三方模型供应商之间稳定�
 
 [完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v0.1.0-beta.5-zh.md)
 
-CC Switch X 继承上游的完整桌面管理能力，包括九类 AI 工具的供应商与配置管理、MCP / Prompts / Skills、托盘切换、用量统计、会话管理、云同步、导入导出、备份和跨平台支持。通用功能请参考[上游项目](https://github.com/farion1231/cc-switch)，具体使用方法见[用户手册](docs/user-manual/README.md)。
+CC Switch X 继承上游的完整桌面管理能力，包括九类 AI 工具的供应商与配置管理、MCP / Prompts / Skills、托盘切换、用量统计、会话管理、云同步、导入导出、备份和跨平台支持。通用功能请参考[上游项目](https://github.com/farion1231/cc-switch)，具体使用方法见[用户手册](docs/user-manual/README.md)。分叉边界与维护策略见[CC Switch X 分叉与维护策略](docs/cc-switch-x-maintenance-zh.md)。
 
 ## 常见问题
 
