@@ -2682,4 +2682,22 @@ wire_api = "responses"
             &anthropic, None
         ));
     }
+
+    #[test]
+    fn xai_api_key_provider_uses_strict_sanitizer() {
+        let grok_key = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-x" },
+            "config": r#"
+model_provider = "custom"
+model = "grok-4.6"
+
+[model_providers.custom]
+name = "xai"
+base_url = "https://api.x.ai/v1"
+wire_api = "responses"
+"#
+        }));
+        assert!(provider_needs_responses_namespace_flatten(&grok_key, None));
+        assert!(provider_needs_xai_responses_sanitize(&grok_key));
+    }
 }
