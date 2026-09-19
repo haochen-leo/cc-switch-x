@@ -4,13 +4,74 @@ use base64::{
     Engine as _,
 };
 use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, GenericImageView};
+use once_cell::sync::Lazy;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Mutex,
+};
 
 pub(crate) const CODEX_THIRD_PARTY_IMAGE_BUDGET_BYTES: usize = 5_900_000;
 pub(crate) const MAX_DOWNSAMPLED_IMAGE_EDGE: u32 = 1_600;
 
 const JPEG_QUALITY: u8 = 80;
+const IMAGE_CACHE_MAX_ENTRIES: usize = 64;
+const IMAGE_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const REMOVED_IMAGE_MARKER: &str = "[Image removed: request body byte budget exceeded]";
+
+type ImageCacheKey = [u8; 32];
+
+static DOWNSAMPLED_IMAGE_CACHE: Lazy<Mutex<DownsampledImageCache>> =
+    Lazy::new(|| Mutex::new(DownsampledImageCache::default()));
+
+#[derive(Default)]
+struct DownsampledImageCache {
+    entries: HashMap<ImageCacheKey, String>,
+    order: VecDeque<ImageCacheKey>,
+    total_bytes: usize,
+    #[cfg(test)]
+    hits: usize,
+}
+
+impl DownsampledImageCache {
+    fn get(&mut self, key: &ImageCacheKey) -> Option<String> {
+        let value = self.entries.get(key)?.clone();
+        self.order.retain(|existing| existing != key);
+        self.order.push_back(*key);
+        #[cfg(test)]
+        {
+            self.hits += 1;
+        }
+        Some(value)
+    }
+
+    fn insert(&mut self, key: ImageCacheKey, value: String) {
+        if value.len() > IMAGE_CACHE_MAX_BYTES {
+            return;
+        }
+
+        if let Some(previous) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(previous.len());
+        }
+        self.order.retain(|existing| existing != &key);
+
+        while self.entries.len() >= IMAGE_CACHE_MAX_ENTRIES
+            || self.total_bytes + value.len() > IMAGE_CACHE_MAX_BYTES
+        {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(removed) = self.entries.remove(&oldest) {
+                self.total_bytes = self.total_bytes.saturating_sub(removed.len());
+            }
+        }
+
+        self.total_bytes += value.len();
+        self.order.push_back(key);
+        self.entries.insert(key, value);
+    }
+}
 
 pub(crate) struct ImageBudgetResult {
     pub(crate) body_bytes: Vec<u8>,
@@ -155,11 +216,29 @@ fn downsample_data_url(url: &str) -> Option<String> {
 }
 
 fn downsample_base64_image(media_type: &str, payload: &str) -> Option<String> {
+    downsample_base64_image_with_cache(media_type, payload, &DOWNSAMPLED_IMAGE_CACHE)
+}
+
+fn downsample_base64_image_with_cache(
+    media_type: &str,
+    payload: &str,
+    cache: &Mutex<DownsampledImageCache>,
+) -> Option<String> {
     if !media_type_is_image(media_type) {
         return None;
     }
 
-    let image_bytes = decode_base64_payload(payload.trim())?;
+    let payload = payload.trim();
+    let image_bytes = decode_base64_payload(payload)?;
+    let cache_key = downsampled_image_cache_key(&image_bytes);
+    if let Some(cached) = cache
+        .lock()
+        .ok()
+        .and_then(|mut cache| cache.get(&cache_key))
+    {
+        return (cached.len() < payload.len()).then_some(cached);
+    }
+
     let image = image::load_from_memory(&image_bytes).ok()?;
     let (width, height) = image.dimensions();
     if width <= MAX_DOWNSAMPLED_IMAGE_EDGE && height <= MAX_DOWNSAMPLED_IMAGE_EDGE {
@@ -177,11 +256,22 @@ fn downsample_base64_image(media_type: &str, payload: &str) -> Option<String> {
         .ok()?;
 
     let rewritten = STANDARD.encode(encoded);
-    if rewritten.len() < payload.trim().len() {
+    if rewritten.len() < payload.len() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.insert(cache_key, rewritten.clone());
+        }
         Some(rewritten)
     } else {
         None
     }
+}
+
+fn downsampled_image_cache_key(image_bytes: &[u8]) -> ImageCacheKey {
+    let mut hasher = Sha256::new();
+    hasher.update(image_bytes);
+    hasher.update(MAX_DOWNSAMPLED_IMAGE_EDGE.to_le_bytes());
+    hasher.update([JPEG_QUALITY]);
+    hasher.finalize().into()
 }
 
 fn decode_base64_payload(payload: &str) -> Option<Vec<u8>> {
@@ -406,6 +496,22 @@ mod tests {
         let (width, height) = image.dimensions();
         assert!(width <= MAX_DOWNSAMPLED_IMAGE_EDGE);
         assert!(height <= MAX_DOWNSAMPLED_IMAGE_EDGE);
+    }
+
+    #[test]
+    fn reuses_cached_downsampled_image() {
+        let png = noisy_png_base64(1_700, 1_100);
+        let cache = Mutex::new(DownsampledImageCache::default());
+
+        let first = downsample_base64_image_with_cache("image/png", &png, &cache)
+            .expect("first downsample");
+        let second = downsample_base64_image_with_cache("image/png", &png, &cache)
+            .expect("cached downsample");
+
+        assert_eq!(second, first);
+        let cache = cache.lock().expect("cache lock");
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.hits, 1);
     }
 
     #[test]
