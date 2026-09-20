@@ -52,6 +52,12 @@ export function ProviderStatsTable({
               {t("usage.tokens", "Tokens")}
             </TableHead>
             <TableHead className="text-right">
+              {t("usage.cacheTokens", "缓存 Token")}
+            </TableHead>
+            <TableHead className="text-right">
+              {t("usage.cacheHitRate", "缓存命中率")}
+            </TableHead>
+            <TableHead className="text-right">
               {t("usage.cost", "成本")}
             </TableHead>
             <TableHead className="text-right">
@@ -66,7 +72,7 @@ export function ProviderStatsTable({
           {stats?.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={6}
+                colSpan={8}
                 className="text-center text-muted-foreground"
               >
                 {t("usage.noData", "暂无数据")}
@@ -83,6 +89,12 @@ export function ProviderStatsTable({
                 </TableCell>
                 <TableCell className="text-right">
                   {stat.totalTokens.toLocaleString()}
+                </TableCell>
+                <TableCell className="text-right">
+                  {stat.cacheTokens.toLocaleString()}
+                </TableCell>
+                <TableCell className="text-right">
+                  {(stat.cacheHitRate * 100).toFixed(1)}%
                 </TableCell>
                 <TableCell className="text-right">
                   {fmtUsd(stat.totalCost, 4)}

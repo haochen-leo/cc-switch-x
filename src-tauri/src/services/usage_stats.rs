@@ -83,6 +83,9 @@ pub struct ProviderStats {
     pub provider_name: String,
     pub request_count: u64,
     pub total_tokens: u64,
+    pub cache_tokens: u64,
+    /// cache_read / (input + cache_creation + cache_read), range 0.0–1.0.
+    pub cache_hit_rate: f64,
     pub total_cost: String,
     pub success_rate: f32,
     pub avg_latency_ms: u64,
@@ -95,6 +98,9 @@ pub struct ModelStats {
     pub model: String,
     pub request_count: u64,
     pub total_tokens: u64,
+    pub cache_tokens: u64,
+    /// cache_read / (input + cache_creation + cache_read), range 0.0–1.0.
+    pub cache_hit_rate: f64,
     pub total_cost: String,
     pub avg_cost_per_request: String,
 }
@@ -1337,6 +1343,9 @@ impl Database {
                 provider_id, app_type, provider_name,
                 SUM(request_count) as request_count,
                 SUM(total_tokens) as total_tokens,
+                SUM(cache_tokens) as cache_tokens,
+                SUM(cache_read_tokens) as cache_read_tokens,
+                SUM(fresh_input_tokens) as fresh_input_tokens,
                 SUM(total_cost) as total_cost,
                 SUM(success_count) as success_count,
                 CASE WHEN SUM(request_count) > 0
@@ -1347,6 +1356,9 @@ impl Database {
                     {detail_pname} as provider_name,
                     COUNT(*) as request_count,
                     COALESCE(SUM({fresh_input_detail} + l.output_tokens), 0) as total_tokens,
+                    COALESCE(SUM(l.cache_read_tokens + l.cache_creation_tokens), 0) as cache_tokens,
+                    COALESCE(SUM(l.cache_read_tokens), 0) as cache_read_tokens,
+                    COALESCE(SUM({fresh_input_detail}), 0) as fresh_input_tokens,
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost,
                     COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
                     COALESCE(SUM(l.latency_ms), 0) as latency_sum
@@ -1359,6 +1371,9 @@ impl Database {
                     {rollup_pname} as provider_name,
                     COALESCE(SUM(r.request_count), 0),
                     COALESCE(SUM({fresh_input_rollup} + r.output_tokens), 0),
+                    COALESCE(SUM(r.cache_read_tokens + r.cache_creation_tokens), 0),
+                    COALESCE(SUM(r.cache_read_tokens), 0),
+                    COALESCE(SUM({fresh_input_rollup}), 0),
                     COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0),
                     COALESCE(SUM(r.success_count), 0),
                     COALESCE(SUM(r.avg_latency_ms * r.request_count), 0)
@@ -1377,9 +1392,19 @@ impl Database {
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let row_mapper = |row: &rusqlite::Row| {
             let request_count: i64 = row.get(3)?;
-            let success_count: i64 = row.get(6)?;
+            let total_tokens: i64 = row.get(4)?;
+            let cache_tokens: i64 = row.get(5)?;
+            let cache_read_tokens: i64 = row.get(6)?;
+            let fresh_input: i64 = row.get(7)?;
+            let success_count: i64 = row.get(9)?;
             let success_rate = if request_count > 0 {
                 (success_count as f32 / request_count as f32) * 100.0
+            } else {
+                0.0
+            };
+            let cacheable_input = fresh_input + cache_tokens;
+            let cache_hit_rate = if cacheable_input > 0 {
+                cache_read_tokens as f64 / cacheable_input as f64
             } else {
                 0.0
             };
@@ -1388,10 +1413,12 @@ impl Database {
                 provider_id: row.get(0)?,
                 provider_name: row.get(2)?,
                 request_count: request_count as u64,
-                total_tokens: row.get::<_, i64>(4)? as u64,
-                total_cost: format!("{:.6}", row.get::<_, f64>(5)?),
+                total_tokens: total_tokens as u64,
+                cache_tokens: cache_tokens as u64,
+                cache_hit_rate,
+                total_cost: format!("{:.6}", row.get::<_, f64>(8)?),
                 success_rate,
-                avg_latency_ms: row.get::<_, f64>(7)? as u64,
+                avg_latency_ms: row.get::<_, f64>(10)? as u64,
             })
         };
 
@@ -1496,11 +1523,17 @@ impl Database {
                 model,
                 SUM(request_count) as request_count,
                 SUM(total_tokens) as total_tokens,
+                SUM(cache_tokens) as cache_tokens,
+                SUM(cache_read_tokens) as cache_read_tokens,
+                SUM(fresh_input_tokens) as fresh_input_tokens,
                 SUM(total_cost) as total_cost
             FROM (
                 SELECT {detail_model} as model,
                     COUNT(*) as request_count,
                     COALESCE(SUM({fresh_input_detail} + l.output_tokens), 0) as total_tokens,
+                    COALESCE(SUM(l.cache_read_tokens + l.cache_creation_tokens), 0) as cache_tokens,
+                    COALESCE(SUM(l.cache_read_tokens), 0) as cache_read_tokens,
+                    COALESCE(SUM({fresh_input_detail}), 0) as fresh_input_tokens,
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost
                 FROM proxy_request_logs l
                 {detail_join}
@@ -1510,6 +1543,9 @@ impl Database {
                 SELECT {rollup_model},
                     COALESCE(SUM(r.request_count), 0),
                     COALESCE(SUM({fresh_input_rollup} + r.output_tokens), 0),
+                    COALESCE(SUM(r.cache_read_tokens + r.cache_creation_tokens), 0),
+                    COALESCE(SUM(r.cache_read_tokens), 0),
+                    COALESCE(SUM({fresh_input_rollup}), 0),
                     COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0)
                 FROM usage_daily_rollups r
                 {rollup_join}
@@ -1526,9 +1562,19 @@ impl Database {
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let row_mapper = |row: &rusqlite::Row| {
             let request_count: i64 = row.get(1)?;
-            let total_cost: f64 = row.get(3)?;
+            let total_tokens: i64 = row.get(2)?;
+            let cache_tokens: i64 = row.get(3)?;
+            let cache_read_tokens: i64 = row.get(4)?;
+            let fresh_input: i64 = row.get(5)?;
+            let total_cost: f64 = row.get(6)?;
             let avg_cost = if request_count > 0 {
                 total_cost / request_count as f64
+            } else {
+                0.0
+            };
+            let cacheable_input = fresh_input + cache_tokens;
+            let cache_hit_rate = if cacheable_input > 0 {
+                cache_read_tokens as f64 / cacheable_input as f64
             } else {
                 0.0
             };
@@ -1536,7 +1582,9 @@ impl Database {
             Ok(ModelStats {
                 model: row.get(0)?,
                 request_count: request_count as u64,
-                total_tokens: row.get::<_, i64>(2)? as u64,
+                total_tokens: total_tokens as u64,
+                cache_tokens: cache_tokens as u64,
+                cache_hit_rate,
                 total_cost: format!("{total_cost:.6}"),
                 avg_cost_per_request: format!("{avg_cost:.6}"),
             })
@@ -3789,8 +3837,9 @@ mod tests {
                 "INSERT INTO proxy_request_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
+                    cache_read_tokens, cache_creation_tokens,
                     latency_ms, status_code, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "req1",
                     "p1",
@@ -3799,6 +3848,8 @@ mod tests {
                     100,
                     50,
                     "0.01",
+                    25,
+                    10,
                     100,
                     200,
                     1000
@@ -3810,6 +3861,9 @@ mod tests {
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].model, "claude-3-sonnet");
         assert_eq!(stats[0].request_count, 1);
+        assert_eq!(stats[0].total_tokens, 150);
+        assert_eq!(stats[0].cache_tokens, 35);
+        assert!((stats[0].cache_hit_rate - (25.0 / 135.0)).abs() < 1e-9);
 
         Ok(())
     }
@@ -3832,9 +3886,10 @@ mod tests {
                 "INSERT INTO proxy_request_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
+                    cache_read_tokens, cache_creation_tokens,
                     latency_ms, status_code, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["new", "p1", "claude", "claude-3", 200, 75, "0.02", 120, 200, 2000],
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params!["new", "p1", "claude", "claude-3", 200, 75, "0.02", 30, 10, 120, 200, 2000],
             )?;
         }
 
@@ -3843,6 +3898,8 @@ mod tests {
         assert_eq!(stats[0].provider_id, "p1");
         assert_eq!(stats[0].request_count, 1);
         assert_eq!(stats[0].total_tokens, 275);
+        assert_eq!(stats[0].cache_tokens, 40);
+        assert!((stats[0].cache_hit_rate - (30.0 / 240.0)).abs() < 1e-9);
 
         Ok(())
     }
