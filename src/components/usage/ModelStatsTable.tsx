@@ -52,6 +52,12 @@ export function ModelStatsTable({
               {t("usage.tokens", "Tokens")}
             </TableHead>
             <TableHead className="text-right">
+              {t("usage.cacheTokens", "缓存 Token")}
+            </TableHead>
+            <TableHead className="text-right">
+              {t("usage.cacheHitRate", "缓存命中率")}
+            </TableHead>
+            <TableHead className="text-right">
               {t("usage.totalCost", "总成本")}
             </TableHead>
             <TableHead className="text-right">
@@ -63,7 +69,7 @@ export function ModelStatsTable({
           {stats?.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={5}
+                colSpan={7}
                 className="text-center text-muted-foreground"
               >
                 {t("usage.noData", "暂无数据")}
@@ -80,6 +86,12 @@ export function ModelStatsTable({
                 </TableCell>
                 <TableCell className="text-right">
                   {stat.totalTokens.toLocaleString()}
+                </TableCell>
+                <TableCell className="text-right">
+                  {stat.cacheTokens.toLocaleString()}
+                </TableCell>
+                <TableCell className="text-right">
+                  {(stat.cacheHitRate * 100).toFixed(1)}%
                 </TableCell>
                 <TableCell className="text-right">
                   {fmtUsd(stat.totalCost, 4)}

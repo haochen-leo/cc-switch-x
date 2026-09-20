@@ -11,7 +11,6 @@ import {
   type AppTypeFilter,
   type UsageRangeSelection,
 } from "@/types/usage";
-import { motion } from "framer-motion";
 import {
   BarChart3,
   ListFilter,
@@ -274,12 +273,7 @@ export function UsageDashboard({
   }, [modelOptionsData, model]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
-      className="space-y-8 pb-8"
-    >
+    <div className="space-y-8 pb-8">
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-2">
         <div className="flex flex-col gap-1">
           <h2 className="text-2xl font-bold tracking-tight">
@@ -441,11 +435,7 @@ export function UsageDashboard({
             </TabsList>
           </div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-          >
+          <div>
             <TabsContent value="logs" className="mt-0">
               <RequestLogTable
                 range={range}
@@ -477,7 +467,7 @@ export function UsageDashboard({
                 refreshIntervalMs={refreshIntervalMs}
               />
             </TabsContent>
-          </motion.div>
+          </div>
         </Tabs>
       </div>
 
@@ -596,6 +586,6 @@ export function UsageDashboard({
         onConfirm={() => void rebuildCodexUsage()}
         onCancel={() => setShowRebuildConfirm(false)}
       />
-    </motion.div>
+    </div>
   );
 }

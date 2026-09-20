@@ -116,6 +116,9 @@ export interface ProviderStats {
   providerName: string;
   requestCount: number;
   totalTokens: number;
+  cacheTokens: number;
+  /** cache_read / (input + cache_creation + cache_read), range 0–1 */
+  cacheHitRate: number;
   totalCost: string;
   successRate: number;
   avgLatencyMs: number;
@@ -125,6 +128,9 @@ export interface ModelStats {
   model: string;
   requestCount: number;
   totalTokens: number;
+  cacheTokens: number;
+  /** cache_read / (input + cache_creation + cache_read), range 0–1 */
+  cacheHitRate: number;
   totalCost: string;
   avgCostPerRequest: string;
 }
