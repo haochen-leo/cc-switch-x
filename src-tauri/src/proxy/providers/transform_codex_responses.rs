@@ -499,4 +499,35 @@ mod tests {
             body["tools"][0]["parameters"]
         );
     }
+
+    #[test]
+    fn gpt_named_relay_clears_plaintext_reasoning_but_other_models_keep_it() {
+        let body = json!({
+            "model": "gpt-6-sol",
+            "input": [{
+                "id": "rs_ccswitch_93dec832ac7bd8aa",
+                "type": "reasoning",
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": "third-party reasoning"}],
+                "encrypted_content": null
+            }]
+        });
+        let relay = provider("gpt-relay", "https://relay.example/v1");
+
+        let prepared = prepare_request(body.clone(), &relay, Some("gpt-6-sol")).unwrap();
+        assert_eq!(
+            prepared.context.dialect,
+            ResponsesDialect::OpenAiPrivateContract
+        );
+        assert!(prepared.body["input"][0]["content"].is_null());
+        let finalized = finalize_request(prepared.context, prepared.body).unwrap();
+        assert!(finalized.body["input"][0]["content"].is_null());
+
+        let other = prepare_request(body, &relay, Some("qwen3.8-max")).unwrap();
+        assert_eq!(other.context.dialect, ResponsesDialect::ThirdPartyStandard);
+        assert_eq!(
+            other.body["input"][0]["content"][0]["type"],
+            "reasoning_text"
+        );
+    }
 }
