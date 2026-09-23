@@ -424,6 +424,53 @@ pub fn merge_non_db_mcp_servers_into_config_text(
     Ok(target_doc.to_string())
 }
 
+/// 用当前 live 的 DB 外 MCP **替换**目标配置中的 DB 外 MCP。
+///
+/// 与 `merge_non_db_mcp_servers_into_config_text` 的“目标同名项优先”不同，恢复前
+/// 协调需要把接管期间用户/Codex 对外部 MCP 的新增、修改和删除都带回还原备份：
+/// 先从目标删除 DB 不认识的旧条目，再从当前 live 合并最新条目。DB 已知条目仍由
+/// MCP 投影负责，不在这里改动。
+pub fn replace_non_db_mcp_servers_from_config_text(
+    target_config: &str,
+    current_live_config: &str,
+    known_ids: &std::collections::HashSet<String>,
+) -> Result<String, AppError> {
+    use toml_edit::DocumentMut;
+
+    let mut target_doc = if target_config.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        target_config
+            .parse::<DocumentMut>()
+            .map_err(|e| AppError::McpValidation(format!("解析目标 config.toml 失败: {e}")))?
+    };
+
+    let mut remove_empty_table = false;
+    if let Some(target_mcp) = target_doc
+        .get_mut("mcp_servers")
+        .and_then(|item| item.as_table_like_mut())
+    {
+        let stale_external_ids: Vec<String> = target_mcp
+            .iter()
+            .filter(|(id, _)| !known_ids.contains(*id))
+            .map(|(id, _)| id.to_string())
+            .collect();
+        for id in stale_external_ids {
+            target_mcp.remove(&id);
+        }
+        remove_empty_table = target_mcp.is_empty();
+    }
+    if remove_empty_table {
+        target_doc.remove("mcp_servers");
+    }
+
+    merge_non_db_mcp_servers_into_config_text(
+        &target_doc.to_string(),
+        current_live_config,
+        known_ids,
+    )
+}
+
 /// 将单个 MCP 服务器同步到 Codex live 配置
 /// 始终使用 Codex 官方格式 [mcp_servers]，并清理可能存在的错误格式 [mcp.servers]
 /// 把单个 MCP server 表写入 `[mcp_servers]`，并保证该键是「表」。
@@ -882,6 +929,56 @@ mod tests {
             merge_non_db_mcp_servers_into_config_text("", existing, &known_ids(&[])).unwrap();
 
         assert!(merged.contains("[mcp_servers.node_repl]"));
+    }
+
+    #[test]
+    fn replace_uses_latest_live_external_mcp_set_and_keeps_db_owned_entries() {
+        let target = r#"[mcp_servers.chrome]
+command = "db-owned"
+
+[mcp_servers.node_repl]
+command = "/old"
+
+[mcp_servers.removed]
+command = "/removed"
+"#;
+        let current_live = r#"[mcp_servers.chrome]
+command = "live-must-not-win"
+
+[mcp_servers.node_repl]
+command = "/new"
+
+[mcp_servers.added]
+command = "/added"
+"#;
+
+        let replaced = replace_non_db_mcp_servers_from_config_text(
+            target,
+            current_live,
+            &known_ids(&["chrome"]),
+        )
+        .expect("replace external MCP entries");
+
+        assert!(replaced.contains("command = \"db-owned\""));
+        assert!(!replaced.contains("live-must-not-win"));
+        assert!(replaced.contains("command = \"/new\""));
+        assert!(!replaced.contains("command = \"/old\""));
+        assert!(!replaced.contains("[mcp_servers.removed]"));
+        assert!(replaced.contains("[mcp_servers.added]"));
+    }
+
+    #[test]
+    fn replace_removes_external_mcp_deleted_from_live() {
+        let target = "[mcp_servers.node_repl]\ncommand = \"/old\"\n";
+
+        let replaced = replace_non_db_mcp_servers_from_config_text(
+            target,
+            "model = \"gpt-5.5\"\n",
+            &known_ids(&[]),
+        )
+        .expect("remove deleted external MCP entry");
+
+        assert!(!replaced.contains("mcp_servers"));
     }
 
     #[test]

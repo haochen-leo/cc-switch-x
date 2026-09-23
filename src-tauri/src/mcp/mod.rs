@@ -26,7 +26,8 @@ pub use claude::{
 };
 pub use codex::{
     import_from_codex, merge_non_db_mcp_servers_into_config_text, remove_server_from_codex,
-    sync_enabled_to_codex, sync_single_server_to_codex,
+    replace_non_db_mcp_servers_from_config_text, sync_enabled_to_codex,
+    sync_single_server_to_codex,
 };
 pub use gemini::{
     import_from_gemini, remove_server_from_gemini, sync_enabled_to_gemini,
