@@ -1215,6 +1215,10 @@ impl ProxyService {
 
             // 3) 备份 Live 配置（严格：目标 app 不存在则报错）
             if restore_existing_backup_before_takeover {
+                if matches!(app, AppType::Codex) {
+                    self.reconcile_codex_live_changes_into_restore_backup()
+                        .await?;
+                }
                 self.restore_live_config_for_app_inner(&app).await?;
             } else {
                 self.backup_live_config_strict(&app).await?;
@@ -2339,11 +2343,94 @@ impl ProxyService {
             .await
     }
 
+    /// Codex 接管期间，用户和 Codex 本身仍可能改写 live `config.toml`。
+    /// 恢复旧备份前先把这些共享设置回流到 Official，再用新旧共享片段更新备份；
+    /// 供应商路由和认证继续沿用备份，DB 外 MCP 则以当前 live 为准。
+    async fn reconcile_codex_live_changes_into_restore_backup(&self) -> Result<(), String> {
+        let Some(backup) = self
+            .db
+            .get_live_backup(AppType::Codex.as_str())
+            .await
+            .map_err(|e| format!("读取 Codex Live 备份失败: {e}"))?
+        else {
+            return Ok(());
+        };
+
+        let live = match self.read_codex_live() {
+            Ok(live) => live,
+            Err(error) => {
+                log::warn!("读取 Codex live 失败，跳过恢复前配置协调: {error}");
+                return Ok(());
+            }
+        };
+        if !Self::is_codex_live_taken_over(&live) {
+            return Ok(());
+        }
+
+        let old_common = ProviderService::get_codex_official_config(self.db.as_ref())
+            .map_err(|e| format!("读取 Codex Official 主配置失败: {e}"))?
+            .unwrap_or_default();
+        ProviderService::sync_codex_official_config_from_settings(self.db.as_ref(), &live)
+            .map_err(|e| format!("回流 Codex live 通用配置失败: {e}"))?;
+        let new_common = ProviderService::get_codex_official_config(self.db.as_ref())
+            .map_err(|e| format!("读取更新后的 Codex Official 主配置失败: {e}"))?
+            .unwrap_or_default();
+
+        let mut restored: Value = serde_json::from_str(&backup.original_config)
+            .map_err(|e| format!("解析 Codex Live 备份失败: {e}"))?;
+        let backup_config = restored.get("config").and_then(Value::as_str).unwrap_or("");
+        let without_old_common = crate::services::provider::update_toml_common_config_snippet(
+            backup_config,
+            &old_common,
+            false,
+        )
+        .map_err(|e| format!("从 Codex 备份剥离旧通用配置失败: {e}"))?;
+        let with_new_common = crate::services::provider::update_toml_common_config_snippet(
+            &without_old_common,
+            &new_common,
+            true,
+        )
+        .map_err(|e| format!("向 Codex 备份合并最新通用配置失败: {e}"))?;
+
+        let known_mcp_ids: std::collections::HashSet<String> = self
+            .db
+            .get_all_mcp_servers()
+            .map_err(|e| format!("读取 MCP 数据库失败: {e}"))?
+            .keys()
+            .cloned()
+            .collect();
+        let live_config = live.get("config").and_then(Value::as_str).unwrap_or("");
+        let reconciled_config = crate::mcp::replace_non_db_mcp_servers_from_config_text(
+            &with_new_common,
+            live_config,
+            &known_mcp_ids,
+        )
+        .map_err(|e| format!("同步 Codex live 外部 MCP 到还原备份失败: {e}"))?;
+
+        let restored_obj = restored
+            .as_object_mut()
+            .ok_or_else(|| "Codex Live 备份必须是 JSON 对象".to_string())?;
+        restored_obj.insert("config".to_string(), Value::String(reconciled_config));
+        let restored_json = serde_json::to_string(&restored)
+            .map_err(|e| format!("序列化协调后的 Codex Live 备份失败: {e}"))?;
+        self.db
+            .save_live_backup(AppType::Codex.as_str(), &restored_json)
+            .await
+            .map_err(|e| format!("保存协调后的 Codex Live 备份失败: {e}"))?;
+
+        Ok(())
+    }
+
     pub(crate) async fn restore_live_config_for_app_with_fallback_inner(
         &self,
         app_type: &AppType,
     ) -> Result<(), String> {
         let app_type_str = app_type.as_str();
+
+        if matches!(app_type, AppType::Codex) {
+            self.reconcile_codex_live_changes_into_restore_backup()
+                .await?;
+        }
 
         // 1) 优先从 Live 备份恢复（这是"原始 Live"的唯一可靠来源）
         let backup = self
@@ -8970,6 +9057,97 @@ wire_api = "responses"
         assert_eq!(
             restored.get("config").and_then(Value::as_str),
             Some("model = \"gpt-5.4\"\n")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn shutdown_preserves_codex_live_common_config_and_external_mcp_changes() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+        ProviderService::set_codex_official_config(
+            db.as_ref(),
+            "check_for_update_on_startup = false\nweb_search = \"live\"\n",
+        )
+        .expect("seed stale Official config");
+
+        let backup_config = r#"check_for_update_on_startup = false
+web_search = "live"
+model_provider = "upstream"
+
+[model_providers.upstream]
+name = "Upstream"
+base_url = "https://upstream.example/v1"
+wire_api = "responses"
+
+[mcp_servers.node_repl]
+command = "/old/node_repl"
+"#;
+        db.save_live_backup(
+            "codex",
+            &serde_json::to_string(&json!({
+                "auth": {},
+                "config": backup_config
+            }))
+            .expect("serialize stale backup"),
+        )
+        .await
+        .expect("seed stale backup");
+
+        let takeover_config = r#"check_for_update_on_startup = true
+model_provider = "cc-switch"
+
+[model_providers.cc-switch]
+name = "CC Switch"
+base_url = "http://127.0.0.1:15721/v1"
+wire_api = "responses"
+
+[mcp_servers.node_repl]
+command = "/new/node_repl"
+
+[mcp_servers.added_by_codex]
+command = "/new/added"
+"#;
+        crate::codex_config::write_codex_live_atomic(
+            &json!({ "OPENAI_API_KEY": PROXY_TOKEN_PLACEHOLDER }),
+            Some(takeover_config),
+        )
+        .expect("seed user-modified takeover live");
+
+        service
+            .stop_with_restore_keep_state()
+            .await
+            .expect("shutdown with reconciled Codex config");
+
+        let restored = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
+            .expect("read restored Codex config");
+        assert!(restored.contains("check_for_update_on_startup = true"));
+        assert!(
+            !restored.contains("web_search"),
+            "a common setting deleted from live must not be resurrected: {restored}"
+        );
+        assert!(restored.contains("https://upstream.example/v1"));
+        assert!(!restored.contains("127.0.0.1:15721"));
+        assert!(restored.contains("command = \"/new/node_repl\""));
+        assert!(!restored.contains("command = \"/old/node_repl\""));
+        assert!(restored.contains("[mcp_servers.added_by_codex]"));
+
+        let official = ProviderService::get_codex_official_config(db.as_ref())
+            .expect("read reconciled Official config")
+            .expect("Official config exists");
+        assert!(official.contains("check_for_update_on_startup = true"));
+        assert!(!official.contains("web_search"));
+        assert!(!official.contains("model_provider"));
+        assert!(!official.contains("mcp_servers"));
+        assert!(
+            db.get_live_backup("codex")
+                .await
+                .expect("read deleted Codex backup")
+                .is_none(),
+            "normal shutdown must delete the consumed restore backup"
         );
     }
 
