@@ -61,9 +61,10 @@ pub(crate) fn normalize_replayed_item_ids_for_responses_upstream(body: &mut Valu
     )
 }
 
-/// Normalize replay metadata for the official Codex backend.
+/// Normalize replay metadata for the OpenAI private Responses contract.
 ///
-/// Official Responses does not persist cc-switch generated client replay IDs.
+/// This covers the official Codex backend and GPT-named upstream relays.
+/// The contract does not persist cc-switch generated client replay IDs.
 /// Plain reasoning items must therefore drop their client-controlled identity
 /// instead of being rewritten; other item types still get canonical prefixes.
 pub(crate) fn normalize_official_replayed_item_ids_for_responses_upstream(
@@ -106,14 +107,23 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
         {
             continue;
         }
-        let is_plain_reasoning = item_type == Some("reasoning");
-        if is_plain_reasoning
+        let is_reasoning = item_type == Some("reasoning");
+        if is_reasoning
             && reasoning_policy == ReplayedReasoningIdPolicy::StripPlainReasoningIdentity
         {
             if let Some(object) = item.as_object_mut() {
                 let removed_id = object.remove("id").is_some();
                 let removed_status = object.remove("status").is_some();
-                changed += usize::from(removed_id || removed_status);
+                // Third-party Responses providers can return plaintext reasoning_text.
+                // The OpenAI private contract rejects nonempty reasoning.content on replay.
+                let cleared_content = object
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|content| !content.is_empty());
+                if cleared_content {
+                    object.insert("content".to_string(), Value::Null);
+                }
+                changed += usize::from(removed_id || removed_status || cleared_content);
             }
             continue;
         }
@@ -3469,6 +3479,38 @@ mod tests {
             body["input"][0]["summary"][0]["text"],
             "third-party reasoning"
         );
+    }
+
+    #[test]
+    fn official_responses_upstream_clears_foreign_plaintext_reasoning_content() {
+        let mut body = json!({
+            "input": [
+                {
+                    "id": "rs_ccswitch_93dec832ac7bd8aa",
+                    "type": "reasoning",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": "third-party reasoning"}],
+                    "encrypted_content": null
+                },
+                {
+                    "id": "rs_official",
+                    "type": "reasoning",
+                    "content": [],
+                    "encrypted_content": "official-ciphertext"
+                }
+            ]
+        });
+
+        assert_eq!(
+            normalize_official_replayed_item_ids_for_responses_upstream(&mut body),
+            1
+        );
+        assert!(body["input"][0].get("id").is_none());
+        assert!(body["input"][0]["content"].is_null());
+        assert!(body["input"][0]["encrypted_content"].is_null());
+        assert_eq!(body["input"][1]["id"], "rs_official");
+        assert_eq!(body["input"][1]["content"], json!([]));
+        assert_eq!(body["input"][1]["encrypted_content"], "official-ciphertext");
     }
 
     #[test]
