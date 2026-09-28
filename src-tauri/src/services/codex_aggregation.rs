@@ -756,10 +756,7 @@ fn provider_default_context_window(provider: &Provider) -> Option<u64> {
 
 fn read_official_catalog_models() -> Result<Vec<Value>, String> {
     let codex_dir = crate::codex_config::get_codex_config_dir();
-    let paths = [
-        codex_dir.join("models_cache.json"),
-        codex_dir.join("models_cache.cc-switch-backup.json"),
-    ];
+    let paths = [codex_dir.join("models_cache.json")];
     let mut models = Vec::new();
     let mut seen = HashSet::new();
     let mut read_errors = Vec::new();
@@ -1113,6 +1110,33 @@ mod tests {
             models[0][CODEX_OFFICIAL_CATALOG_ENTRY_FIELD], official_entry,
             "official model descriptors must survive aggregation byte-for-byte"
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn official_catalog_does_not_read_legacy_backup_file() {
+        let dir = tempfile::tempdir().expect("create isolated home");
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).expect("create codex dir");
+        std::fs::write(
+            codex_dir.join("models_cache.cc-switch-backup.json"),
+            r#"{"models":[{"slug":"gpt-6-sol","display_name":"GPT-6-Sol"}]}"#,
+        )
+        .expect("write legacy backup");
+
+        let original_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+        let _ = crate::settings::reload_settings();
+
+        let models = read_official_catalog_models().expect("read official models");
+
+        match &original_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let _ = crate::settings::reload_settings();
+
+        assert!(models.is_empty());
     }
 
     #[test]
