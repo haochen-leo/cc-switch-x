@@ -769,38 +769,7 @@ async fn get_single_tool_version_impl(
     let client = crate::proxy::http_client::get();
 
     // 1. 获取本地版本
-    let probe = if let Some(distro) = wsl_distro.as_deref() {
-        try_get_version_wsl(tool, distro, wsl_shell, wsl_shell_flag)
-    } else {
-        #[cfg(target_os = "windows")]
-        {
-            // Probe the PATH-default entry (what `tool` resolves to in a
-            // terminal) first, and only fall back to the directory scan when it
-            // is genuinely absent (NotFound). Two goals:
-            // 1. Keep the displayed "current version" aligned with the version
-            //    the user actually runs — a stale shim in a hardcoded fallback
-            //    dir (e.g. an old `%APPDATA%\npm`) must not override a newer
-            //    PATH install (#4701: "updated but still shows the old version").
-            // 2. Mirror the non-Windows structure (`try_get_version` →
-            //    `scan_cli_version`).
-            // `probe_path_default_version` executes only the real executable
-            //    resolved by `where` (App Execution Aliases filtered out), so
-            //    it never `cmd /C tool` into a protocol handler.
-            match probe_path_default_version(tool) {
-                ShellProbe::NotFound(_) => scan_cli_version(tool),
-                found => found,
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            // PATH 第一个命令优先；只有它确实没装(NotFound)才去常见目录兜底扫描。
-            match try_get_version(tool) {
-                ShellProbe::NotFound(_) => scan_cli_version(tool),
-                found => found,
-            }
-        }
-    };
+    let probe = probe_local_tool_version(tool, wsl_distro.as_deref(), wsl_shell, wsl_shell_flag);
     let (local_version, local_error, installed_but_broken) = match probe {
         ShellProbe::Found(v) => (Some(v), None, false),
         ShellProbe::FoundButFailed(e) => (None, Some(e), true),
@@ -842,6 +811,56 @@ async fn get_single_tool_version_impl(
         installed_but_broken,
         env_type,
         wsl_distro,
+    }
+}
+
+fn probe_local_tool_version(
+    tool: &str,
+    wsl_distro: Option<&str>,
+    wsl_shell: Option<&str>,
+    wsl_shell_flag: Option<&str>,
+) -> ShellProbe {
+    if let Some(distro) = wsl_distro {
+        try_get_version_wsl(tool, distro, wsl_shell, wsl_shell_flag)
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            // Probe the PATH-default entry (what `tool` resolves to in a
+            // terminal) first, and only fall back to the directory scan when it
+            // is genuinely absent (NotFound). Two goals:
+            // 1. Keep the displayed "current version" aligned with the version
+            //    the user actually runs — a stale shim in a hardcoded fallback
+            //    dir (e.g. an old `%APPDATA%\npm`) must not override a newer
+            //    PATH install (#4701: "updated but still shows the old version").
+            // 2. Mirror the non-Windows structure (`try_get_version` →
+            //    `scan_cli_version`).
+            // `probe_path_default_version` executes only the real executable
+            //    resolved by `where` (App Execution Aliases filtered out), so
+            //    it never `cmd /C tool` into a protocol handler.
+            match probe_path_default_version(tool) {
+                ShellProbe::NotFound(_) => scan_cli_version(tool),
+                found => found,
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            // PATH 第一个命令优先；只有它确实没装(NotFound)才去常见目录兜底扫描。
+            match try_get_version(tool) {
+                ShellProbe::NotFound(_) => scan_cli_version(tool),
+                found => found,
+            }
+        }
+    }
+}
+
+/// 返回用户实际运行的 Codex CLI 版本，不触发 npm/GitHub 的远端版本查询。
+/// 聚合官方目录请求必须携带真实 client_version，否则上游会按旧客户端裁剪模型。
+pub(crate) fn get_local_codex_version() -> Result<String, String> {
+    let (_, wsl_distro) = tool_env_type_and_wsl_distro("codex");
+    match probe_local_tool_version("codex", wsl_distro.as_deref(), None, None) {
+        ShellProbe::Found(version) => Ok(version),
+        ShellProbe::FoundButFailed(error) | ShellProbe::NotFound(error) => Err(error),
     }
 }
 

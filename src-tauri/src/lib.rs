@@ -1254,7 +1254,24 @@ pub fn run() {
                 // 检查 settings 表中的代理状态，自动恢复代理服务
                 restore_proxy_state_on_startup(&state).await;
 
-                // Codex 聚合：启动时检测 models_cache.json 是否变化，若变了则自动重建聚合目录
+                // 多模型聚合使用静态 model_catalog_json，Codex 自己的在线目录刷新
+                // 不会运行。代理恢复后用当前官方登录和实际 Codex 版本刷新一次
+                // CC Switch 官方目录缓存；成功写入后由下面的 hash 检测热重建目录。
+                match crate::services::codex_aggregation::refresh_official_catalog_on_startup(
+                    &state.proxy_service,
+                    &state.db,
+                    &state.codex_oauth_manager,
+                )
+                .await
+                {
+                    Ok(true) => log::info!("启动时已刷新 Codex 聚合官方模型缓存"),
+                    Ok(false) => {}
+                    Err(error) => {
+                        log::warn!("启动时刷新 Codex 聚合官方模型缓存失败，继续使用旧目录: {error}")
+                    }
+                }
+
+                // Codex 聚合：启动时检测官方目录缓存是否变化，若变了则自动重建聚合目录
                 crate::services::codex_aggregation::refresh_if_models_cache_changed(
                     &state.proxy_service,
                     &state.db,

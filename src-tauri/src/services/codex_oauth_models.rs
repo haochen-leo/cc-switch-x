@@ -14,12 +14,28 @@ const CODEX_OAUTH_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/mode
 const CODEX_OAUTH_FETCH_TIMEOUT_SECS: u64 = 15;
 const ERROR_BODY_MAX_CHARS: usize = 512;
 
+#[derive(Debug, Clone)]
+pub struct CodexOAuthModelCatalog {
+    pub models: Vec<Value>,
+    pub etag: Option<String>,
+}
+
 pub async fn fetch_models_with_token(
     token: &str,
     account_id: &str,
 ) -> Result<Vec<FetchedModel>, String> {
+    let catalog =
+        fetch_model_catalog_with_token(token, account_id, CODEX_OAUTH_CLIENT_VERSION).await?;
+    Ok(parse_models(Value::Array(catalog.models)))
+}
+
+pub async fn fetch_model_catalog_with_token(
+    token: &str,
+    account_id: &str,
+    client_version: &str,
+) -> Result<CodexOAuthModelCatalog, String> {
     let client = crate::proxy::http_client::get();
-    let response = build_models_request(&client, token, account_id)
+    let response = build_models_request(&client, token, account_id, client_version)
         .send()
         .await
         .map_err(|e| format!("Request failed: {e}"))?;
@@ -30,25 +46,46 @@ pub async fn fetch_models_with_token(
         return Err(format!("HTTP {status}: {body}"));
     }
 
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     let value: Value = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {e}"))?;
+    parse_model_catalog(value, etag)
+}
 
-    Ok(parse_models(value))
+fn parse_model_catalog(
+    value: Value,
+    etag: Option<String>,
+) -> Result<CodexOAuthModelCatalog, String> {
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| "Official Codex model catalog is missing the models array".to_string())?;
+    if models.is_empty() {
+        return Err("Official Codex model catalog is empty".to_string());
+    }
+
+    Ok(CodexOAuthModelCatalog { models, etag })
 }
 
 fn build_models_request(
     client: &reqwest::Client,
     token: &str,
     account_id: &str,
+    client_version: &str,
 ) -> reqwest::RequestBuilder {
     client
         .get(CODEX_OAUTH_MODELS_URL)
-        .query(&[("client_version", CODEX_OAUTH_CLIENT_VERSION)])
+        .query(&[("client_version", client_version)])
         .header("Authorization", format!("Bearer {token}"))
         .header("originator", CODEX_OAUTH_ORIGINATOR)
-        .header("version", CODEX_OAUTH_CLIENT_VERSION)
+        .header("version", client_version)
         .header("chatgpt-account-id", account_id)
         .timeout(Duration::from_secs(CODEX_OAUTH_FETCH_TIMEOUT_SECS))
 }
@@ -144,9 +181,14 @@ mod tests {
 
     #[test]
     fn codex_oauth_model_discovery_uses_gpt6_compatible_identity() {
-        let request = build_models_request(&reqwest::Client::new(), "test-token", "test-account")
-            .build()
-            .unwrap();
+        let request = build_models_request(
+            &reqwest::Client::new(),
+            "test-token",
+            "test-account",
+            "0.160.1",
+        )
+        .build()
+        .unwrap();
         assert_eq!(request.headers()["authorization"], "Bearer test-token");
         assert_eq!(request.headers()["chatgpt-account-id"], "test-account");
         assert_eq!(request.headers()["originator"], "codex_cli_rs");
@@ -161,8 +203,7 @@ mod tests {
             .split('.')
             .map(|part| part.parse().unwrap())
             .collect();
-        // Official rust-v0.153.4 catalog: gpt-6-astra requires 0.153.0.
-        assert!(parts.as_slice() >= [0, 153, 0].as_slice());
+        assert_eq!(parts, vec![0, 160, 1]);
         assert_eq!(request.headers()["version"], version);
         let models = parse_models(json!({"models": [{
             "slug": "gpt-6-astra", "minimal_client_version": "0.153.0"
@@ -227,5 +268,31 @@ mod tests {
             models.into_iter().map(|model| model.id).collect::<Vec<_>>(),
             vec!["gpt-5.4".to_string(), "gpt-5.5".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_model_catalog_preserves_complete_official_entries() {
+        let entry = json!({
+            "slug": "gpt-6.1-sol",
+            "display_name": "GPT-6.1 Sol",
+            "minimal_client_version": "0.153.0",
+            "supported_reasoning_levels": [{ "effort": "max" }],
+            "model_messages": { "instructions_template": "official" }
+        });
+        let catalog = parse_model_catalog(
+            json!({ "models": [entry.clone()] }),
+            Some("catalog-etag".to_string()),
+        )
+        .expect("parse official catalog");
+
+        assert_eq!(catalog.models, vec![entry]);
+        assert_eq!(catalog.etag.as_deref(), Some("catalog-etag"));
+    }
+
+    #[test]
+    fn parse_model_catalog_rejects_empty_catalog() {
+        let error = parse_model_catalog(json!({ "models": [] }), None)
+            .expect_err("empty official catalog must not replace cache");
+        assert!(error.contains("empty"));
     }
 }
