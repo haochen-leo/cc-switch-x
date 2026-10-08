@@ -232,7 +232,7 @@ export interface ProviderMeta {
   impersonateClaudeCode?: boolean;
   // Codex → Anthropic path: override the Anthropic max_tokens (output ceiling).
   // Codex does not forward model_max_output_tokens in the request body; without
-  // this the path falls back to a conservative 8192 default, which can truncate
+  // this the path falls back to a conservative 32768 default, which can truncate
   // long/thinking-heavy responses. When set (>0) it takes precedence over the
   // request value and the default.
   maxOutputTokens?: number;

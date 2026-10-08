@@ -1107,7 +1107,7 @@
     "defaultModelHint": "Grok Build 預設請求的模型，隨時可改，無需等待軟體更新供應商範本。",
     "advancedSectionHint": "包含上游格式、思考能力與自訂 User-Agent。使用 Chat Completions / Anthropic Messages 協定的供應商需開啟路由接管才能使用。",
     "reasoningEffortHint": "上游支援 low/high/max 等思考深度控制時啟用。啟用後會自動啟用思考模式，並把請求中的 reasoning effort 轉成上游 Chat 參數。",
-    "maxOutputTokensHint": "預設上限 8192 容易在長回答或深度思考時被截斷（stop_reason=max_tokens）。此處設定會作為 Anthropic 的 max_tokens 覆蓋請求值。請勿超過該模型／閘道的真實輸出上限，否則可能 400。留空使用預設 8192。"
+    "maxOutputTokensHint": "預設上限 32768 容易在長回答或深度思考時被截斷（stop_reason=max_tokens）。此處設定會作為 Anthropic 的 max_tokens 覆蓋請求值。請勿超過該模型／閘道的真實輸出上限，否則可能 400。留空使用預設 32768。"
   },
   "sessionManager": {
     "title": "工作階段管理",
@@ -1588,8 +1588,8 @@
     "impersonateClaudeCodeLabel": "模擬 Claude Code 用戶端",
     "impersonateClaudeCodeHint": "閘道或其上游限制只能透過 Claude Code 使用時開啟：偽裝 User-Agent、anthropic-beta、x-app 請求標頭，並在系統提示首行注入 Claude Code 身分。",
     "maxOutputTokensLabel": "最大輸出 tokens",
-    "maxOutputTokensPlaceholder": "留空則使用預設 8192",
-    "maxOutputTokensHint": "Codex 不會把 model_max_output_tokens 寫進請求體，預設上限 8192 容易在長回答或深度思考時被截斷（stop_reason=max_tokens）。此處設定會作為 Anthropic 的 max_tokens 覆蓋請求值。請勿超過該模型／閘道的真實輸出上限，否則可能 400。留空使用預設 8192。",
+    "maxOutputTokensPlaceholder": "留空則使用預設 32768",
+    "maxOutputTokensHint": "Codex 不會把 model_max_output_tokens 寫進請求體，預設上限 32768 容易在長回答或深度思考時被截斷（stop_reason=max_tokens）。此處設定會作為 Anthropic 的 max_tokens 覆蓋請求值。請勿超過該模型／閘道的真實輸出上限，否則可能 400。留空使用預設 32768。",
     "promptCacheRoutingLabel": "提示詞快取路由",
     "promptCacheRoutingAuto": "自動（建議）",
     "promptCacheRoutingEnabled": "開啟",
