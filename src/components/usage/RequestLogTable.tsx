@@ -43,7 +43,7 @@ interface RequestLogTableProps {
   onRangeChange?: (range: UsageRangeSelection) => void;
 }
 
-const MIN_GENERATION_MS_FOR_TOKEN_SPEED = 1000;
+const MIN_GENERATION_MS_FOR_TOKEN_SPEED = 200;
 
 export function RequestLogTable({
   range,
