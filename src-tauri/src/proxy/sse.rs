@@ -8,10 +8,12 @@ pub(crate) fn strip_sse_field<'a>(line: &'a str, field: &str) -> Option<&'a str>
 pub(crate) fn take_sse_block(buffer: &mut String) -> Option<String> {
     let mut best: Option<(usize, usize)> = None;
 
-    for (delimiter, len) in [("\r\n\r\n", 4usize), ("\n\n", 2usize)] {
+    // 数据行和后续空行可能使用不同的换行符。同时识别两种混合形式，
+    // 并优先消费最早出现的分隔符，避免把末尾 CR 留在事件块中。
+    for delimiter in ["\r\n\r\n", "\r\n\n", "\n\r\n", "\n\n"] {
         if let Some(pos) = buffer.find(delimiter) {
             if best.is_none_or(|(best_pos, _)| pos < best_pos) {
-                best = Some((pos, len));
+                best = Some((pos, delimiter.len()));
             }
         }
     }
@@ -130,6 +132,37 @@ mod tests {
             Some("data: {\"ok\":true}".to_string())
         );
         assert_eq!(buffer, "rest");
+    }
+
+    #[test]
+    fn take_sse_block_handles_mixed_line_endings_across_chunks() {
+        for delimiter in ["\n\n", "\r\n\r\n", "\n\r\n", "\r\n\n"] {
+            let first = "event: message\r\ndata: first";
+            let input = format!("{first}{delimiter}data: second\n\npartial");
+
+            // 覆盖所有可能的传输切分位置，包括从 CRLF 中间切开。
+            for split in 0..=input.len() {
+                let mut buffer = String::new();
+                let mut blocks = Vec::new();
+                for chunk in [&input[..split], &input[split..]] {
+                    buffer.push_str(chunk);
+                    while let Some(block) = take_sse_block(&mut buffer) {
+                        blocks.push(block);
+                    }
+                }
+                assert_eq!(
+                    blocks,
+                    [first, "data: second"],
+                    "{delimiter:?}, split {split}"
+                );
+                assert_eq!(buffer, "partial");
+            }
+
+            // 完整混合分隔符必须立即派发，不能等待下一个事件。
+            let mut buffer = format!("{first}{delimiter}");
+            assert_eq!(take_sse_block(&mut buffer).as_deref(), Some(first));
+            assert!(buffer.is_empty());
+        }
     }
 
     // ------------------------------------------------------------------
