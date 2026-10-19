@@ -413,6 +413,60 @@ fn is_codex_local_compaction_request(body: &serde_json::Value) -> bool {
     })
 }
 
+/// 整理 Codex 本地压缩请求的工具字段。
+///
+/// Codex 本地压缩会回放历史里的 `web_search_call`，但压缩回合本身通常带
+/// `tools: []`；部分第三方 Responses 上游会拒绝“历史引用了工具、请求却没有
+/// 工具定义”的组合。这里只补齐被历史引用的托管搜索定义，并禁止摘要回合发起
+/// 新的工具调用。
+pub(crate) fn prepare_codex_local_compaction_request(body: &mut serde_json::Value) -> bool {
+    if !is_codex_local_compaction_request(body) {
+        return false;
+    }
+
+    let has_web_search_history = body
+        .get("input")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("web_search_call")
+            })
+        });
+    let Some(obj) = body.as_object_mut() else {
+        return false;
+    };
+    let mut changed = false;
+
+    if has_web_search_history {
+        let tools = obj
+            .entry("tools".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if let Some(tools) = tools.as_array_mut() {
+            let has_web_search = tools.iter().any(|tool| {
+                tool.get("type").and_then(serde_json::Value::as_str) == Some("web_search")
+            });
+            if !has_web_search {
+                tools.push(serde_json::json!({ "type": "web_search" }));
+                changed = true;
+            }
+        }
+    }
+
+    let has_tools = obj
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tools| !tools.is_empty());
+    if has_tools && obj.get("tool_choice").and_then(serde_json::Value::as_str) != Some("none") {
+        obj.insert(
+            "tool_choice".to_string(),
+            serde_json::Value::String("none".to_string()),
+        );
+        changed = true;
+    }
+
+    changed
+}
+
 fn contains_compaction_marker(text: &str) -> bool {
     CODEX_LOCAL_COMPACTION_PROMPT_MARKERS
         .iter()
@@ -423,6 +477,7 @@ fn contains_compaction_marker(text: &str) -> bool {
 mod tests {
     use super::extract_gemini_model_from_path;
     use super::is_codex_local_compaction_request;
+    use super::prepare_codex_local_compaction_request;
 
     #[test]
     fn detects_local_compaction_prompt_in_input() {
@@ -484,6 +539,58 @@ mod tests {
         assert!(!is_codex_local_compaction_request(
             &serde_json::json!({"model": "kimi-k3/dashscope-chat"})
         ));
+    }
+
+    #[test]
+    fn local_compaction_restores_web_search_tool_referenced_by_history() {
+        let mut body = serde_json::json!({
+            "model": "gpt-6-astra",
+            "input": [
+                {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+                {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary."}
+                ]}
+            ],
+            "tools": []
+        });
+
+        assert!(prepare_codex_local_compaction_request(&mut body));
+        assert_eq!(body["tools"], serde_json::json!([{ "type": "web_search" }]));
+        assert_eq!(body["tool_choice"], "none");
+    }
+
+    #[test]
+    fn local_compaction_keeps_existing_tools_and_disables_new_calls() {
+        let mut body = serde_json::json!({
+            "input": [
+                {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+                {"type": "message", "role": "user", "content": "You are performing a CONTEXT CHECKPOINT COMPACTION."}
+            ],
+            "tools": [
+                {"type": "function", "name": "shell", "parameters": {"type": "object"}}
+            ],
+            "tool_choice": "auto"
+        });
+
+        assert!(prepare_codex_local_compaction_request(&mut body));
+        assert_eq!(body["tools"][0]["name"], "shell");
+        assert_eq!(body["tools"][1]["type"], "web_search");
+        assert_eq!(body["tool_choice"], "none");
+    }
+
+    #[test]
+    fn normal_turn_with_web_search_history_is_untouched() {
+        let mut body = serde_json::json!({
+            "input": [
+                {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+                {"type": "message", "role": "user", "content": "继续"}
+            ],
+            "tools": []
+        });
+        let original = body.clone();
+
+        assert!(!prepare_codex_local_compaction_request(&mut body));
+        assert_eq!(body, original);
     }
 
     #[test]
