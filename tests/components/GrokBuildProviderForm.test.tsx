@@ -294,7 +294,7 @@ context_window = 500000
       />,
     );
 
-    expect(screen.getByText(/^默认上限 8192 容易在长回答/)).toBeInTheDocument();
+    expect(screen.getByText(/^默认上限 32768 容易在长回答/)).toBeInTheDocument();
     expect(
       screen.queryByText(/Codex 不会把 model_max_output_tokens/),
     ).toBeNull();
