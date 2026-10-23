@@ -1894,7 +1894,7 @@ model = "gpt-4"
 wire_api = "chat"
 disable_response_storage = true
 experimental_bearer_token = "sk-live-secret"
-model_catalog_json = "cc-switch-model-catalog.json"
+model_catalog_json = "cc-switch-x-model-catalog.json"
 web_search = "disabled"
 
 [model_providers.azure]

@@ -13,7 +13,7 @@ use crate::error::AppError;
 /// - `dirs::home_dir()` 在 Windows 上使用 `SHGetKnownFolderPath(FOLDERID_Profile)`，
 ///   返回的是真实用户目录（类似 `C:\\Users\\Alice`），与 v3.10.2 行为一致。
 /// - 不要直接使用 `HOME` 环境变量：它可能由 Git/Cygwin/MSYS 等第三方工具注入，
-///   且不一定等于用户目录，可能导致 `.cc-switch/cc-switch.db` 路径变化，从而“看起来像数据丢失”。
+///   且不一定等于用户目录，可能导致 `.cc-switch-x/cc-switch.db` 路径变化，从而“看起来像数据丢失”。
 ///
 /// ## 测试隔离
 ///
@@ -29,7 +29,7 @@ pub fn get_home_dir() -> PathBuf {
 
     // 测试构建的最后一道闸：CC_SWITCH_TEST_HOME 是进程级变量，非 serial 测试在结束
     // 时清空它，与并发的接管测试交错后，写入就会落到真实主目录（曾把测试 fixture
-    // 写进真实 ~/.codex/config.toml 与 ~/.cc-switch/settings.json）。此时绝不回落到
+    // 写进真实 ~/.codex/config.toml 与 ~/.cc-switch-x/settings.json）。此时绝不回落到
     // dirs::home_dir()，改用本进程独享的临时目录。仅 cfg(test) 生效，不影响发布产物。
     #[cfg(test)]
     {
@@ -270,41 +270,13 @@ pub fn get_claude_settings_path() -> PathBuf {
     // 默认新建：回落到标准文件名 settings.json（不再生成 claude.json）
     settings
 }
-
-/// 获取应用配置目录路径 (~/.cc-switch)
+/// 获取应用配置目录路径 (~/.cc-switch-x)
 pub fn get_app_config_dir() -> PathBuf {
     if let Some(custom) = crate::app_store::get_app_config_dir_override() {
         return custom;
     }
 
-    let default_dir = get_home_dir().join(".cc-switch");
-
-    // 兼容 v3.10.3：当用户环境存在 `HOME` 且与真实用户目录不同，
-    // v3.10.3 可能在 `HOME/.cc-switch/` 下创建/使用了数据库。
-    // 这里仅在“默认位置没有数据库”时回退到旧位置，避免再次出现“供应商消失”问题，
-    // 同时也避免新安装因为 `HOME` 被设置而写入非预期路径。
-    #[cfg(windows)]
-    {
-        let default_db = default_dir.join("cc-switch.db");
-        if !default_db.exists() {
-            if let Ok(home_env) = std::env::var("HOME") {
-                let trimmed = home_env.trim();
-                if !trimmed.is_empty() {
-                    let legacy_dir = PathBuf::from(trimmed).join(".cc-switch");
-                    if legacy_dir.join("cc-switch.db").exists() {
-                        log::info!(
-                            "Detected v3.10.3 legacy database at {}, using it instead of {}",
-                            legacy_dir.display(),
-                            default_dir.display()
-                        );
-                        return legacy_dir;
-                    }
-                }
-            }
-        }
-    }
-
-    default_dir
+    crate::brand::default_app_config_dir()
 }
 
 /// 获取应用配置文件路径
@@ -578,7 +550,7 @@ mod tests {
     ///
     /// 事故：非 serial 测试结束时 `remove_var("CC_SWITCH_TEST_HOME")`，与并发的接管
     /// 测试交错，接管测试的 fixture（供应商 p1、OS 临时端口）被写进真实
-    /// `~/.codex/config.toml` 和 `~/.cc-switch/settings.json`。
+    /// `~/.codex/config.toml` 和 `~/.cc-switch-x/settings.json`。
     #[test]
     #[serial_test::serial]
     #[allow(deprecated)] // set_var/remove_var deprecated since Rust 1.81; safe here under serial

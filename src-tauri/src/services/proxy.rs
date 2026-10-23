@@ -8536,11 +8536,12 @@ model = "gpt-5.1-codex"
             Some(PROXY_TOKEN_PLACEHOLDER),
             "takeover token placeholder should be preserved"
         );
+        let expected_proxy_url = format!("http://127.0.0.1:{}", crate::brand::DEFAULT_PROXY_PORT);
         assert_eq!(
             live.get("env")
                 .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
                 .and_then(|v| v.as_str()),
-            Some("http://127.0.0.1:15721"),
+            Some(expected_proxy_url.as_str()),
             "takeover proxy URL should remain active"
         );
         assert!(
@@ -9680,7 +9681,7 @@ requires_openai_auth = true
                 .and_then(|v| v.get("aihubmix"))
                 .and_then(|v| v.get("base_url"))
                 .and_then(|v| v.as_str()),
-            Some("http://127.0.0.1:15721/v1"),
+            Some(format!("http://127.0.0.1:{}/v1", crate::brand::DEFAULT_PROXY_PORT).as_str()),
             "taken-over live config should stay pointed at the local proxy"
         );
 
@@ -9822,7 +9823,7 @@ requires_openai_auth = true
                 .and_then(|v| v.get("deepseek"))
                 .and_then(|v| v.get("base_url"))
                 .and_then(|v| v.as_str()),
-            Some("http://127.0.0.1:15721/v1")
+            Some(format!("http://127.0.0.1:{}/v1", crate::brand::DEFAULT_PROXY_PORT).as_str())
         );
         assert_eq!(
             parsed_live.get("model").and_then(|v| v.as_str()),
@@ -10039,7 +10040,7 @@ requires_openai_auth = true
         let catalog_path = crate::codex_config::get_codex_model_catalog_path();
         assert!(
             catalog_path.exists(),
-            "cc-switch-model-catalog.json must be created on provider switch"
+            "cc-switch-x-model-catalog.json must be created on provider switch"
         );
         let catalog_text = std::fs::read_to_string(&catalog_path).expect("read catalog json");
         let catalog: serde_json::Value =
@@ -10183,7 +10184,7 @@ requires_openai_auth = true
             message.contains("写入 Codex 配置失败")
                 || message.contains("原子替换失败")
                 || (message.contains("捕获 Codex 热切换前状态失败")
-                    && message.contains("cc-switch-model-catalog.json")),
+                    && message.contains("cc-switch-x-model-catalog.json")),
             "switch should surface catalog write failure, got: {message}"
         );
     }

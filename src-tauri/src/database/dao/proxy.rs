@@ -86,7 +86,7 @@ impl Database {
                 Ok(GlobalProxyConfig {
                     proxy_enabled: false,
                     listen_address: "127.0.0.1".to_string(),
-                    listen_port: 15721,
+                    listen_port: crate::brand::DEFAULT_PROXY_PORT,
                     enable_logging: true,
                 })
             }
@@ -221,12 +221,17 @@ impl Database {
         let result = {
             let conn = lock_conn!(self.conn);
             conn.query_row(
-                "SELECT app_type, enabled, auto_failover_enabled,
-                        max_retries, retry_429_enabled, retry_429_max_retries, retry_429_initial_delay_ms,
-                        streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                        circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                        circuit_error_rate_threshold, circuit_min_requests
-                 FROM proxy_config WHERE app_type = ?1",
+                "SELECT p.app_type, p.enabled, p.auto_failover_enabled,
+                        p.max_retries,
+                        COALESCE(x.enabled, 1),
+                        COALESCE(x.max_retries, 2),
+                        COALESCE(x.initial_delay_ms, 2000),
+                        p.streaming_first_byte_timeout, p.streaming_idle_timeout, p.non_streaming_timeout,
+                        p.circuit_failure_threshold, p.circuit_success_threshold, p.circuit_timeout_seconds,
+                        p.circuit_error_rate_threshold, p.circuit_min_requests
+                 FROM proxy_config p
+                 LEFT JOIN x_proxy_retry_config x ON x.app_type = p.app_type
+                 WHERE p.app_type = ?1",
                 [app_type],
                 |row| {
                     Ok(AppProxyConfig {
@@ -283,34 +288,31 @@ impl Database {
         &self,
         config: AppProxyConfig,
     ) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
 
-        conn.execute(
+        tx.execute(
             "UPDATE proxy_config SET
                 enabled = ?2,
                 auto_failover_enabled = ?3,
                 max_retries = ?4,
-                retry_429_enabled = ?5,
-                retry_429_max_retries = ?6,
-                retry_429_initial_delay_ms = ?7,
-                streaming_first_byte_timeout = ?8,
-                streaming_idle_timeout = ?9,
-                non_streaming_timeout = ?10,
-                circuit_failure_threshold = ?11,
-                circuit_success_threshold = ?12,
-                circuit_timeout_seconds = ?13,
-                circuit_error_rate_threshold = ?14,
-                circuit_min_requests = ?15,
+                streaming_first_byte_timeout = ?5,
+                streaming_idle_timeout = ?6,
+                non_streaming_timeout = ?7,
+                circuit_failure_threshold = ?8,
+                circuit_success_threshold = ?9,
+                circuit_timeout_seconds = ?10,
+                circuit_error_rate_threshold = ?11,
+                circuit_min_requests = ?12,
                 updated_at = datetime('now')
              WHERE app_type = ?1",
             rusqlite::params![
-                config.app_type,
+                &config.app_type,
                 if config.enabled { 1 } else { 0 },
                 if config.auto_failover_enabled { 1 } else { 0 },
                 config.max_retries as i32,
-                if config.retry_429_enabled { 1 } else { 0 },
-                config.retry_429_max_retries as i64,
-                config.retry_429_initial_delay_ms as i64,
                 config.streaming_first_byte_timeout as i32,
                 config.streaming_idle_timeout as i32,
                 config.non_streaming_timeout as i32,
@@ -322,6 +324,26 @@ impl Database {
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
+
+        tx.execute(
+            "INSERT INTO x_proxy_retry_config
+                (app_type, enabled, max_retries, initial_delay_ms, updated_at)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+             ON CONFLICT(app_type) DO UPDATE SET
+                enabled = excluded.enabled,
+                max_retries = excluded.max_retries,
+                initial_delay_ms = excluded.initial_delay_ms,
+                updated_at = datetime('now')",
+            rusqlite::params![
+                &config.app_type,
+                if config.retry_429_enabled { 1 } else { 0 },
+                config.retry_429_max_retries as i64,
+                config.retry_429_initial_delay_ms as i64,
+            ],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
 
         Ok(())
     }
@@ -989,6 +1011,43 @@ mod tests {
                 ..
             }
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_retry_429_config_round_trip_uses_x_table() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let mut config = db.get_proxy_config_for_app("codex").await?;
+        config.retry_429_enabled = false;
+        config.retry_429_max_retries = 5;
+        config.retry_429_initial_delay_ms = 3_500;
+
+        db.update_proxy_config_for_app(config).await?;
+
+        let updated = db.get_proxy_config_for_app("codex").await?;
+        assert!(!updated.retry_429_enabled);
+        assert_eq!(updated.retry_429_max_retries, 5);
+        assert_eq!(updated.retry_429_initial_delay_ms, 3_500);
+
+        let conn = db
+            .conn
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        for column in [
+            "retry_429_enabled",
+            "retry_429_max_retries",
+            "retry_429_initial_delay_ms",
+        ] {
+            assert!(!Database::has_column(&conn, "proxy_config", column)?);
+        }
+        let stored: (i64, i64, i64) = conn.query_row(
+            "SELECT enabled, max_retries, initial_delay_ms
+             FROM x_proxy_retry_config WHERE app_type = 'codex'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(stored, (0, 5, 3_500));
 
         Ok(())
     }

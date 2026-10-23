@@ -92,6 +92,9 @@ const SYNC_SKIP_TABLES: &[&str] = &[
     "session_log_sync",
     "session_usage_dedup",
     "media_ocr_cache",
+    "x_schema_meta",
+    "x_proxy_retry_config",
+    "x_import_history",
 ];
 
 /// Tables whose local data is preserved from the live database during WebDAV import.
@@ -104,6 +107,9 @@ const SYNC_PRESERVE_TABLES: &[&str] = &[
     "session_log_sync",
     "session_usage_dedup",
     "media_ocr_cache",
+    "x_schema_meta",
+    "x_proxy_retry_config",
+    "x_import_history",
 ];
 
 /// A database backup entry for the UI
@@ -224,6 +230,7 @@ impl Database {
         // 补齐缺失表/索引并执行迁移
         Self::create_tables_on_conn(&temp_conn)?;
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
+        Self::apply_x_schema_on_conn(&temp_conn)?;
         on_staging_ready()?;
 
         let backup_file_guard = lock_backup_file_operations()?;
@@ -533,7 +540,7 @@ impl Database {
         // discovery and retention only see the final path after the complete
         // SQLite image has been atomically published.
         let mut temp_path = Builder::new()
-            .prefix(".cc-switch-backup-")
+            .prefix(".cc-switch-x-backup-")
             .suffix(".tmp")
             .tempfile_in(&backup_dir)
             .map_err(|e| AppError::io(&backup_dir, e))?
@@ -1063,6 +1070,7 @@ impl Database {
         Self::ensure_incremental_auto_vacuum_on_conn(&staging_conn)?;
         Self::create_tables_on_conn(&staging_conn)?;
         Self::apply_schema_migrations_on_conn(&staging_conn)?;
+        Self::apply_x_schema_on_conn(&staging_conn)?;
         Self::ensure_model_pricing_seeded_on_conn(&staging_conn)?;
         Self::validate_sqlite_integrity(&staging_conn)?;
 
@@ -1201,7 +1209,7 @@ mod tests {
             // Prevent the Windows legacy-HOME fallback without mutating HOME:
             // an existing default DB keeps get_app_config_dir() anchored under
             // CC_SWITCH_TEST_HOME and makes import exercise its safety backup.
-            let config_dir = temp_dir.path().join(".cc-switch");
+            let config_dir = temp_dir.path().join(".cc-switch-x");
             std::fs::create_dir_all(&config_dir).expect("create isolated config directory");
             std::fs::File::create(config_dir.join("cc-switch.db"))
                 .expect("create isolated database sentinel");
@@ -2391,6 +2399,76 @@ mod tests {
 
     #[test]
     #[serial]
+    fn sync_keeps_x_retry_configuration_local() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let source = Database::memory()?;
+        let remote_sql = source.export_sql_string_for_sync()?;
+        let exported = Connection::open_in_memory()?;
+        exported.execute_batch(&remote_sql)?;
+        let count: i64 =
+            exported.query_row("SELECT COUNT(*) FROM x_proxy_retry_config", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(count, 0);
+
+        let local = Database::memory()?;
+        {
+            let conn = local
+                .conn
+                .lock()
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute(
+                "UPDATE x_proxy_retry_config SET max_retries = 7 WHERE app_type = 'codex'",
+                [],
+            )?;
+        }
+        local.import_sql_string_for_sync(&remote_sql)?;
+        let conn = local
+            .conn
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let retries: i64 = conn.query_row(
+            "SELECT max_retries FROM x_proxy_retry_config WHERE app_type = 'codex'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(retries, 7);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn importing_pre_x_database_initializes_x_tables() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let source = Database::memory()?;
+        {
+            let conn = source
+                .conn
+                .lock()
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute_batch(
+                "DROP TABLE x_schema_meta; DROP TABLE x_proxy_retry_config;
+                 DROP TABLE x_import_history;",
+            )?;
+        }
+        let sql = source.export_sql_string()?;
+        let local = Database::memory()?;
+        local.import_sql_string(&sql)?;
+        let conn = local
+            .conn
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let retries: i64 = conn.query_row(
+            "SELECT max_retries FROM x_proxy_retry_config WHERE app_type = 'codex'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(retries, 2);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
     fn failed_backup_publish_leaves_no_visible_or_temporary_file() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let db = Database::init()?;
@@ -2496,7 +2574,7 @@ mod tests {
                 entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with(".cc-switch-backup-")
+                    .starts_with(".cc-switch-x-backup-")
             })
             .count();
         assert_eq!(

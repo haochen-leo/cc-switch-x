@@ -1,7 +1,7 @@
 {
-  "name": "cc-switch",
+  "name": "cc-switch-x",
   "version": "3.20.4",
-  "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI",
+  "description": "Multi-provider routing, model aggregation, and protocol compatibility for Claude and Codex, built on CC Switch",
   "type": "module",
   "scripts": {
     "dev": "pnpm tauri dev",
@@ -15,8 +15,15 @@
     "test:unit": "vitest run",
     "test:unit:watch": "vitest watch"
   },
-  "keywords": [],
-  "author": "Jason Young",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "multi-provider",
+    "api-proxy",
+    "responses-api",
+    "tauri"
+  ],
+  "author": "haochen-leo",
   "license": "MIT",
   "packageManager": "pnpm@10.12.3",
   "devDependencies": {

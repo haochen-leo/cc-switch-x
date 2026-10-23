@@ -34,7 +34,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const DISMISSED_VERSION_KEY = "ccswitch:update:dismissedVersion";
   const LEGACY_DISMISSED_KEY = "dismissedUpdateVersion"; // 兼容旧键
 
-  const [supportsOfficialUpdates, setSupportsOfficialUpdates] = useState(true);
+  const [supportsOfficialUpdates, setSupportsOfficialUpdates] = useState(false);
   const [hasUpdate, setHasUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [isChecking, setIsChecking] = useState(false);
@@ -77,7 +77,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {
         if (active) {
-          setSupportsOfficialUpdates(true);
+          setSupportsOfficialUpdates(false);
         }
       });
 
@@ -94,6 +94,12 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
     if (isCheckingRef.current) return false;
+    if (!(await supportsOfficialInAppUpdate())) {
+      setHasUpdate(false);
+      setUpdateInfo(null);
+      setError(null);
+      return false;
+    }
     isCheckingRef.current = true;
     setIsChecking(true);
     setError(null);

@@ -1401,7 +1401,7 @@ mod tests {
     fn official_catalog_prefers_cc_switch_startup_cache() {
         let dir = tempfile::tempdir().expect("create isolated home");
         let codex_dir = dir.path().join(".codex");
-        let app_dir = dir.path().join(".cc-switch");
+        let app_dir = dir.path().join(".cc-switch-x");
         std::fs::create_dir_all(&codex_dir).expect("create codex dir");
         std::fs::create_dir_all(&app_dir).expect("create app dir");
         std::fs::write(
@@ -1496,7 +1496,7 @@ mod tests {
         assert!(!unchanged);
         assert!(dir
             .path()
-            .join(".cc-switch")
+            .join(".cc-switch-x")
             .join(CODEX_OFFICIAL_MODELS_CACHE_FILENAME)
             .exists());
         assert!(!dir.path().join(".codex/models_cache.json").exists());

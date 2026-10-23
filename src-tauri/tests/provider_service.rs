@@ -2281,7 +2281,7 @@ wire_api = "responses"
     let live_config =
         std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
-        live_config.contains("http://127.0.0.1:15721/v1"),
+        live_config.contains("http://127.0.0.1:15722/v1"),
         "live config should remain pointed at the local proxy"
     );
     assert!(
@@ -2436,7 +2436,7 @@ fn switch_packycode_gemini_updates_security_selected_type() {
     ProviderService::switch(&state, AppType::Gemini, "packy-gemini")
         .expect("switching to PackyCode Gemini should succeed");
 
-    // Gemini security settings are written to ~/.gemini/settings.json, not ~/.cc-switch/settings.json
+    // Gemini security settings are written to ~/.gemini/settings.json, not ~/.cc-switch-x/settings.json
     let settings_path = home.join(".gemini").join("settings.json");
     assert!(
         settings_path.exists(),
@@ -2491,7 +2491,7 @@ fn packycode_partner_meta_triggers_security_flag_even_without_keywords() {
     ProviderService::switch(&state, AppType::Gemini, "packy-meta")
         .expect("switching to partner meta provider should succeed");
 
-    // Gemini security settings are written to ~/.gemini/settings.json, not ~/.cc-switch/settings.json
+    // Gemini security settings are written to ~/.gemini/settings.json, not ~/.cc-switch-x/settings.json
     let settings_path = home.join(".gemini").join("settings.json");
     assert!(
         settings_path.exists(),
@@ -2900,7 +2900,7 @@ fn switch_codex_syncs_shared_keys_from_live_into_common_config() {
 model_provider = "aprov"
 wire_api = "chat"
 experimental_bearer_token = "sk-a-live-secret"
-model_catalog_json = "cc-switch-model-catalog.json"
+model_catalog_json = "cc-switch-x-model-catalog.json"
 web_search = "disabled"
 disable_response_storage = true
 
@@ -2978,6 +2978,7 @@ command = "ghost-cmd"
                 grokbuild: false,
                 opencode: false,
                 hermes: false,
+                mcode: false,
             },
             description: None,
             homepage: None,
