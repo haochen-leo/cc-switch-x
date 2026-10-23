@@ -4919,6 +4919,57 @@ mod tests {
     }
 
     #[test]
+    fn test_responses_max_capable_models_preserve_max() {
+        for model in [
+            "gpt-5.6",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-6-astra",
+        ] {
+            let input = json!({
+                "model": model,
+                "max_tokens": 1024,
+                "output_config": {"effort": "max"},
+                "messages": [{"role": "user", "content": "Hello"}]
+            });
+
+            let result = anthropic_to_responses(input, None, false, false).unwrap();
+            assert_eq!(result["reasoning"]["effort"], "max", "model {model}");
+        }
+    }
+
+    #[test]
+    fn test_responses_output_config_xhigh_sets_reasoning_xhigh() {
+        // Claude Code's `/effort xhigh` sends output_config.effort="xhigh";
+        // previously it fell into the unknown-value branch and was dropped.
+        let input = json!({
+            "model": "gpt-5.4",
+            "max_tokens": 1024,
+            "output_config": {"effort": "xhigh"},
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+
+        let result = anthropic_to_responses(input, None, false, false).unwrap();
+        assert_eq!(result["reasoning"]["effort"], "xhigh");
+    }
+
+    #[test]
+    fn test_responses_grok_4_6_reasoning_effort_not_dropped() {
+        // After model mapping, the Responses gate runs on the mapped name;
+        // grok-4.6 / grok-4.6-* were missing from the whitelist (#7314).
+        let input = json!({
+            "model": "grok-4.6-build",
+            "max_tokens": 1024,
+            "output_config": {"effort": "xhigh"},
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+
+        let result = anthropic_to_responses(input, None, false, false).unwrap();
+        assert_eq!(result["reasoning"]["effort"], "xhigh");
+    }
+
+    #[test]
     fn test_responses_output_config_takes_priority_over_thinking() {
         let input = json!({
             "model": "gpt-5.4",

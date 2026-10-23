@@ -15,7 +15,7 @@ use super::{
         claude_stream_usage_event_filter, codex_stream_usage_event_filter, CLAUDE_PARSER_CONFIG,
         CODEX_PARSER_CONFIG, GEMINI_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
     },
-    handler_context::{prepare_codex_local_compaction_request, RequestContext},
+    handler_context::RequestContext,
     payload_capture,
     providers::{
         codex_chat_common::extract_reasoning_field_text,
@@ -1333,12 +1333,6 @@ async fn handle_responses_for_app(
     let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
-
-    let mut body = body;
-    if app_type_str == AppType::Codex.as_str() && prepare_codex_local_compaction_request(&mut body)
-    {
-        log::debug!("[{tag}] 已整理 Codex 本地压缩请求的工具定义");
-    }
 
     let mut ctx =
         RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;

@@ -6,7 +6,7 @@ use crate::app_config::AppType;
 use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
 use crate::database::Database;
 use crate::provider::Provider;
-use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
+use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
 use crate::proxy::server::ProxyServer;
 use crate::proxy::switch_lock::SwitchLockManager;
 use crate::proxy::types::*;
@@ -734,7 +734,7 @@ impl ProxyService {
         &self,
         provider: &Provider,
         outgoing_managed_account_id: Option<&str>,
-        expected_outgoing_refresh_token: Option<&str>,
+        outgoing_guard: Option<&CodexLiveAuthSwitchGuard>,
     ) -> Result<(), String> {
         let existing_live = self.read_codex_live().ok();
         let mut effective_settings = build_effective_provider_for_live_with_codex_oauth_manager(
@@ -759,14 +759,10 @@ impl ProxyService {
             provider,
         )?;
 
-        if let (Some(account_id), Some(expected_refresh_token)) =
-            (outgoing_managed_account_id, expected_outgoing_refresh_token)
-        {
-            crate::codex_config::ensure_codex_live_auth_unchanged_for_managed_account(
-                account_id,
-                expected_refresh_token,
-            )
-            .map_err(|error| error.to_string())?;
+        if let (Some(account_id), Some(guard)) = (outgoing_managed_account_id, outgoing_guard) {
+            guard
+                .ensure_unchanged(account_id)
+                .map_err(|error| error.to_string())?;
         }
 
         self.write_codex_takeover_live_for_provider(&effective_settings, Some(provider))?;
@@ -1208,6 +1204,27 @@ impl ProxyService {
                 // 只看占位符会把半接管/旧端口残留误判为可复用，导致开启接管后
                 // live 文件仍停留在普通供应商配置。
                 if has_backup && live_matches_current_proxy {
+                    if matches!(app, AppType::Codex) {
+                        if let Some(provider_id) =
+                            crate::settings::get_effective_current_provider(&self.db, &app)
+                                .map_err(|error| error.to_string())?
+                        {
+                            if let Some(account_id) = self
+                                .db
+                                .get_provider_by_id(&provider_id, app_type_str)
+                                .map_err(|error| error.to_string())?
+                                .filter(crate::proxy::providers::is_codex_official_provider)
+                                .and_then(|provider| provider.meta)
+                                .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
+                                .filter(|id| !id.trim().is_empty())
+                            {
+                                self.codex_oauth_manager
+                                    .ensure_account_exists(account_id.trim())
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                            }
+                        }
+                    }
                     self.refresh_active_target_from_current_provider(&app).await;
                     return Ok(());
                 }
@@ -3152,13 +3169,14 @@ impl ProxyService {
             .is_some();
         let live_taken_over = self.detect_takeover_in_live_config_for_app(&app_type_enum);
         let should_sync_backup = has_backup || live_taken_over;
-        let outgoing_live_refresh_token =
+        let outgoing_live_auth_guard =
             if should_sync_backup && matches!(app_type_enum, AppType::Codex) {
                 match outgoing_managed_codex_account_id.as_deref() {
                     Some(account_id) => self
                         .codex_oauth_manager
                         .prepare_live_auth_for_account_switch_away(account_id)
                         .await
+                        .map(Some)
                         .map_err(|error| error.to_string())?,
                     None => None,
                 }
@@ -3228,7 +3246,7 @@ impl ProxyService {
                     self.sync_codex_live_from_provider_while_proxy_active_guarded(
                         &provider,
                         outgoing_managed_codex_account_id.as_deref(),
-                        outgoing_live_refresh_token.as_deref(),
+                        outgoing_live_auth_guard.as_ref(),
                     )
                     .await?;
                 } else if live_taken_over && matches!(app_type_enum, AppType::GrokBuild) {
@@ -3255,15 +3273,13 @@ impl ProxyService {
                     &effective_provider,
                 );
 
-                if let (Some(account_id), Some(expected_refresh_token)) = (
+                if let (Some(account_id), Some(guard)) = (
                     outgoing_managed_codex_account_id.as_deref(),
-                    outgoing_live_refresh_token.as_deref(),
+                    outgoing_live_auth_guard.as_ref(),
                 ) {
-                    crate::codex_config::ensure_codex_live_auth_unchanged_for_managed_account(
-                        account_id,
-                        expected_refresh_token,
-                    )
-                    .map_err(|error| error.to_string())?;
+                    guard
+                        .ensure_unchanged(account_id)
+                        .map_err(|error| error.to_string())?;
                 }
 
                 crate::codex_config::write_codex_provider_live_with_catalog(
@@ -3281,17 +3297,13 @@ impl ProxyService {
             }
 
             if should_sync_backup && matches!(app_type_enum, AppType::Codex) {
-                if let Some(account_id) = outgoing_managed_codex_account_id.as_deref() {
-                    if let Some(expected_refresh_token) = outgoing_live_refresh_token.as_deref() {
-                        crate::codex_config::clear_codex_live_auth_for_managed_account_if_unchanged(
-                            account_id,
-                            Some(expected_refresh_token),
-                        )
+                if let (Some(account_id), Some(guard)) = (
+                    outgoing_managed_codex_account_id.as_deref(),
+                    outgoing_live_auth_guard.as_ref(),
+                ) {
+                    guard
+                        .clear_outgoing(account_id)
                         .map_err(|error| error.to_string())?;
-                    } else {
-                        crate::codex_config::clear_codex_live_auth_for_managed_account(account_id)
-                            .map_err(|error| error.to_string())?;
-                    }
                 }
             }
 
@@ -3641,9 +3653,7 @@ impl ProxyService {
             model_excludes,
             warnings: Vec::new(),
             official_catalog_refresh:
-                crate::services::codex_aggregation::read_official_catalog_refresh(
-                    self.db.as_ref(),
-                ),
+                crate::services::codex_aggregation::read_official_catalog_refresh(self.db.as_ref()),
         })
     }
 
@@ -3706,9 +3716,7 @@ impl ProxyService {
             model_excludes,
             warnings: build.warnings,
             official_catalog_refresh:
-                crate::services::codex_aggregation::read_official_catalog_refresh(
-                    self.db.as_ref(),
-                ),
+                crate::services::codex_aggregation::read_official_catalog_refresh(self.db.as_ref()),
         }))
     }
 
@@ -7921,6 +7929,39 @@ requires_openai_auth = true
     }
 
     #[test]
+    fn codex_takeover_without_provider_selects_a_local_authenticated_route() {
+        for input in [
+            "",
+            "model = \"gpt-5\"\nbase_url = \"https://old.example/v1\"\n",
+            "model_providers = { cc-switch = { name = \"Existing\", base_url = \"https://keep.example/v1\" } }\n",
+        ] {
+            let url = "http://127.0.0.1:15721/v1";
+            let projected =
+                ProxyService::apply_codex_proxy_toml_config_for_provider(input, url, None, false)
+                    .unwrap();
+            let auth = json!({"OPENAI_API_KEY": PROXY_TOKEN_PLACEHOLDER});
+            let live = crate::codex_config::prepare_codex_provider_live_config(&auth, &projected).unwrap();
+            println!("takeover_fixture={}", serde_json::to_string(&live).unwrap());
+            let doc: toml::Value = toml::from_str(&live).unwrap();
+            let id = doc["model_provider"].as_str().expect("explicit provider");
+            assert_ne!(id, "openai");
+            let table = &doc["model_providers"][id];
+            assert_eq!(table["base_url"].as_str(), Some(url));
+            assert_eq!(table["wire_api"].as_str(), Some("responses"));
+            assert_eq!(table["experimental_bearer_token"].as_str(), Some(PROXY_TOKEN_PLACEHOLDER));
+            if input.contains("Existing") {
+                assert_eq!(doc["model_providers"]["cc-switch"]["base_url"].as_str(), Some("https://keep.example/v1"));
+            }
+            let repeated = ProxyService::apply_codex_proxy_toml_config_for_provider(
+                &live, url, None, false,
+            )
+            .unwrap();
+            let repeated = crate::codex_config::prepare_codex_provider_live_config(&auth, &repeated).unwrap();
+            assert_eq!(toml::from_str::<toml::Value>(&repeated).unwrap(), doc);
+        }
+    }
+
+    #[test]
     fn apply_codex_proxy_toml_config_forces_local_responses_wire_api() {
         let input = r#"
 model_provider = "chat_only"
@@ -8214,22 +8255,22 @@ wire_api = "responses"
     }
 
     #[test]
-    fn update_toml_base_url_falls_back_to_top_level_base_url() {
+    fn update_toml_base_url_uses_implicit_openai_override() {
         let input = r#"
 model = "gpt-5.1-codex"
 "#;
 
         let new_url = "http://127.0.0.1:5000/v1";
         let output = crate::codex_config::update_codex_toml_field(input, "base_url", new_url)
-            .expect("update top-level base_url");
+            .expect("update implicit openai base_url");
 
         let parsed: toml::Value =
             toml::from_str(&output).expect("updated config should be valid TOML");
 
         let base_url = parsed
-            .get("base_url")
+            .get("openai_base_url")
             .and_then(|v| v.as_str())
-            .expect("base_url should exist");
+            .expect("openai_base_url should exist");
 
         assert_eq!(base_url, new_url);
     }

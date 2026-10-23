@@ -201,7 +201,8 @@ export type AppType =
   | "gemini"
   | "grokbuild"
   | "opencode"
-  | "pi";
+  | "pi"
+  | "mcode";
 
 export type AppTypeFilter = "all" | AppType;
 
@@ -212,6 +213,7 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
   "grokbuild",
   "opencode",
   "pi",
+  "mcode",
 ];
 
 /**
@@ -235,7 +237,10 @@ export const CACHE_INCLUSIVE_APP_TYPES: ReadonlySet<string> = new Set([
 // Pi sessions can mix Anthropic and OpenAI APIs, but the dashboard aggregates
 // only by app type. Treat cache-write coverage as partial without changing
 // Pi's fresh-input token semantics.
-const PARTIAL_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set(["pi"]);
+const PARTIAL_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set([
+  "pi",
+  "mcode",
+]);
 
 export type CacheWriteAvailability = "ok" | "partial" | "na";
 
