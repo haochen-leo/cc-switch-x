@@ -122,6 +122,11 @@ use ad-hoc signing without signing/notarization credentials. Keep
 `X_MACOS_SIGNING_ENABLED` and `X_UPDATER_ENABLED` disabled until X credentials
 are configured.
 
+Keep the application version as `0.1.0-beta.N` and update
+`bundle.windows.wix.version` to an MSI-compatible numeric version at the same
+time (for example, `0.1.0.7` for beta.7). MSI cannot derive its version from
+the Beta string.
+
 Recommended upstream synchronization:
 
 1. fetch and explicitly select an upstream 3.x tag or commit; do not merge the

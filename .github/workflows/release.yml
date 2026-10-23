@@ -404,7 +404,7 @@ jobs:
           echo "=== Verifying .app: $APP_PATH ==="
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           echo "✅ codesign verification passed"
-          lipo -verify_arch arm64 x86_64 "$APP_PATH/Contents/MacOS/cc-switch-x"
+          lipo "$APP_PATH/Contents/MacOS/cc-switch-x" -verify_arch arm64 x86_64
           if [ "$X_MACOS_SIGNING_ENABLED" = 'true' ]; then
             spctl -a -t exec -vv "$APP_PATH"
             xcrun stapler validate "$APP_PATH"

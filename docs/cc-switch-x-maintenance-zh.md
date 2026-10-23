@@ -99,6 +99,9 @@ X 提交只推送到 X 仓库，不推送到官方 `origin`，经用户指定的
 Beta 默认使用 macOS ad-hoc 签名，不要求签名、公证凭据；
 `X_MACOS_SIGNING_ENABLED` 和 `X_UPDATER_ENABLED` 保持关闭，直到配置 X 自有凭据。
 
+应用版本保留 `0.1.0-beta.N`，同时将 `bundle.windows.wix.version` 更新为
+MSI 支持的数字格式（例如 beta.7 对应 `0.1.0.7`），避免 MSI 解析 Beta 字符串失败。
+
 推荐同步流程：
 
 1. 拉取并明确选择上游 3.x 标签或提交，不把上游 4.x 的 `main` 合入这条 3.x 线；
