@@ -140,6 +140,10 @@ fn apply_request_transforms(
     body: &mut Value,
     context: &mut TransformContext,
 ) -> Result<(), ProxyError> {
+    if context.dialect == ResponsesDialect::ThirdPartyStandard {
+        crate::proxy::handler_context::prepare_codex_local_compaction_request(body);
+    }
+
     extend_restore_map(body, context);
 
     if context.policy.xai_sanitize {
@@ -363,6 +367,53 @@ mod tests {
             Value::Array(values) => values.iter().any(|value| contains_key(value, target)),
             _ => false,
         }
+    }
+
+    #[test]
+    fn local_compaction_preserves_openai_tools_and_repairs_third_party_tools() {
+        let body = json!({
+            "model": "gpt-5.6-sol",
+            "input": [
+                {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+                {"type": "message", "id": "msg_1", "role": "user", "content": [
+                    {"type": "input_text", "text": "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary."}
+                ]}
+            ],
+            "tool_choice": "auto"
+        });
+        for upstream in [
+            provider(
+                crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                "https://chatgpt.com/backend-api/codex",
+            ),
+            provider("gpt-relay", "https://relay.example/v1"),
+        ] {
+            let prepared = prepare_request(body.clone(), &upstream, Some("gpt-5.6-sol")).unwrap();
+            assert!(prepared.body.get("tools").is_none());
+            assert_eq!(prepared.body["tool_choice"], "auto");
+
+            let finalized = finalize_request(prepared.context, prepared.body).unwrap();
+            assert!(finalized.body.get("tools").is_none());
+            assert_eq!(finalized.body["tool_choice"], "auto");
+            assert_eq!(finalized.body["input"], body["input"]);
+        }
+
+        let mut third_party_body = body;
+        third_party_body["model"] = json!("qwen3.8-max");
+        let prepared = prepare_request(
+            third_party_body,
+            &provider(
+                "dashscope-native",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            ),
+            Some("qwen3.8-max"),
+        )
+        .unwrap();
+        assert_eq!(prepared.body["tools"], json!([{ "type": "web_search" }]));
+        assert_eq!(prepared.body["tool_choice"], "none");
+        let expected = prepared.body.clone();
+        let finalized = finalize_request(prepared.context, prepared.body).unwrap();
+        assert_eq!(finalized.body, expected);
     }
 
     #[test]

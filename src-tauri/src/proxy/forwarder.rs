@@ -1792,6 +1792,12 @@ impl RequestForwarder {
         // suffix and add the context-1m beta header.
         let mut codex_anthropic_one_m = false;
 
+        // Preserve compaction tool handling on the Chat/Anthropic bridges.
+        // Native Responses applies it only for the selected third-party dialect.
+        if codex_responses_to_chat || codex_responses_to_anthropic {
+            super::handler_context::prepare_codex_local_compaction_request(&mut mapped_body);
+        }
+
         // 转换请求体（如果需要）
         let mut request_body = if codex_responses_to_chat {
             let mut mapped_body = mapped_body;

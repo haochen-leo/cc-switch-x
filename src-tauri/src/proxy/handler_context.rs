@@ -413,12 +413,13 @@ fn is_codex_local_compaction_request(body: &serde_json::Value) -> bool {
     })
 }
 
-/// 整理 Codex 本地压缩请求的工具字段。
+/// 整理第三方原生 Responses 上游的 Codex 本地压缩工具字段。
 ///
 /// Codex 本地压缩会回放历史里的 `web_search_call`，但压缩回合本身通常带
 /// `tools: []`；部分第三方 Responses 上游会拒绝“历史引用了工具、请求却没有
 /// 工具定义”的组合。这里只补齐被历史引用的托管搜索定义，并禁止摘要回合发起
 /// 新的工具调用。
+/// 仅在选定第三方协议后调用；OpenAI Responses-Lite 不接受托管 `web_search`。
 pub(crate) fn prepare_codex_local_compaction_request(body: &mut serde_json::Value) -> bool {
     if !is_codex_local_compaction_request(body) {
         return false;
@@ -544,7 +545,7 @@ mod tests {
     #[test]
     fn local_compaction_restores_web_search_tool_referenced_by_history() {
         let mut body = serde_json::json!({
-            "model": "gpt-6-astra",
+            "model": "qwen3.8-max",
             "input": [
                 {"type": "web_search_call", "id": "ws_1", "status": "completed"},
                 {"type": "message", "role": "user", "content": [
