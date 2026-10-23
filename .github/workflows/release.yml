@@ -1,9 +1,8 @@
 name: Release
 
-# CC Switch X keeps the inherited release pipeline disabled until X-specific
-# signing and notarization are configured. Enable builds with
-# X_RELEASE_PIPELINE_ENABLED=true. Keep X_UPDATER_ENABLED=false until X has a
-# dedicated signed updater channel.
+# X_RELEASE_PIPELINE_ENABLED enables tag-triggered Beta builds on GitHub runners.
+# Beta macOS packages use ad-hoc signing unless X_MACOS_SIGNING_ENABLED=true.
+# Keep X_UPDATER_ENABLED=false until X has a dedicated signed updater channel.
 on:
   push:
     tags:
@@ -31,7 +30,7 @@ jobs:
           - os: ubuntu-22.04
           - os: ubuntu-22.04-arm
             arch: arm64
-          - os: macos-14
+          - os: macos-15
 
     steps:
       - name: Checkout
@@ -128,6 +127,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Prepare Tauri signing key
+        if: vars.X_UPDATER_ENABLED == 'true'
         shell: bash
         run: |
           # 调试：检查 Secret 是否存在
@@ -184,7 +184,7 @@ jobs:
           echo "✅ Tauri signing key prepared"
 
       - name: Import Apple signing certificate
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && vars.X_MACOS_SIGNING_ENABLED == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -230,29 +230,15 @@ jobs:
         shell: bash
         timeout-minutes: 60
         env:
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_ID: ${{ vars.X_MACOS_SIGNING_ENABLED == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ vars.X_MACOS_SIGNING_ENABLED == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ vars.X_MACOS_SIGNING_ENABLED == 'true' && secrets.APPLE_TEAM_ID || '' }}
         run: |
-          set -euo pipefail
-          max_attempts=3
-          for attempt in $(seq 1 "$max_attempts"); do
-            echo "=== macOS build/notarization attempt ${attempt}/${max_attempts} ==="
-            if pnpm tauri build --target universal-apple-darwin; then
-              echo "✅ macOS build/notarization succeeded"
-              exit 0
-            fi
-
-            if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "❌ macOS build/notarization failed after ${max_attempts} attempts" >&2
-              exit 1
-            fi
-
-            sleep_seconds=$((attempt * 60))
-            echo "⚠️ macOS build/notarization failed, retrying in ${sleep_seconds}s..."
-            sleep "$sleep_seconds"
-          done
+          if [ "$APPLE_SIGNING_IDENTITY" = '-' ]; then
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
+          pnpm tauri build --target universal-apple-darwin --bundles app
 
       - name: Build Tauri App (Windows)
         if: runner.os == 'Windows'
@@ -274,6 +260,9 @@ jobs:
       - name: Prepare macOS Assets
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY || '-' }}
+          X_MACOS_SIGNING_ENABLED: ${{ vars.X_MACOS_SIGNING_ENABLED }}
         run: |
           set -euxo pipefail
           mkdir -p release-assets
@@ -297,9 +286,9 @@ jobs:
             exit 1
           fi
 
-          # Staple notarization ticket to .app (Tauri already notarized it)
-          xcrun stapler staple "$APP_PATH"
-          echo "✅ .app stapled"
+          if [ "$X_MACOS_SIGNING_ENABLED" = 'true' ]; then
+            xcrun stapler staple "$APP_PATH"
+          fi
 
           # 1) Collect .tar.gz only when updater artifacts are enabled.
           if [ -n "$TAR_GZ" ]; then
@@ -347,7 +336,7 @@ jobs:
           echo "✅ Styled DMG created: $NEW_DMG"
 
       - name: Notarize macOS DMG
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && vars.X_MACOS_SIGNING_ENABLED == 'true'
         shell: bash
         timeout-minutes: 30
         env:
@@ -391,6 +380,8 @@ jobs:
       - name: Verify macOS code signing and notarization
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          X_MACOS_SIGNING_ENABLED: ${{ vars.X_MACOS_SIGNING_ENABLED }}
         run: |
           set -euo pipefail
 
@@ -413,10 +404,11 @@ jobs:
           echo "=== Verifying .app: $APP_PATH ==="
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           echo "✅ codesign verification passed"
-          spctl -a -t exec -vv "$APP_PATH"
-          echo "✅ spctl assessment passed"
-          xcrun stapler validate "$APP_PATH"
-          echo "✅ .app stapler validation passed"
+          lipo -verify_arch arm64 x86_64 "$APP_PATH/Contents/MacOS/cc-switch-x"
+          if [ "$X_MACOS_SIGNING_ENABLED" = 'true' ]; then
+            spctl -a -t exec -vv "$APP_PATH"
+            xcrun stapler validate "$APP_PATH"
+          fi
 
           # Verify .dmg (from release-assets/, created by create-dmg + notarized)
           DMG_PATH=$(find release-assets -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
@@ -424,10 +416,11 @@ jobs:
             echo "=== Verifying .dmg: $DMG_PATH ==="
             codesign --verify --verbose=2 "$DMG_PATH"
             echo "✅ .dmg codesign verification passed"
-            spctl -a -t open --context context:primary-signature -vv "$DMG_PATH"
-            echo "✅ .dmg spctl assessment passed"
-            xcrun stapler validate "$DMG_PATH"
-            echo "✅ .dmg stapler validation passed"
+            hdiutil verify "$DMG_PATH"
+            if [ "$X_MACOS_SIGNING_ENABLED" = 'true' ]; then
+              spctl -a -t open --context context:primary-signature -vv "$DMG_PATH"
+              xcrun stapler validate "$DMG_PATH"
+            fi
           else
             echo "❌ No .dmg found for verification — release would ship without verified DMG" >&2
             exit 1
@@ -438,6 +431,7 @@ jobs:
         shell: pwsh
         env:
           WINDOWS_RELEASE_ARCH: ${{ matrix.arch || 'x86_64' }}
+          X_UPDATER_ENABLED: ${{ vars.X_UPDATER_ENABLED }}
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
@@ -460,7 +454,7 @@ jobs:
             if (Test-Path $sigPath) {
               Copy-Item $sigPath (Join-Path release-assets ("$dest.sig"))
               Write-Host "Signature copied: $dest.sig"
-            } elseif ($isArm64) {
+            } elseif ($env:X_UPDATER_ENABLED -eq 'true') {
               throw "Signature not found for $($msi.Name)"
             } else {
               Write-Warning "Signature not found for $($msi.Name)"
@@ -571,7 +565,7 @@ jobs:
           find src-tauri/target -maxdepth 4 -type f -name "*.*" 2>/dev/null || true
 
       - name: Clean up Apple signing keychain
-        if: runner.os == 'macOS' && always()
+        if: runner.os == 'macOS' && vars.X_MACOS_SIGNING_ENABLED == 'true' && always()
         shell: bash
         run: |
           if [ -n "${ORIGINAL_DEFAULT_KEYCHAIN:-}" ]; then
@@ -602,6 +596,12 @@ jobs:
           set -euo pipefail
           ls -la release-assets
 
+      - name: Generate and verify SHA256 checksums
+        working-directory: release-assets
+        run: |
+          sha256sum CC-Switch-X-* > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
@@ -613,18 +613,20 @@ jobs:
 
             Unofficial independent fork of [CC Switch](https://github.com/farion1231/cc-switch).
 
-            Claude Code 供应商切换工具
+            基于官方 3.20.4，保留 X 的模型聚合、路由、协议桥接与本地 compaction，统一产品隔离与数据库扩展。
+
+            [完整发布说明](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/release-notes/${{ github.ref_name }}-zh.md) | [English](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/release-notes/${{ github.ref_name }}-en.md)
 
             ### 下载
 
-            - **macOS**: `CC-Switch-X-${{ github.ref_name }}-macOS.dmg`（推荐）或 `CC-Switch-X-${{ github.ref_name }}-macOS.zip`（解压即用）
+            - **macOS (Intel + Apple Silicon 通用包)**: `CC-Switch-X-${{ github.ref_name }}-macOS.dmg`（推荐）或 `CC-Switch-X-${{ github.ref_name }}-macOS.zip`（解压即用）
             - **Windows (x86_64)**: `CC-Switch-X-${{ github.ref_name }}-Windows.msi`（安装版）或 `CC-Switch-X-${{ github.ref_name }}-Windows-Portable.zip`（绿色版）
             - **Windows (ARM64)**: `CC-Switch-X-${{ github.ref_name }}-Windows-arm64.msi`（安装版）或 `CC-Switch-X-${{ github.ref_name }}-Windows-arm64-Portable.zip`（绿色版）
             - **Linux (x86_64)**: `CC-Switch-X-${{ github.ref_name }}-Linux-x86_64.AppImage` / `.deb` / `.rpm`
             - **Linux (ARM64)**: `CC-Switch-X-${{ github.ref_name }}-Linux-arm64.AppImage` / `.deb` / `.rpm`
 
             ---
-            CC Switch X Beta 尚未启用独立的自动更新通道。发布流水线默认跳过；配置 X 自有签名、公证和 updater 后再启用。
+            所有安装包均由 GitHub Actions 构建，附 `SHA256SUMS.txt`。Beta 默认没有 Apple Developer ID 签名、公证或 Windows 代码签名，系统可能显示安全警告；macOS 应用使用 ad-hoc 签名。应用自动更新保持关闭，更新前请退出应用并备份 `~/.cc-switch-x`。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

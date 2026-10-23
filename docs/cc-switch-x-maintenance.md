@@ -114,6 +114,14 @@ replay, rebase, or force-push either mainline. The one-time replacement of the
 old remote history is an exception only after a complete archive; immediately
 restore `main` deletion and non-fast-forward protection afterward.
 
+All packaging and publishing runs on GitHub Actions, not on the developer's
+machine. The authorized push machine synchronizes commits and pushes tags.
+With `X_RELEASE_PIPELINE_ENABLED=true`, `v*` tags trigger platform builds,
+SHA256 checksum generation, and Beta Release publication. Beta macOS packages
+use ad-hoc signing without signing/notarization credentials. Keep
+`X_MACOS_SIGNING_ENABLED` and `X_UPDATER_ENABLED` disabled until X credentials
+are configured.
+
 Recommended upstream synchronization:
 
 1. fetch and explicitly select an upstream 3.x tag or commit; do not merge the
@@ -122,8 +130,8 @@ Recommended upstream synchronization:
    branch; do not rebase the X mainline;
 3. resolve official schema and configuration changes first;
 4. reapply X identity and extension-table boundaries;
-5. run Rust tests, frontend tests, formatting, type checks, and a production
-   build;
+5. run Rust tests, frontend tests, formatting, and type checks locally; run
+   production builds on GitHub Actions;
 6. review and merge the verified result into `main`; delete any temporary
    remote pull-request branch after merging;
 7. fast-forward `release` and create a new tag when publishing; never rewrite
