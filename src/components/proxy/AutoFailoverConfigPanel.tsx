@@ -108,9 +108,15 @@ export function AutoFailoverConfigPanel({
       range: { min: number; max?: number },
       label: string,
     ) => {
-      if (isNaN(value) || value < range.min || (range.max !== undefined && value > range.max)) {
+      if (
+        isNaN(value) ||
+        value < range.min ||
+        (range.max !== undefined && value > range.max)
+      ) {
         errors.push(
-          range.max === undefined ? `${label}: >=${range.min}` : `${label}: ${range.min}-${range.max}`,
+          range.max === undefined
+            ? `${label}: >=${range.min}`
+            : `${label}: ${range.min}-${range.max}`,
         );
       }
     };

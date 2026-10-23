@@ -15,9 +15,9 @@ CC Switch X is an unofficial independent fork of CC Switch. Its goals are to:
 The current upstream baseline is commit `43e1d99084ed9b2f5dc252fd35c5adaf29d6876e`
 from CC Switch 3.20.4. The existing local commits remain individually preserved;
 X product alignment is added on top without replaying or squashing that history.
-The current maintenance branch is `codex/cc-switch-x-v3.20.4-aligned`.
-It preserves the local capabilities from `haochen-dev` while taking explicitly
-selected upstream 3.x fixes.
+`main` is the X development line and `release` is the release branch; neither
+is the official upstream line. Both preserve the local capabilities from
+`haochen-dev` while taking explicitly selected upstream 3.x fixes.
 
 ## Isolation Boundaries
 
@@ -103,19 +103,31 @@ The current local remotes are:
 - `myfork`: `haochen-leo/cc-switch-x`;
 - `origin`: `farion1231/cc-switch` (read-only upstream tracking).
 
-Push X commits only to the X repository, through `xiaolei_mac` for this checkout.
-Do not squash or replay the aligned history, or force-push over remote `main`.
+Push X commits only to the X repository through the user's authorized push
+machine, never to official `origin`. Keep only `main` and `release` as long-lived
+remote branches. Use separate `v0.1.0-beta.N` X release tags rather than upstream
+version numbers.
+
+Develop on `main`. To publish, fast-forward `release` to a verified `main` commit,
+create an immutable annotated tag there, and publish its Release. Do not squash,
+replay, rebase, or force-push either mainline. The one-time replacement of the
+old remote history is an exception only after a complete archive; immediately
+restore `main` deletion and non-fast-forward protection afterward.
 
 Recommended upstream synchronization:
 
 1. fetch and explicitly select an upstream 3.x tag or commit; do not merge the
    upstream 4.x `main` into this 3.x line;
-2. merge or rebase on a dedicated synchronization branch;
+2. merge the selected upstream commits on a local temporary synchronization
+   branch; do not rebase the X mainline;
 3. resolve official schema and configuration changes first;
 4. reapply X identity and extension-table boundaries;
 5. run Rust tests, frontend tests, formatting, type checks, and a production
    build;
-6. merge through a reviewed pull request into `main`.
+6. review and merge the verified result into `main`; delete any temporary
+   remote pull-request branch after merging;
+7. fast-forward `release` and create a new tag when publishing; never rewrite
+   an existing release tag.
 
 ## Local Feature Preservation
 
