@@ -8,6 +8,7 @@ import type {
   AppProxyConfig,
   CodexAggregationStatus,
   CodexAggregationSourceModels,
+  CodexOfficialCatalogRefreshResult,
 } from "@/types/proxy";
 
 export const proxyApi = {
@@ -76,6 +77,10 @@ export const proxyApi = {
       providerId,
       excludedModels,
     });
+  },
+
+  async refreshCodexOfficialCatalog(): Promise<CodexOfficialCatalogRefreshResult> {
+    return invoke("refresh_codex_official_catalog");
   },
 
   // ========== Legacy 代理配置 API (兼容) ==========

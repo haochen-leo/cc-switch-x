@@ -1,6 +1,12 @@
 import { useRef } from "react";
 import type { SyntheticEvent } from "react";
-import { ChevronRight, Layers3, Loader2, Settings2 } from "lucide-react";
+import {
+  ChevronRight,
+  Layers3,
+  Loader2,
+  RefreshCw,
+  Settings2,
+} from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -24,6 +30,7 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import type {
   CodexAggregationSourceModels,
   CodexAggregationSourceProvider,
+  CodexOfficialCatalogRefresh,
 } from "@/types/proxy";
 
 export const CODEX_AGGREGATE_PROVIDER_ID = "codex-multi-provider";
@@ -246,6 +253,11 @@ export function CodexAggregationToggle({
                 defaultValue: "模型来源供应商",
               })}
             </DropdownMenuLabel>
+            {status?.officialCatalogRefresh && (
+              <OfficialCatalogRefreshLine
+                refresh={status.officialCatalogRefresh}
+              />
+            )}
             {sourceProviders.map((source) => (
               <SourceProviderRow
                 key={source.providerId}
@@ -273,6 +285,137 @@ export function CodexAggregationToggle({
  * 来源供应商行：外观与普通勾选行一致（左侧 ✓ 指示符，无蓝框勾选框）。
  * 整行悬浮预览模型子菜单；点击左侧 = 选择/取消来源，点击右侧箭头 = 展开。
  */
+
+/**
+ * 官方模型目录最近一次在线刷新结果（启动或手动）。
+ * 让"刷新成功且更新 / 刷新成功但目录无变化 / 刷新失败"三种结果在面板可见，
+ * 不再只能靠日志区分。
+ */
+function OfficialCatalogRefreshLine({
+  refresh,
+}: {
+  refresh: CodexOfficialCatalogRefresh;
+}) {
+  const { t } = useTranslation();
+  const date = new Date(refresh.at);
+  const time = Number.isNaN(date.getTime())
+    ? refresh.at
+    : date.toLocaleString(undefined, {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+  const failed = refresh.outcome === "failed";
+  const text =
+    refresh.outcome === "updated"
+      ? t("proxy.codexAggregation.officialCatalogRefreshUpdated", {
+          time,
+          modelCount: refresh.modelCount,
+          defaultValue: "官方目录 {{time}} 已更新（{{modelCount}} 个模型）",
+        })
+      : failed
+        ? t("proxy.codexAggregation.officialCatalogRefreshFailed", {
+            detail: refresh.detail ?? "",
+            defaultValue: "官方目录刷新失败：{{detail}}",
+          })
+        : t("proxy.codexAggregation.officialCatalogRefreshUnchanged", {
+            time,
+            modelCount: refresh.modelCount,
+            defaultValue:
+              "官方目录 {{time}} 刷新，无变化（{{modelCount}} 个模型）",
+          });
+  return (
+    <DropdownMenuLabel
+      className={cn(
+        "truncate pl-8 text-xs font-normal",
+        failed ? "text-destructive" : "text-muted-foreground",
+      )}
+      title={text}
+    >
+      {text}
+    </DropdownMenuLabel>
+  );
+}
+
+/**
+ * 官方模型目录手动刷新按钮（仅 OpenAI Official 来源行的子菜单标题）。
+ * 在线拉取官方目录写入缓存；有变化且聚合已启用时后端自动重建目录。
+ */
+function OfficialCatalogRefreshButton({
+  providerId,
+  onAggregationChanged,
+}: {
+  providerId: string;
+  onAggregationChanged: () => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: proxyApi.refreshCodexOfficialCatalog,
+    onSuccess: async (result) => {
+      queryClient.setQueryData(["codexAggregationStatus"], result.status);
+      await queryClient.invalidateQueries({
+        queryKey: ["codexAggregationSourceModels", providerId],
+      });
+      await onAggregationChanged();
+      if (result.updated) {
+        toast.success(
+          t("proxy.codexAggregation.refreshOfficialCatalogUpdated", {
+            modelCount: result.modelCount,
+            defaultValue: "官方模型目录已更新（{{modelCount}} 个模型）",
+          }),
+          { closeButton: true },
+        );
+      } else {
+        toast.info(
+          t("proxy.codexAggregation.refreshOfficialCatalogUnchanged", {
+            modelCount: result.modelCount,
+            defaultValue: "官方模型目录无变化（{{modelCount}} 个模型）",
+          }),
+          { closeButton: true },
+        );
+      }
+    },
+    onError: async (error: Error) => {
+      toast.error(
+        t("proxy.codexAggregation.refreshOfficialCatalogFailed", {
+          error: extractErrorMessage(error),
+          defaultValue: "刷新官方模型目录失败：{{error}}",
+        }),
+        { closeButton: true, duration: 7000 },
+      );
+      // 后端已把失败原因记入刷新状态，刷新面板让它立刻可见
+      await queryClient.invalidateQueries({
+        queryKey: ["codexAggregationStatus"],
+      });
+    },
+  });
+  const label = t("proxy.codexAggregation.refreshOfficialCatalog", {
+    defaultValue: "刷新官方模型",
+  });
+  return (
+    <button
+      type="button"
+      className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+      title={label}
+      aria-label={label}
+      disabled={mutation.isPending}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        mutation.mutate();
+      }}
+    >
+      {mutation.isPending ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <RefreshCw className="h-3.5 w-3.5" />
+      )}
+    </button>
+  );
+}
+
 function SourceProviderRow({
   source,
   excludedCount,
@@ -370,11 +513,19 @@ function SourceProviderRow({
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="z-[200] max-h-64 min-w-56 overflow-y-auto">
-        <DropdownMenuLabel className="truncate text-xs font-medium">
-          {t("proxy.codexAggregation.modelFilterTitle", {
-            name: source.name,
-            defaultValue: "{{name}} 的模型",
-          })}
+        <DropdownMenuLabel className="flex items-center gap-1 text-xs font-medium">
+          <span className="min-w-0 flex-1 truncate">
+            {t("proxy.codexAggregation.modelFilterTitle", {
+              name: source.name,
+              defaultValue: "{{name}} 的模型",
+            })}
+          </span>
+          {source.official && (
+            <OfficialCatalogRefreshButton
+              providerId={source.providerId}
+              onAggregationChanged={onAggregationChanged}
+            />
+          )}
         </DropdownMenuLabel>
         <SourceModelFilterItems
           providerId={source.providerId}

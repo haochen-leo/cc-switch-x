@@ -150,6 +150,20 @@ pub async fn set_codex_aggregation_model_excludes(
         .await
 }
 
+/// 手动刷新 OpenAI Official 模型目录（模型过滤选择器的刷新按钮）。
+/// 缓存有变化且聚合已启用时自动重建聚合目录。
+#[tauri::command]
+pub async fn refresh_codex_official_catalog(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::services::codex_aggregation::CodexOfficialCatalogRefreshResult, String> {
+    crate::services::codex_aggregation::refresh_official_catalog_manual(
+        &state.proxy_service,
+        &state.db,
+        &state.codex_oauth_manager,
+    )
+    .await
+}
+
 /// 获取代理服务器状态
 #[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {

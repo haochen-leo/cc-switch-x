@@ -62,6 +62,21 @@ export interface CodexAggregationStatus {
   /** 各来源供应商当前排除的模型（上游模型 ID），键为供应商 ID */
   modelExcludes: Record<string, string[]>;
   warnings: string[];
+  /** 最近一次官方目录在线刷新结果（启动或手动），无记录时为 null */
+  officialCatalogRefresh?: CodexOfficialCatalogRefresh | null;
+}
+
+export interface CodexOfficialCatalogRefresh {
+  at: string;
+  outcome: "updated" | "unchanged" | "failed";
+  detail?: string | null;
+  modelCount: number;
+}
+
+export interface CodexOfficialCatalogRefreshResult {
+  updated: boolean;
+  modelCount: number;
+  status: CodexAggregationStatus;
 }
 
 export interface CodexAggregationSourceProvider {

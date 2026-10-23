@@ -3640,6 +3640,10 @@ impl ProxyService {
             source_providers,
             model_excludes,
             warnings: Vec::new(),
+            official_catalog_refresh:
+                crate::services::codex_aggregation::read_official_catalog_refresh(
+                    self.db.as_ref(),
+                ),
         })
     }
 
@@ -3701,6 +3705,10 @@ impl ProxyService {
             source_providers: build.source_providers,
             model_excludes,
             warnings: build.warnings,
+            official_catalog_refresh:
+                crate::services::codex_aggregation::read_official_catalog_refresh(
+                    self.db.as_ref(),
+                ),
         }))
     }
 
@@ -3889,6 +3897,10 @@ impl ProxyService {
                 source_providers: build.source_providers,
                 model_excludes,
                 warnings: build.warnings,
+                official_catalog_refresh:
+                    crate::services::codex_aggregation::read_official_catalog_refresh(
+                        self.db.as_ref(),
+                    ),
             });
         }
 

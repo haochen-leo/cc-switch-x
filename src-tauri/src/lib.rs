@@ -1600,6 +1600,7 @@ pub fn run() {
             commands::set_codex_aggregation_sources,
             commands::get_codex_aggregation_source_models,
             commands::set_codex_aggregation_model_excludes,
+            commands::refresh_codex_official_catalog,
             commands::get_proxy_status,
             commands::get_proxy_config,
             commands::update_proxy_config,

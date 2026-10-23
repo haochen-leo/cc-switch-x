@@ -16,6 +16,9 @@ pub const CODEX_AGGREGATE_SOURCE_PROVIDERS_SETTING: &str = "codex_aggregate_sour
 pub const CODEX_AGGREGATE_UPSTREAM_MODEL_KEY: &str = "codexAggregateUpstreamModel";
 pub const CODEX_AGGREGATE_MODELS_CACHE_HASH_SETTING: &str = "codex_aggregate_models_cache_hash";
 const CODEX_OFFICIAL_MODELS_CACHE_FILENAME: &str = "codex-official-models-cache.json";
+/// 最近一次官方模型目录在线刷新结果（启动或手动触发），透传到多模型面板。
+pub const CODEX_AGGREGATE_OFFICIAL_CATALOG_REFRESH_SETTING: &str =
+    "codex_aggregate_official_catalog_refresh";
 /// 模型级过滤（排除列表）：{ 供应商ID: [排除的上游模型ID...] }。
 /// 采用排除而非白名单：默认全收，供应商后续新增的模型自动进入目录，不会被静默漏掉。
 pub const CODEX_AGGREGATE_MODEL_EXCLUDES_SETTING: &str = "codex_aggregate_model_excludes";
@@ -58,6 +61,45 @@ pub struct CodexAggregationSourceModel {
     pub display_name: String,
 }
 
+/// 官方模型目录最近一次在线刷新结果（启动或手动触发）。
+/// 持久化在 settings 表，随聚合状态透传给面板，用于区分
+/// "刷新成功且更新"、"刷新成功但目录无变化"、"刷新失败"三种情况。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexOfficialCatalogRefresh {
+    pub at: String,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub model_count: usize,
+}
+
+/// 记录一次官方目录在线刷新结果。写设置失败时静默跳过（不影响刷新本身）。
+fn record_official_catalog_refresh(
+    db: &Database,
+    outcome: &str,
+    detail: Option<String>,
+    model_count: usize,
+) {
+    let info = CodexOfficialCatalogRefresh {
+        at: chrono::Local::now().to_rfc3339(),
+        outcome: outcome.to_string(),
+        detail,
+        model_count,
+    };
+    if let Ok(raw) = serde_json::to_string(&info) {
+        let _ = db.set_setting(CODEX_AGGREGATE_OFFICIAL_CATALOG_REFRESH_SETTING, &raw);
+    }
+}
+
+/// 读取最近一次官方目录在线刷新结果（无记录或格式错误时返回 None）。
+pub fn read_official_catalog_refresh(db: &Database) -> Option<CodexOfficialCatalogRefresh> {
+    db.get_setting(CODEX_AGGREGATE_OFFICIAL_CATALOG_REFRESH_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
 /// 单家来源供应商的可过滤模型列表（模型过滤选择器用）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +125,8 @@ pub struct CodexAggregationStatus {
     /// 各来源供应商当前排除的模型（上游模型 ID），键为供应商 ID。
     pub model_excludes: HashMap<String, Vec<String>>,
     pub warnings: Vec<String>,
+    /// 最近一次官方目录在线刷新结果（启动或手动），无记录时为 None。
+    pub official_catalog_refresh: Option<CodexOfficialCatalogRefresh>,
 }
 
 impl CodexAggregationStatus {
@@ -96,6 +140,7 @@ impl CodexAggregationStatus {
             source_providers: Vec::new(),
             model_excludes: HashMap::new(),
             warnings: Vec::new(),
+            official_catalog_refresh: None,
         }
     }
 }
@@ -302,20 +347,13 @@ fn should_refresh_official_catalog(status: &CodexAggregationStatus) -> bool {
             .any(|provider_id| provider_id == CODEX_OFFICIAL_PROVIDER_ID)
 }
 
-/// 多模型聚合启动时刷新一次 OpenAI Official 目录。
-///
-/// 只更新 CC Switch 自己的缓存，不写 Codex 私有的 `models_cache.json`；非聚合模式
-/// 继续由 Codex 自己的在线刷新 worker 维护模型目录。
-pub async fn refresh_official_catalog_on_startup(
-    proxy_service: &crate::services::ProxyService,
+/// 在线拉取 OpenAI Official 模型目录并写入 CC Switch 缓存。
+/// 返回 (缓存是否有变化, 目录模型数)。只更新 CC Switch 自己的缓存，
+/// 不写 Codex 私有的 `models_cache.json`。
+async fn fetch_and_save_official_catalog(
     db: &Database,
     oauth_manager: &crate::proxy::providers::codex_oauth_auth::CodexOAuthManager,
-) -> Result<bool, String> {
-    let status = proxy_service.get_codex_aggregation_status().await?;
-    if !should_refresh_official_catalog(&status) {
-        return Ok(false);
-    }
-
+) -> Result<(bool, usize), String> {
     let official = db
         .get_provider_by_id(CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex.as_str())
         .map_err(|error| format!("读取 OpenAI Official 供应商失败: {error}"))?
@@ -331,7 +369,89 @@ pub async fn refresh_official_catalog_on_startup(
     )
     .await?;
 
-    save_official_catalog_cache(client_version, catalog)
+    let model_count = catalog.models.len();
+    let updated = save_official_catalog_cache(client_version, catalog)?;
+    Ok((updated, model_count))
+}
+
+/// 多模型聚合启动时刷新一次 OpenAI Official 目录。
+///
+/// 只更新 CC Switch 自己的缓存，不写 Codex 私有的 `models_cache.json`；非聚合模式
+/// 继续由 Codex 自己的在线刷新 worker 维护模型目录。刷新结果（更新/无变化/失败）
+/// 记录到设置表，随聚合状态透传给面板。
+pub async fn refresh_official_catalog_on_startup(
+    proxy_service: &crate::services::ProxyService,
+    db: &Database,
+    oauth_manager: &crate::proxy::providers::codex_oauth_auth::CodexOAuthManager,
+) -> Result<bool, String> {
+    let status = proxy_service.get_codex_aggregation_status().await?;
+    if !should_refresh_official_catalog(&status) {
+        return Ok(false);
+    }
+
+    match fetch_and_save_official_catalog(db, oauth_manager).await {
+        Ok((updated, model_count)) => {
+            record_official_catalog_refresh(
+                db,
+                if updated { "updated" } else { "unchanged" },
+                None,
+                model_count,
+            );
+            Ok(updated)
+        }
+        Err(error) => {
+            record_official_catalog_refresh(db, "failed", Some(error.clone()), 0);
+            Err(error)
+        }
+    }
+}
+
+/// 手动刷新 OpenAI Official 目录的结果（模型过滤选择器的刷新按钮）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexOfficialCatalogRefreshResult {
+    pub updated: bool,
+    pub model_count: usize,
+    pub status: CodexAggregationStatus,
+}
+
+/// 手动刷新 OpenAI Official 目录：不要求聚合已启用；缓存有变化且聚合已启用时
+/// 自动重建聚合目录，返回最新聚合状态供前端回填。
+pub async fn refresh_official_catalog_manual(
+    proxy_service: &crate::services::ProxyService,
+    db: &Database,
+    oauth_manager: &crate::proxy::providers::codex_oauth_auth::CodexOAuthManager,
+) -> Result<CodexOfficialCatalogRefreshResult, String> {
+    let (updated, model_count) = match fetch_and_save_official_catalog(db, oauth_manager).await {
+        Ok((updated, model_count)) => {
+            record_official_catalog_refresh(
+                db,
+                if updated { "updated" } else { "unchanged" },
+                None,
+                model_count,
+            );
+            (updated, model_count)
+        }
+        Err(error) => {
+            record_official_catalog_refresh(db, "failed", Some(error.clone()), 0);
+            return Err(error);
+        }
+    };
+
+    let status = if updated {
+        proxy_service.refresh_codex_aggregation_if_enabled().await?
+    } else {
+        None
+    };
+    let status = match status {
+        Some(status) => status,
+        None => proxy_service.get_codex_aggregation_status().await?,
+    };
+    Ok(CodexOfficialCatalogRefreshResult {
+        updated,
+        model_count,
+        status,
+    })
 }
 
 pub fn normalize_codex_aggregation_source_ids(

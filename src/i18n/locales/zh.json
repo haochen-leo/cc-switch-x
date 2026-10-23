@@ -2972,7 +2972,14 @@
       "modelFilterLoading": "模型加载中…",
       "modelFilterFailed": "模型列表加载失败：{{error}}",
       "modelFilterEmpty": "该供应商暂无可过滤的模型",
-      "modelExcludesUpdateFailed": "更新模型过滤失败：{{error}}"
+      "modelExcludesUpdateFailed": "更新模型过滤失败：{{error}}",
+      "refreshOfficialCatalog": "刷新官方模型",
+      "refreshOfficialCatalogUpdated": "官方模型目录已更新（{{modelCount}} 个模型）",
+      "refreshOfficialCatalogUnchanged": "官方模型目录无变化（{{modelCount}} 个模型）",
+      "refreshOfficialCatalogFailed": "刷新官方模型目录失败：{{error}}",
+      "officialCatalogRefreshUpdated": "官方目录 {{time}} 已更新（{{modelCount}} 个模型）",
+      "officialCatalogRefreshUnchanged": "官方目录 {{time}} 刷新，无变化（{{modelCount}} 个模型）",
+      "officialCatalogRefreshFailed": "官方目录刷新失败：{{detail}}"
     },
     "takeover": {
       "ariaLabel": "{{appLabel}} 本地路由",

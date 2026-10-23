@@ -2972,7 +2972,14 @@
       "modelFilterLoading": "Loading models…",
       "modelFilterFailed": "Failed to load model list: {{error}}",
       "modelFilterEmpty": "No filterable models for this provider",
-      "modelExcludesUpdateFailed": "Failed to update model filter: {{error}}"
+      "modelExcludesUpdateFailed": "Failed to update model filter: {{error}}",
+      "refreshOfficialCatalog": "Refresh official models",
+      "refreshOfficialCatalogUpdated": "Official model catalog updated ({{modelCount}} models)",
+      "refreshOfficialCatalogUnchanged": "Official model catalog unchanged ({{modelCount}} models)",
+      "refreshOfficialCatalogFailed": "Failed to refresh official model catalog: {{error}}",
+      "officialCatalogRefreshUpdated": "Official catalog updated at {{time}} ({{modelCount}} models)",
+      "officialCatalogRefreshUnchanged": "Official catalog refreshed at {{time}}, unchanged ({{modelCount}} models)",
+      "officialCatalogRefreshFailed": "Official catalog refresh failed: {{detail}}"
     },
     "takeover": {
       "ariaLabel": "{{appLabel}} local routing",
