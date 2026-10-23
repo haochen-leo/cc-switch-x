@@ -296,19 +296,7 @@ pub fn codex_anthropic_thinking_policy(
         }
     }
 
-    let base_url = provider
-        .settings_config
-        .get("base_url")
-        .or_else(|| provider.settings_config.get("baseURL"))
-        .and_then(|v| v.as_str())
-        .map(ToString::to_string)
-        .or_else(|| {
-            provider
-                .settings_config
-                .get("config")
-                .and_then(|v| v.as_str())
-                .and_then(extract_codex_base_url_from_toml)
-        });
+    let base_url = codex_provider_base_url(provider);
     let host = base_url
         .as_deref()
         .and_then(|value| url::Url::parse(value).ok())
@@ -326,6 +314,94 @@ pub fn codex_anthropic_thinking_policy(
         // gate would silently drop thinking, which is a worse failure mode than
         // a loud 400 on a misclassified signature-verifying relay.
         AnthropicThinkingPolicy::Lenient
+    }
+}
+
+fn codex_provider_base_url(provider: &Provider) -> Option<String> {
+    provider
+        .settings_config
+        .get("base_url")
+        .or_else(|| provider.settings_config.get("baseURL"))
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("config")
+                .and_then(|value| value.as_str())
+                .and_then(extract_codex_base_url_from_toml)
+        })
+}
+
+/// Whether this Codex provider targets Alibaba Cloud Model Studio (Bailian).
+///
+/// Model Studio uses both the legacy `dashscope` hosts and workspace-scoped
+/// `*.maas.aliyuncs.com` hosts. Provider names remain a fallback for manually
+/// imported cards whose endpoint lives in a custom wrapper.
+pub(crate) fn is_bailian_provider(provider: &Provider) -> bool {
+    let host = codex_provider_base_url(provider)
+        .as_deref()
+        .and_then(|value| url::Url::parse(value).ok())
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    if host == "dashscope.aliyuncs.com"
+        || host == "dashscope-intl.aliyuncs.com"
+        || host == "maas.aliyuncs.com"
+        || host.ends_with(".maas.aliyuncs.com")
+    {
+        return true;
+    }
+
+    let name = provider.name.to_ascii_lowercase();
+    name.contains("dashscope") || name.contains("bailian") || name.contains("百炼")
+}
+
+/// Normalize Codex's top-effort aliases to the Bailian top-tier sentinel.
+///
+/// Bailian resolves `max` per model: models with a native `max` use it
+/// directly, while models such as qwen3.8 alias it back to their own highest
+/// level (`xhigh`). Keeping this at the outbound boundary makes Chat,
+/// Responses, and Anthropic behave the same without changing lower levels.
+pub(crate) fn normalize_bailian_top_effort(body: &mut JsonValue) -> bool {
+    let mut changed = false;
+
+    let normalize_reasoning_effort = body
+        .get("reasoning_effort")
+        .and_then(JsonValue::as_str)
+        .and_then(normalize_top_effort_value)
+        .is_some();
+    if normalize_reasoning_effort {
+        body["reasoning_effort"] = JsonValue::String("max".to_string());
+        changed = true;
+    }
+
+    let normalize_reasoning = body
+        .pointer("/reasoning/effort")
+        .and_then(JsonValue::as_str)
+        .and_then(normalize_top_effort_value)
+        .is_some();
+    if normalize_reasoning {
+        body["reasoning"]["effort"] = JsonValue::String("max".to_string());
+        changed = true;
+    }
+
+    let normalize_output_config = body
+        .pointer("/output_config/effort")
+        .and_then(JsonValue::as_str)
+        .and_then(normalize_top_effort_value)
+        .is_some();
+    if normalize_output_config {
+        body["output_config"]["effort"] = JsonValue::String("max".to_string());
+        changed = true;
+    }
+
+    changed
+}
+
+fn normalize_top_effort_value(effort: &str) -> Option<&'static str> {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        "xhigh" | "ultra" => Some("max"),
+        _ => None,
     }
 }
 
@@ -1408,6 +1484,60 @@ mod tests {
             codex_anthropic_thinking_policy(&overridden),
             AnthropicThinkingPolicy::Strict
         );
+    }
+
+    #[test]
+    fn bailian_provider_detection_uses_endpoint_and_name_fallback() {
+        let dashscope = create_provider(json!({
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        }));
+        assert!(is_bailian_provider(&dashscope));
+
+        let workspace = create_provider(json!({
+            "base_url": "https://ws-123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        }));
+        assert!(is_bailian_provider(&workspace));
+
+        let mut named = create_provider(json!({}));
+        named.name = "百炼备用".to_string();
+        assert!(is_bailian_provider(&named));
+
+        let other = create_provider(json!({
+            "base_url": "https://api.openai.com/v1"
+        }));
+        assert!(!is_bailian_provider(&other));
+    }
+
+    #[test]
+    fn bailian_top_effort_normalization_covers_each_protocol_shape() {
+        let mut chat = json!({ "reasoning_effort": "xhigh" });
+        assert!(normalize_bailian_top_effort(&mut chat));
+        assert_eq!(chat["reasoning_effort"], "max");
+
+        let mut responses = json!({ "reasoning": { "effort": "ultra" } });
+        assert!(normalize_bailian_top_effort(&mut responses));
+        assert_eq!(responses["reasoning"]["effort"], "max");
+
+        let mut anthropic = json!({ "output_config": { "effort": "xhigh" } });
+        assert!(normalize_bailian_top_effort(&mut anthropic));
+        assert_eq!(anthropic["output_config"]["effort"], "max");
+
+        let mut already_max = json!({
+            "reasoning_effort": "max",
+            "reasoning": { "effort": "max" },
+            "output_config": { "effort": "max" }
+        });
+        assert!(!normalize_bailian_top_effort(&mut already_max));
+
+        let mut lower_levels = json!({
+            "reasoning_effort": "medium",
+            "reasoning": { "effort": "high" },
+            "output_config": { "effort": "low" }
+        });
+        assert!(!normalize_bailian_top_effort(&mut lower_levels));
+        assert_eq!(lower_levels["reasoning_effort"], "medium");
+        assert_eq!(lower_levels["reasoning"]["effort"], "high");
+        assert_eq!(lower_levels["output_config"]["effort"], "low");
     }
 
     #[test]

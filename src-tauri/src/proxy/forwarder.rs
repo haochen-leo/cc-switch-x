@@ -1963,6 +1963,19 @@ impl RequestForwarder {
             codex_responses_transform = Some(finalized.context);
         }
 
+        // Bailian resolves `max` to each model's own highest level. Normalize
+        // Codex's top-effort aliases once at the outbound boundary so Chat,
+        // Responses, and Anthropic all reach that top tier consistently.
+        if matches!(app_type, AppType::Codex)
+            && super::providers::is_bailian_provider(provider)
+            && super::providers::normalize_bailian_top_effort(&mut filtered_body)
+        {
+            log::debug!(
+                "[Codex] Normalized Bailian top reasoning effort to max (provider={})",
+                provider.id
+            );
+        }
+
         // 出站 body 定稿后刷新真值（覆盖 Codex chat 上游模型覆写、转换层模型改写）
         if let Some(m) = filtered_body
             .get("model")

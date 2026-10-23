@@ -423,7 +423,7 @@
         "codexUserRoleContextNormalizationDescription": "マーク付きの Codex 実行時コンテキストを user メッセージから assistant 出力へ移し、上流が新しいユーザー要求として扱わないようにします",
         "mediaGroup": "画像入力整流",
         "mediaGroupDescription": "対象モデルが画像入力に対応していない場合のフォールバック、事前判定、OCR 変換を処理します",
-        "mediaHeuristicList": "画像入力に対応しない内蔵モデル一覧: GLM、DeepSeek、Qwen Coder、MiniMax、LongCat、KAT、MiMo、Step など",
+        "mediaHeuristicList": "内蔵の完全一致モデル ID のみを対象とし、ベンダー名や接頭辞では一致しません。一致しない場合は画像を保持します。例: deepseek-v4-flash、deepseek-v4-flash-0731、qwen3-coder-plus、glm-5.3、minimax-m2.7。完全な一覧は各バージョンに同梱されます",
         "mediaOcrFallback": "画像 OCR 事前認識",
         "mediaOcrFallbackDescription": "画像に対応していないモデルでは、設定済みの画像モデルで解析してから対象モデルへ送信します",
         "mediaOcrProvider": "OCR 対象プロバイダー",

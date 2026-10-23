@@ -423,7 +423,7 @@
         "codexUserRoleContextNormalizationDescription": "将 Codex 带标记的运行时上下文从 user 消息修正为 assistant 输出，避免上游当成新的用户请求",
         "mediaGroup": "图片输入整流",
         "mediaGroupDescription": "处理目标模型不支持图片输入时的降级、预判和 OCR 前置转换",
-        "mediaHeuristicList": "内置不支持图片模型列表：GLM、DeepSeek、Qwen Coder、MiniMax、LongCat、KAT、MiMo、Step 等",
+        "mediaHeuristicList": "仅匹配内置的精确模型 ID，不做厂商或前缀匹配；未命中时保留图片。示例：deepseek-v4-flash、deepseek-v4-flash-0731、qwen3-coder-plus、glm-5.3、minimax-m2.7；完整名单随版本内置",
         "mediaOcrFallback": "图片 OCR 前置识别",
         "mediaOcrFallbackDescription": "不支持图片的模型，使用预置的图片模型进行解析后，发送给模型",
         "mediaOcrProvider": "OCR 目标供应商",

@@ -423,7 +423,7 @@
         "codexUserRoleContextNormalizationDescription": "Moves marked Codex runtime context from user messages to assistant output so upstreams do not treat it as a new user request",
         "mediaGroup": "Image Input Rectification",
         "mediaGroupDescription": "Handles fallback, preflight detection, and OCR conversion when the target model does not support image input",
-        "mediaHeuristicList": "Built-in models that do not support image input: GLM, DeepSeek, Qwen Coder, MiniMax, LongCat, KAT, MiMo, Step, and others",
+        "mediaHeuristicList": "Matches built-in exact model IDs only; no vendor or prefix matching. Images are kept when no ID matches. Examples: deepseek-v4-flash, deepseek-v4-flash-0731, qwen3-coder-plus, glm-5.3, minimax-m2.7; the full list ships with each version",
         "mediaOcrFallback": "Image OCR Preflight Recognition",
         "mediaOcrFallbackDescription": "For models that do not support images, parse the image with the configured image model before sending it to the target model",
         "mediaOcrProvider": "OCR Target Provider",
