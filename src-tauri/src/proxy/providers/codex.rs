@@ -329,18 +329,14 @@ pub fn codex_anthropic_thinking_policy(
     }
 }
 
-/// Whether a native-Responses Codex upstream needs Codex `namespace`/plugin
-/// tool declarations flattened before forwarding, plus xAI schema sanitization.
+/// Whether a native-Responses Codex upstream needs standard `namespace` tools
+/// flattened for xAI's stricter Responses implementation.
 ///
-/// Codex 0.142+ emits ChatGPT-backend-private `{"type":"namespace",…}` tool
-/// shapes, and the client enables them for every custom provider. Every
-/// third-party native gateway therefore gets the generic namespace flattening
-/// pass unless it speaks OpenAI's private contract.
-pub fn provider_needs_responses_namespace_flatten(
-    provider: &Provider,
-    upstream_model: Option<&str>,
-) -> bool {
-    !codex_native_responses_uses_openai_private_contract(provider, upstream_model)
+/// `namespace` is part of the Responses tool contract and must pass through for
+/// normal native Responses providers. Keep the compatibility bridge scoped to
+/// managed xAI OAuth and API-key providers whose live upstream is `api.x.ai`.
+pub fn provider_needs_responses_namespace_flatten(provider: &Provider) -> bool {
+    provider.is_xai_oauth() || provider_is_xai_native_responses(provider)
 }
 
 /// Strict xAI request sanitization applies to managed xAI OAuth and API-key
@@ -2561,29 +2557,27 @@ wire_api = "responses"
     }
 
     #[test]
-    fn namespace_flatten_gate_fires_for_every_third_party_native_upstream() {
+    fn namespace_flatten_gate_fires_only_for_xai_native_upstreams() {
         // xAI OAuth: strict native gateway needs namespace flattening.
         let mut xai = create_provider(json!({ "auth": {}, "config": "" }));
         xai.meta = Some(crate::provider::ProviderMeta {
             provider_type: Some("xai_oauth".to_string()),
             ..Default::default()
         });
-        assert!(provider_needs_responses_namespace_flatten(&xai, None));
+        assert!(provider_needs_responses_namespace_flatten(&xai));
 
-        // A plain third-party API-key Codex provider is flattened too: the
-        // client enables `namespace_tools` for every custom provider, and a
-        // lenient gateway would silently drop the declarations.
+        // Standard native Responses providers receive namespace tools unchanged.
         let plain = create_provider(json!({
             "auth": { "OPENAI_API_KEY": "sk-x" },
             "config": "base_url = \"https://dashscope.aliyuncs.com/compatible-mode/v1\"\nwire_api = \"responses\""
         }));
-        assert!(provider_needs_responses_namespace_flatten(&plain, None));
+        assert!(!provider_needs_responses_namespace_flatten(&plain));
 
         // The official ChatGPT backend speaks the namespace shape natively.
         let mut official = create_provider(json!({ "auth": {}, "config": "" }));
         official.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
         official.category = Some("official".to_string());
-        assert!(!provider_needs_responses_namespace_flatten(&official, None));
+        assert!(!provider_needs_responses_namespace_flatten(&official));
 
         // The strict-field sanitizer stays xAI-only.
         assert!(provider_needs_xai_responses_sanitize(&xai));
@@ -2602,10 +2596,7 @@ wire_api = "responses"
             &provider,
             Some("gpt-5.6-sol/token-free")
         ));
-        assert!(!provider_needs_responses_namespace_flatten(
-            &provider,
-            Some("gpt-5.6-sol/token-free")
-        ));
+        assert!(!provider_needs_responses_namespace_flatten(&provider));
         assert!(!provider_needs_responses_apply_patch_bridge(
             &provider,
             Some("gpt-5.6-sol/token-free")
@@ -2697,7 +2688,7 @@ base_url = "https://api.x.ai/v1"
 wire_api = "responses"
 "#
         }));
-        assert!(provider_needs_responses_namespace_flatten(&grok_key, None));
+        assert!(provider_needs_responses_namespace_flatten(&grok_key));
         assert!(provider_needs_xai_responses_sanitize(&grok_key));
     }
 }

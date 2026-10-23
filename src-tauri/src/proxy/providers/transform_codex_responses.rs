@@ -82,7 +82,7 @@ pub(crate) fn prepare_request(
         ResponsesDialect::ThirdPartyStandard
     };
     let policy = TransformPolicy {
-        namespace_flatten: provider_needs_responses_namespace_flatten(provider, upstream_model),
+        namespace_flatten: provider_needs_responses_namespace_flatten(provider),
         apply_patch_bridge: provider_needs_responses_apply_patch_bridge(provider, upstream_model),
         tool_search_bridge: provider_needs_responses_tool_search_bridge(provider, upstream_model),
         xai_sanitize,
@@ -140,13 +140,13 @@ fn apply_request_transforms(
     body: &mut Value,
     context: &mut TransformContext,
 ) -> Result<(), ProxyError> {
-    extend_restore_map(body, &mut context.restore_map);
+    extend_restore_map(body, context);
 
     if context.policy.xai_sanitize {
         transform_codex_responses_xai_sanitize::promote_additional_tools(body);
         // Promotion can expose namespace declarations that were nested in the
         // per-turn carrier. Capture them before flattening.
-        extend_restore_map(body, &mut context.restore_map);
+        extend_restore_map(body, context);
         transform_codex_responses_xai_sanitize::rewrite_xai_unknown_request_model(
             body,
             context.upstream_model.as_deref().unwrap_or_default(),
@@ -177,12 +177,26 @@ fn apply_request_transforms(
     Ok(())
 }
 
-fn extend_restore_map(body: &Value, restore_map: &mut HashMap<String, NamespacedName>) {
-    restore_map.extend(transform_codex_responses_namespace::namespace_restore_map(
-        body,
-    ));
-    restore_map
-        .extend(transform_codex_responses_toolsearch::tool_search_namespace_restore_map(body));
+fn extend_restore_map(body: &Value, context: &mut TransformContext) {
+    // Namespace calls only need restoring when this provider actually flattened
+    // them. Native Responses providers keep their `{name, namespace}` identity.
+    // The tool-search bridge still owns a separate flat-name restore map for
+    // tools it materializes from replayed discovery output.
+    //
+    // This helper is called before and after xAI carrier promotion, so extending
+    // an existing map is intentional and idempotent.
+    if context.policy.namespace_flatten {
+        context
+            .restore_map
+            .extend(transform_codex_responses_namespace::namespace_restore_map(
+                body,
+            ));
+    }
+    if context.policy.tool_search_bridge {
+        context
+            .restore_map
+            .extend(transform_codex_responses_toolsearch::tool_search_namespace_restore_map(body));
+    }
 }
 
 pub(crate) fn transform_response(body: &mut Value, context: &TransformContext) {
@@ -455,6 +469,58 @@ mod tests {
                 "required": ["cmd"]
             })
         );
+    }
+
+    #[test]
+    fn dashscope_native_responses_preserves_namespace_tools() {
+        let body = json!({
+            "model": "deepseek-v4.1-flash-1017",
+            "input": [{
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [{
+                    "type": "namespace",
+                    "name": "agents",
+                    "description": "Agent tools",
+                    "tools": [{
+                        "type": "function",
+                        "name": "spawn_agent",
+                        "parameters": {"type": "object", "properties": {}}
+                    }]
+                }]
+            }, {"role": "user", "content": "hi"}],
+            "tools": [{
+                "type": "namespace",
+                "name": "agents",
+                "description": "Agent tools",
+                "tools": [{
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "parameters": {"type": "object", "properties": {}}
+                }]
+            }]
+        });
+        let prepared = prepare_request(
+            body,
+            &provider(
+                "dashscope-native",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            ),
+            Some("deepseek-v4.1-flash-1017"),
+        )
+        .unwrap();
+
+        assert_eq!(prepared.body["tools"][0]["type"], "namespace");
+        assert_eq!(prepared.body["tools"][0]["name"], "agents");
+        assert_eq!(prepared.body["tools"][0]["tools"][0]["name"], "spawn_agent");
+        assert_eq!(prepared.body["input"][0]["type"], "additional_tools");
+        assert_eq!(prepared.body["input"][0]["tools"][0]["type"], "namespace");
+        assert!(prepared.context.restore_map.is_empty());
+
+        let finalized = finalize_request(prepared.context, prepared.body).unwrap();
+        assert_eq!(finalized.body["tools"][0]["type"], "namespace");
+        assert_eq!(finalized.body["tools"][0]["name"], "agents");
+        assert_eq!(finalized.body["input"][0]["tools"][0]["type"], "namespace");
     }
 
     #[test]

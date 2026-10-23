@@ -1,14 +1,11 @@
-//! Codex `namespace` tool flattening for native Responses upstreams.
+//! Codex `namespace` tool flattening for xAI's native Responses upstream.
 //!
-//! Codex 0.142+ declares its plugin/MCP tools with a private Responses
-//! extension shape — `{"type":"namespace","name":"mcp__x__","tools":[…]}` plus
-//! `tool_search` — that only the OpenAI ChatGPT backend understands. Strict
-//! third-party gateways (e.g. xAI's `api.x.ai/v1/responses`) reject it with
-//! `422 unknown variant "namespace"`; lenient ones silently drop the
-//! declarations and the tools become invisible. cc-switch's Chat/Anthropic
-//! transforms already unwrap these, but the *native* Responses passthrough
-//! would send them verbatim, so every non-official native upstream is
-//! flattened (see [`super::codex::provider_needs_responses_namespace_flatten`]).
+//! Codex 0.142+ groups plugin/MCP tools with the Responses
+//! `{"type":"namespace","name":"mcp__x__","tools":[…]}` shape. `namespace`
+//! is part of the Responses tool contract and is passed through for normal
+//! native Responses providers. xAI's stricter implementation still rejects it,
+//! so this compatibility layer is gated to xAI by
+//! [`super::codex::provider_needs_responses_namespace_flatten`].
 //!
 //! This module implements the request-side flatten + response-side restore for
 //! that native path, mirroring the proven design of sub2api
@@ -156,20 +153,27 @@ pub(crate) fn collect_tool_search_output_namespace_restore(
 /// collapse to the same flat name — the upstream could not disambiguate them,
 /// so failing loudly beats silently dropping a tool (matches sub2api).
 pub(crate) fn flatten_request_namespaces(body: &mut Value) -> Result<bool, ProxyError> {
-    let Some(tools) = body.get("tools").and_then(Value::as_array) else {
-        return Ok(false);
-    };
-    if !tools
+    let tools = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut namespace_tools: Vec<Value> = tools
         .iter()
-        .any(|tool| tool.get("type").and_then(Value::as_str) == Some("namespace"))
-    {
+        .filter(|tool| tool.get("type").and_then(Value::as_str) == Some("namespace"))
+        .cloned()
+        .collect();
+    if let Some(input) = body.get("input") {
+        collect_additional_tools_namespaces(input, &mut namespace_tools);
+    }
+    if namespace_tools.is_empty() {
         return Ok(false);
     }
 
     // Names already occupied by top-level function/custom tools; a namespace
     // child flattening onto one of these is an unrecoverable collision.
     let mut top_level = std::collections::HashSet::new();
-    for tool in tools {
+    for tool in &tools {
         let typ = tool.get("type").and_then(Value::as_str).unwrap_or("");
         if typ == "function" || typ == "custom" {
             if let Some(name) = tool.get("name").and_then(Value::as_str) {
@@ -183,10 +187,7 @@ pub(crate) fn flatten_request_namespaces(body: &mut Value) -> Result<bool, Proxy
 
     // Validate flat-name uniqueness before mutating anything.
     let mut owners: HashMap<String, NamespacedName> = HashMap::new();
-    for tool in tools {
-        if tool.get("type").and_then(Value::as_str) != Some("namespace") {
-            continue;
-        }
+    for tool in &namespace_tools {
         let Some(namespace) = tool.get("name").and_then(Value::as_str).map(str::trim) else {
             continue;
         };
@@ -229,12 +230,92 @@ pub(crate) fn flatten_request_namespaces(body: &mut Value) -> Result<bool, Proxy
     }
 
     // Rebuild the tools array with namespace children lifted to top level.
-    let tools = body
-        .get("tools")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut flattened: Vec<Value> = Vec::with_capacity(tools.len());
+    if tools
+        .iter()
+        .any(|tool| tool.get("type").and_then(Value::as_str) == Some("namespace"))
+    {
+        body["tools"] = Value::Array(flatten_namespace_tools_array(tools));
+    }
+
+    // Flatten namespace declarations carried by replayed `additional_tools`
+    // items too. Leaving them nested makes an upstream flatten them a second
+    // time, where they collide with the already-flattened top-level functions.
+    if let Some(input) = body.get_mut("input") {
+        flatten_additional_tools_namespaces(input);
+        rewrite_namespace_qualified_calls(input, &owners);
+    }
+
+    // A namespace-typed tool_choice cannot survive flattening: degrade to auto.
+    if let Some(choice) = body.get_mut("tool_choice") {
+        if choice.get("type").and_then(Value::as_str) == Some("namespace") {
+            *choice = json!("auto");
+        } else {
+            rewrite_namespace_qualified_call(choice, &owners);
+        }
+    }
+
+    Ok(true)
+}
+
+fn collect_additional_tools_namespaces(value: &Value, namespaces: &mut Vec<Value>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_additional_tools_namespaces(item, namespaces);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("type").and_then(Value::as_str) == Some("additional_tools") {
+                if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
+                    namespaces.extend(
+                        tools
+                            .iter()
+                            .filter(|tool| {
+                                tool.get("type").and_then(Value::as_str) == Some("namespace")
+                            })
+                            .cloned(),
+                    );
+                }
+            }
+            for child in obj.values() {
+                collect_additional_tools_namespaces(child, namespaces);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn flatten_additional_tools_namespaces(value: &mut Value) -> bool {
+    let mut changed = false;
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                changed |= flatten_additional_tools_namespaces(item);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("type").and_then(Value::as_str) == Some("additional_tools") {
+                if let Some(tools) = obj.get_mut("tools").and_then(Value::as_array_mut) {
+                    if tools
+                        .iter()
+                        .any(|tool| tool.get("type").and_then(Value::as_str) == Some("namespace"))
+                    {
+                        *tools = flatten_namespace_tools_array(std::mem::take(tools));
+                        changed = true;
+                    }
+                }
+            }
+            for child in obj.values_mut() {
+                changed |= flatten_additional_tools_namespaces(child);
+            }
+        }
+        _ => {}
+    }
+    changed
+}
+
+fn flatten_namespace_tools_array(tools: Vec<Value>) -> Vec<Value> {
+    let mut flattened = Vec::with_capacity(tools.len());
     let mut seen_flat = std::collections::HashSet::new();
     for tool in tools {
         if tool.get("type").and_then(Value::as_str) != Some("namespace") {
@@ -265,23 +346,7 @@ pub(crate) fn flatten_request_namespaces(body: &mut Value) -> Result<bool, Proxy
             flattened.push(lifted);
         }
     }
-    body["tools"] = json!(flattened);
-
-    // Rewrite namespace-qualified function_call items in the replayed history.
-    if let Some(input) = body.get_mut("input") {
-        rewrite_namespace_qualified_calls(input, &owners);
-    }
-
-    // A namespace-typed tool_choice cannot survive flattening: degrade to auto.
-    if let Some(choice) = body.get_mut("tool_choice") {
-        if choice.get("type").and_then(Value::as_str) == Some("namespace") {
-            *choice = json!("auto");
-        } else {
-            rewrite_namespace_qualified_call(choice, &owners);
-        }
-    }
-
-    Ok(true)
+    flattened
 }
 
 /// Restore flattened `function_call` names in a full (non-streaming) Responses
@@ -600,6 +665,65 @@ mod tests {
         let entry = map.get("mcp__files____read").unwrap();
         assert_eq!(entry.namespace, "mcp__files__");
         assert_eq!(entry.name, "read");
+    }
+
+    #[test]
+    fn flatten_rewrites_duplicate_namespace_in_additional_tools() {
+        let mut body = namespace_request();
+        body["input"] = json!([{
+            "type": "additional_tools",
+            "role": "developer",
+            "tools": [{
+                "type": "namespace",
+                "name": "mcp__files__",
+                "tools": [
+                    { "type": "function", "name": "read", "description": "read a file", "parameters": {} },
+                    { "type": "function", "name": "write", "parameters": {} }
+                ]
+            }]
+        }]);
+
+        assert!(flatten_request_namespaces(&mut body).unwrap());
+        let top_level_names: Vec<&str> = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect();
+        assert!(top_level_names.contains(&"mcp__files____read"));
+        assert!(top_level_names.contains(&"mcp__files____write"));
+
+        let carrier_tools = body["input"][0]["tools"].as_array().unwrap();
+        assert!(carrier_tools.iter().all(|tool| tool["type"] == "function"));
+        assert_eq!(carrier_tools[0]["name"], "mcp__files____read");
+        assert_eq!(carrier_tools[1]["name"], "mcp__files____write");
+
+        // The second prepare/finalize pass must not flatten or reject the body again.
+        assert!(!flatten_request_namespaces(&mut body).unwrap());
+    }
+
+    #[test]
+    fn flatten_handles_namespace_declared_only_in_additional_tools() {
+        let mut body = json!({
+            "tools": [{ "type": "function", "name": "plain", "parameters": {} }],
+            "input": [{
+                "type": "additional_tools",
+                "tools": [{
+                    "type": "namespace",
+                    "name": "agents",
+                    "tools": [{
+                        "type": "function",
+                        "name": "spawn_agent",
+                        "parameters": {}
+                    }]
+                }]
+            }]
+        });
+
+        assert!(flatten_request_namespaces(&mut body).unwrap());
+        assert_eq!(body["tools"][0]["name"], "plain");
+        assert_eq!(body["input"][0]["tools"][0]["name"], "agents__spawn_agent");
+        assert_eq!(body["input"][0]["tools"][0]["type"], "function");
     }
 
     #[test]
