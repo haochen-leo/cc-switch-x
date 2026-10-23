@@ -48,9 +48,7 @@ fn openai_stream_usage_event_filter(data: &str) -> bool {
 }
 
 pub fn codex_stream_usage_event_filter(data: &str) -> bool {
-    data.contains("\"response.completed\"")
-        || data.contains("\"response.output_text.delta\"")
-        || data.contains("\"usage\"")
+    data.contains("\"response.completed\"") || data.contains("\"usage\"")
 }
 
 #[cfg(test)]
@@ -58,9 +56,12 @@ mod tests {
     use super::codex_stream_usage_event_filter;
 
     #[test]
-    fn codex_stream_filter_collects_first_output_delta_and_usage_completion() {
-        assert!(codex_stream_usage_event_filter(
+    fn codex_stream_filter_collects_usage_completion_only() {
+        assert!(!codex_stream_usage_event_filter(
             r#"{"type":"response.output_text.delta","delta":"first"}"#
+        ));
+        assert!(!codex_stream_usage_event_filter(
+            r#"{"type":"response.reasoning_summary_text.delta","delta":"think"}"#
         ));
         assert!(codex_stream_usage_event_filter(
             r#"{"type":"response.completed","response":{"usage":{"output_tokens":100}}}"#

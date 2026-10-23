@@ -23,7 +23,7 @@ use serde_json::Value;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
     time::Duration,
 };
@@ -378,8 +378,7 @@ pub struct SseUsageCollector {
 
 struct SseUsageCollectorInner {
     events: Mutex<Vec<Value>>,
-    first_event_time: Mutex<Option<std::time::Instant>>,
-    first_event_set: AtomicBool,
+    first_output_time: OnceLock<std::time::Instant>,
     start_time: std::time::Instant,
     on_complete: UsageCallbackWithTiming,
     should_collect: Option<StreamUsageEventFilter>,
@@ -397,8 +396,7 @@ impl SseUsageCollector {
         Self {
             inner: Arc::new(SseUsageCollectorInner {
                 events: Mutex::new(Vec::new()),
-                first_event_time: Mutex::new(None),
-                first_event_set: AtomicBool::new(false),
+                first_output_time: OnceLock::new(),
                 start_time,
                 on_complete,
                 should_collect,
@@ -414,21 +412,21 @@ impl SseUsageCollector {
             .unwrap_or(true)
     }
 
-    /// 标记首个被收集的 SSE 事件时间，沿用 `first_token_ms` 的既有近似语义。
-    async fn mark_first_collected_event_time(&self) {
-        if self.inner.first_event_set.load(Ordering::Acquire) {
+    /// 观察一行 SSE data，记录首个实际输出事件时间。
+    ///
+    /// 首输出计时必须独立于 usage 过滤器，否则 reasoning 等未被 usage 收集的
+    /// 事件会被跳过，`first_token_ms` 就会错误地落到最终文本或完成事件上。
+    pub fn observe_data(&self, event_name: Option<&str>, data: &str) {
+        if self.inner.first_output_time.get().is_some() {
             return;
         }
-        let mut first_time = self.inner.first_event_time.lock().await;
-        if first_time.is_none() {
-            *first_time = Some(std::time::Instant::now());
-            self.inner.first_event_set.store(true, Ordering::Release);
+        if sse_data_starts_output(event_name, data) {
+            let _ = self.inner.first_output_time.set(std::time::Instant::now());
         }
     }
 
     /// 推送 SSE 事件
     pub async fn push(&self, event: Value) {
-        self.mark_first_collected_event_time().await;
         let mut events = self.inner.events.lock().await;
         events.push(event);
     }
@@ -444,13 +442,36 @@ impl SseUsageCollector {
             std::mem::take(&mut *guard)
         };
 
-        let first_token_ms = {
-            let first_time = self.inner.first_event_time.lock().await;
-            first_time.map(|t| (t - self.inner.start_time).as_millis() as u64)
-        };
+        let first_token_ms = self
+            .inner
+            .first_output_time
+            .get()
+            .map(|t| (*t - self.inner.start_time).as_millis() as u64);
 
         (self.inner.on_complete)(events, first_token_ms);
     }
+}
+
+/// 判断一行 SSE data 是否代表模型开始产生输出。
+///
+/// Responses 协议跳过仅宣告响应开始或保活的元数据事件；Chat Completions、
+/// Gemini 等没有事件名的非空分块按输出处理。reasoning、文本和工具调用都属于输出。
+fn sse_data_starts_output(event_name: Option<&str>, data: &str) -> bool {
+    let data = data.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return false;
+    }
+    let event_type = match event_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => name.to_string(),
+        None => serde_json::from_str::<Value>(data)
+            .ok()
+            .and_then(|value| value.get("type")?.as_str().map(str::to_string))
+            .unwrap_or_default(),
+    };
+    !matches!(
+        event_type.as_str(),
+        "response.created" | "response.in_progress" | "ping" | "keepalive"
+    )
 }
 
 struct SseUsageFinishGuard {
@@ -786,9 +807,15 @@ pub fn create_logged_passthrough_stream(
                         // 尝试解析并记录完整的 SSE 事件
                         while let Some(event_text) = take_sse_block(&mut buffer) {
                             if !event_text.trim().is_empty() {
+                                let event_name = event_text
+                                    .lines()
+                                    .find_map(|line| strip_sse_field(line, "event"));
                                 // 提取 data 部分；只有 usage collector 存在时才解析 JSON。
                                 for line in event_text.lines() {
                                     if let Some(data) = strip_sse_field(line, "data") {
+                                        if let Some(c) = &collector {
+                                            c.observe_data(event_name, data);
+                                        }
                                         if data.trim() != "[DONE]" {
                                             let collected = match &collector {
                                                 Some(c) if c.should_collect(data) => {
@@ -1095,41 +1122,64 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_codex_stream_usage_collector_captures_first_token_and_usage() {
-        let collector = SseUsageCollector::new(
-            std::time::Instant::now(),
-            Some(codex_stream_usage_event_filter),
-            |events: Vec<Value>, first_token_ms: Option<u64>| {
-                assert!(first_token_ms.is_some());
-                assert!(first_token_ms.unwrap() < 120);
+    #[test]
+    fn sse_data_starts_output_skips_metadata_but_accepts_reasoning() {
+        assert!(!sse_data_starts_output(
+            Some("response.created"),
+            r#"{"type":"response.created"}"#
+        ));
+        assert!(!sse_data_starts_output(
+            None,
+            r#"{"type":"response.in_progress","response":{}}"#
+        ));
+        assert!(!sse_data_starts_output(Some("ping"), r#"{"type":"ping"}"#));
+        assert!(!sse_data_starts_output(None, "[DONE]"));
+        assert!(sse_data_starts_output(
+            Some("response.reasoning_summary_text.delta"),
+            r#"{"type":"response.reasoning_summary_text.delta","delta":"think"}"#
+        ));
+        assert!(sse_data_starts_output(
+            Some("response.output_text.delta"),
+            r#"{"type":"response.output_text.delta","delta":"answer"}"#
+        ));
+    }
 
+    #[tokio::test]
+    async fn codex_first_token_tracks_reasoning_before_final_text() {
+        let start = std::time::Instant::now();
+        let recorded = Arc::new(std::sync::Mutex::new(None));
+        let recorded_in_callback = recorded.clone();
+        let collector = SseUsageCollector::new(
+            start,
+            Some(codex_stream_usage_event_filter),
+            move |events: Vec<Value>, first_token_ms: Option<u64>| {
                 let usage =
                     TokenUsage::from_codex_stream_events_auto(&events).expect("usage is parsed");
                 assert_eq!(usage.model.as_deref(), Some("gpt-model"));
                 assert_eq!(usage.input_tokens, 239672);
                 assert_eq!(usage.output_tokens, 1009);
+                assert_eq!(
+                    events.len(),
+                    1,
+                    "only the completed usage event is collected"
+                );
+                *recorded_in_callback.lock().unwrap() = Some(first_token_ms);
             },
         );
 
+        let inspection_collector = collector.clone();
         let chunks = vec![
             Bytes::from_static(
-                b"event: response.created\n",
+                b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-test\",\"model\":\"gpt-model\"}}\n\n",
             ),
             Bytes::from_static(
-                b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-test\",\"model\":\"gpt-model\"}}\n\n",
+                b"event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"think\"}\n\n",
             ),
             Bytes::from_static(
-                b"event: response.output_text.delta\n",
+                b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\n",
             ),
             Bytes::from_static(
-                b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n",
-            ),
-            Bytes::from_static(
-                b"event: response.completed\n",
-            ),
-            Bytes::from_static(
-                b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-test\",\"model\":\"gpt-model\",\"usage\":{\"input_tokens\":239672,\"output_tokens\":1009}}}\n\n",
+                b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-test\",\"model\":\"gpt-model\",\"usage\":{\"input_tokens\":239672,\"output_tokens\":1009}}}\n\n",
             ),
         ];
         let stream = create_logged_passthrough_stream(
@@ -1144,7 +1194,34 @@ mod tests {
             None,
         );
         tokio::pin!(stream);
-        while stream.next().await.transpose().unwrap().is_some() {}
+
+        assert!(stream.next().await.transpose().unwrap().is_some());
+        assert!(inspection_collector.inner.first_output_time.get().is_none());
+
+        assert!(stream.next().await.transpose().unwrap().is_some());
+        let reasoning_time = *inspection_collector
+            .inner
+            .first_output_time
+            .get()
+            .expect("reasoning output sets first token time");
+
+        assert!(stream.next().await.transpose().unwrap().is_some());
+        assert_eq!(
+            inspection_collector.inner.first_output_time.get(),
+            Some(&reasoning_time),
+            "final text must not replace the earlier reasoning time"
+        );
+
+        assert!(stream.next().await.transpose().unwrap().is_some());
+        assert!(stream.next().await.is_none());
+        assert!(
+            recorded
+                .lock()
+                .unwrap()
+                .expect("collector callback ran")
+                .is_some(),
+            "reasoning output produces first_token_ms"
+        );
     }
 
     fn insert_provider(
