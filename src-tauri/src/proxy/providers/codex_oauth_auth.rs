@@ -411,6 +411,19 @@ pub struct CodexOAuthManager {
 }
 
 impl CodexOAuthManager {
+    /// 目录缓存校验只读持久化身份，不刷新或轮换用户 token。
+    pub(crate) fn stored_catalog_identity(account_id: &str) -> Option<(String, String)> {
+        let path = crate::config::get_app_config_dir().join("codex_oauth_auth.json");
+        let store: CodexOAuthStore = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+        let account = store.accounts.get(account_id)?;
+        Some((
+            account.chatgpt_account_id.clone()?,
+            crate::codex_config::extract_codex_id_token_user_identity(
+                account.id_token.as_deref()?,
+            )?,
+        ))
+    }
+
     pub fn new(data_dir: PathBuf) -> Self {
         let storage_path = data_dir.join("codex_oauth_auth.json");
 

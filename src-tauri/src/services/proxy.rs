@@ -3700,7 +3700,7 @@ impl ProxyService {
             return Err(format!("刷新 Codex 聚合供应商失败: {error}"));
         }
 
-        record_models_cache_hash(self.db.as_ref());
+        record_models_cache_hash(self.db.as_ref(), build.official_catalog_hash.as_deref());
 
         let model_excludes =
             crate::services::codex_aggregation::codex_aggregation_all_model_excludes(
@@ -3890,7 +3890,7 @@ impl ProxyService {
                 return Err(format!("启用 Codex 聚合供应商失败: {error}"));
             }
 
-            record_models_cache_hash(self.db.as_ref());
+            record_models_cache_hash(self.db.as_ref(), build.official_catalog_hash.as_deref());
 
             let model_excludes =
                 crate::services::codex_aggregation::codex_aggregation_all_model_excludes(

@@ -312,7 +312,8 @@ function OfficialCatalogRefreshLine({
       ? t("proxy.codexAggregation.officialCatalogRefreshUpdated", {
           time,
           modelCount: refresh.modelCount,
-          defaultValue: "官方目录 {{time}} 已更新（{{modelCount}} 个模型）",
+          defaultValue:
+            "官方目录 {{time}} 已更新（{{modelCount}} 个可见模型，未扣除排除项）",
         })
       : failed
         ? t("proxy.codexAggregation.officialCatalogRefreshFailed", {
@@ -323,7 +324,7 @@ function OfficialCatalogRefreshLine({
             time,
             modelCount: refresh.modelCount,
             defaultValue:
-              "官方目录 {{time}} 刷新，无变化（{{modelCount}} 个模型）",
+              "官方目录 {{time}} 刷新，无变化（{{modelCount}} 个可见模型，未扣除排除项）",
           });
   return (
     <DropdownMenuLabel
@@ -340,7 +341,7 @@ function OfficialCatalogRefreshLine({
 
 /**
  * 官方模型目录手动刷新按钮（仅 OpenAI Official 来源行的子菜单标题）。
- * 在线拉取官方目录写入缓存；有变化且聚合已启用时后端自动重建目录。
+ * 在线拉取官方目录写入缓存；聚合发布落后时自动重建，包括上次发布失败的重试。
  */
 function OfficialCatalogRefreshButton({
   providerId,
@@ -363,7 +364,7 @@ function OfficialCatalogRefreshButton({
         toast.success(
           t("proxy.codexAggregation.refreshOfficialCatalogUpdated", {
             modelCount: result.modelCount,
-            defaultValue: "官方模型目录已更新（{{modelCount}} 个模型）",
+            defaultValue: "官方模型目录已更新（{{modelCount}} 个可见模型）",
           }),
           { closeButton: true },
         );
@@ -371,7 +372,7 @@ function OfficialCatalogRefreshButton({
         toast.info(
           t("proxy.codexAggregation.refreshOfficialCatalogUnchanged", {
             modelCount: result.modelCount,
-            defaultValue: "官方模型目录无变化（{{modelCount}} 个模型）",
+            defaultValue: "官方模型目录无变化（{{modelCount}} 个可见模型）",
           }),
           { closeButton: true },
         );
@@ -500,7 +501,7 @@ function SourceProviderRow({
               tone="warning"
               label={t("proxy.codexAggregation.modelFilterExcludedCount", {
                 count: excludedCount,
-                defaultValue: "已排除 {{count}}",
+                defaultValue: "已保存 {{count}} 项排除",
               })}
             />
           )}

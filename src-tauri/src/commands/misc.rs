@@ -905,7 +905,7 @@ fn parse_semver(v: &str) -> Option<([u64; 3], Vec<String>)> {
 /// 比较两个版本号(遵循 semver:主版本三段优先;core 相等时有预发布 < 无预发布;
 /// 预发布段逐段比 —— 数字段按数值、数字段 < 非数字段、非数字段按 ASCII、前缀相同
 /// 则段更多者更大)。任一无法解析返回 None,调用方据此保守处理。
-fn compare_semver(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+pub(crate) fn compare_semver(a: &str, b: &str) -> Option<std::cmp::Ordering> {
     use std::cmp::Ordering;
     let (ac, ap) = parse_semver(a)?;
     let (bc, bp) = parse_semver(b)?;
