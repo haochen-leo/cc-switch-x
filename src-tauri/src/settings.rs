@@ -404,6 +404,9 @@ pub struct AppSettings {
     /// a failed migration retries at startup; cleared when the toggle turns off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unify_codex_migrate_existing: Option<bool>,
+    /// 聚合模式下第三方主模型默认使用 V1 子 agent 工具，官方模型保留原配置。
+    #[serde(default = "default_true")]
+    pub codex_stack_classic_tools: bool,
     /// User has confirmed the failover toggle first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failover_confirmed: Option<bool>,
@@ -541,6 +544,7 @@ impl Default for AppSettings {
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
+            codex_stack_classic_tools: true,
             failover_confirmed: None,
             first_run_notice_confirmed: None,
             common_config_confirmed: None,
@@ -992,6 +996,16 @@ pub fn unify_codex_session_history() -> bool {
         .unify_codex_session_history
 }
 
+pub fn codex_stack_classic_tools() -> bool {
+    settings_store()
+        .read()
+        .unwrap_or_else(|e| {
+            log::warn!("设置锁已毒化，使用恢复值: {e}");
+            e.into_inner()
+        })
+        .codex_stack_classic_tools
+}
+
 // ===== 当前供应商管理函数 =====
 
 /// 获取指定应用类型的当前供应商 ID（从本地 settings 读取）
@@ -1188,6 +1202,23 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+
+    #[test]
+    fn codex_classic_tools_default_on_and_persist_explicit_off() {
+        let old: AppSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(old.codex_stack_classic_tools);
+        assert!(AppSettings::default().codex_stack_classic_tools);
+
+        let off: AppSettings = serde_json::from_value(serde_json::json!({
+            "codexStackClassicTools": false
+        }))
+        .unwrap();
+        assert!(!off.codex_stack_classic_tools);
+        assert_eq!(
+            serde_json::to_value(off).unwrap()["codexStackClassicTools"],
+            false
+        );
+    }
 
     #[test]
     fn visible_apps_old_settings_default_claude_desktop_visible() {

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useId, useRef } from "react";
 import type { SyntheticEvent } from "react";
 import {
   ChevronRight,
@@ -10,6 +10,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
+import { CheckboxItem as MenuToggleItem } from "@radix-ui/react-dropdown-menu";
 
 import { Button } from "@/components/ui/button";
 import { ProviderStatusBadge } from "@/components/providers/ProviderStatusBadge";
@@ -25,6 +26,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { proxyApi } from "@/lib/api/proxy";
+import { settingsApi } from "@/lib/api/settings";
+import { useSettingsQuery } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import type {
@@ -43,7 +46,9 @@ export function CodexAggregationToggle({
   className,
 }: CodexAggregationToggleProps) {
   const { t } = useTranslation();
+  const classicDescriptionId = useId();
   const queryClient = useQueryClient();
+  const { data: settings } = useSettingsQuery();
   const { data: status } = useQuery({
     queryKey: ["codexAggregationStatus"],
     queryFn: proxyApi.getCodexAggregationStatus,
@@ -154,10 +159,32 @@ export function CodexAggregationToggle({
       );
     },
   });
+  const classicToolsMutation = useMutation({
+    mutationFn: async (classic: boolean) => {
+      const current = await settingsApi.get();
+      const saved = await settingsApi.save({
+        ...current,
+        codexStackClassicTools: classic,
+      });
+      if (!saved) throw new Error(t("settings.saveFailedGeneric"));
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["settings"] });
+      await invalidateAggregationViews();
+    },
+    onError: (error: Error) => {
+      toast.error(t("settings.saveFailedGeneric"), {
+        description: extractErrorMessage(error),
+      });
+    },
+  });
   const enabled = status?.enabled ?? false;
   const selectedProviderIds = status?.selectedProviderIds ?? [];
   const sourceProviders = status?.sourceProviders ?? [];
-  const busy = mutation.isPending || sourcesMutation.isPending;
+  const busy =
+    mutation.isPending ||
+    sourcesMutation.isPending ||
+    classicToolsMutation.isPending;
   const tooltip = enabled
     ? t("proxy.codexAggregation.tooltipEnabled", {
         providerCount: status?.sourceProviderCount ?? 0,
@@ -246,34 +273,68 @@ export function CodexAggregationToggle({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            className="z-[200] max-h-72 min-w-72 overflow-y-auto"
+            collisionPadding={12}
+            className="z-[200] flex max-h-[var(--radix-dropdown-menu-content-available-height)] w-[360px] max-w-[calc(100vw-24px)] flex-col overflow-hidden p-0"
           >
-            <DropdownMenuLabel className="pl-8 text-xs font-medium">
-              {t("proxy.codexAggregation.sourceProvidersLabel", {
-                defaultValue: "模型来源供应商",
-              })}
-            </DropdownMenuLabel>
-            {status?.officialCatalogRefresh && (
-              <OfficialCatalogRefreshLine
-                refresh={status.officialCatalogRefresh}
-              />
-            )}
-            {sourceProviders.map((source) => (
-              <SourceProviderRow
-                key={source.providerId}
-                source={source}
-                excludedCount={
-                  status?.modelExcludes?.[source.providerId]?.length ?? 0
+            <div className="max-h-72 min-h-0 overflow-y-auto p-1">
+              <DropdownMenuLabel className="pl-8 text-xs font-medium">
+                {t("proxy.codexAggregation.sourceProvidersLabel", {
+                  defaultValue: "模型来源供应商",
+                })}
+              </DropdownMenuLabel>
+              {status?.officialCatalogRefresh && (
+                <OfficialCatalogRefreshLine
+                  refresh={status.officialCatalogRefresh}
+                />
+              )}
+              {sourceProviders.map((source) => (
+                <SourceProviderRow
+                  key={source.providerId}
+                  source={source}
+                  excludedCount={
+                    status?.modelExcludes?.[source.providerId]?.length ?? 0
+                  }
+                  toggleDisabled={
+                    busy || (source.selected && selectedProviderIds.length <= 1)
+                  }
+                  onToggle={() =>
+                    updateSource(source.providerId, !source.selected)
+                  }
+                  onAggregationChanged={invalidateAggregationViews}
+                />
+              ))}
+            </div>
+            <div className="shrink-0 border-t border-border-default p-1">
+              <MenuToggleItem
+                className="group flex cursor-pointer select-none items-start gap-4 rounded-md px-3 py-2.5 text-sm outline-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
+                checked={settings?.codexStackClassicTools ?? true}
+                disabled={busy || !settings}
+                aria-label={t("settings.codexStackClassicSubagents")}
+                aria-describedby={classicDescriptionId}
+                onSelect={(event) => event.preventDefault()}
+                onCheckedChange={(checked) =>
+                  classicToolsMutation.mutate(checked)
                 }
-                toggleDisabled={
-                  busy || (source.selected && selectedProviderIds.length <= 1)
-                }
-                onToggle={() =>
-                  updateSource(source.providerId, !source.selected)
-                }
-                onAggregationChanged={invalidateAggregationViews}
-              />
-            ))}
+              >
+                <div className="min-w-0 flex-1">
+                  <span className="block font-medium">
+                    {t("settings.codexStackClassicSubagents")}
+                  </span>
+                  <p
+                    id={classicDescriptionId}
+                    className="mt-1 text-xs leading-5 text-muted-foreground"
+                  >
+                    {t("settings.codexStackClassicSubagentsDescription")}
+                  </p>
+                </div>
+                <span
+                  aria-hidden="true"
+                  className="mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full border-2 border-transparent bg-gray-200 transition-colors group-data-[state=checked]:bg-emerald-500 dark:bg-gray-900 dark:group-data-[state=checked]:bg-emerald-600"
+                >
+                  <span className="block h-5 w-5 rounded-full bg-white shadow transition-transform group-data-[state=checked]:translate-x-5 dark:bg-gray-400" />
+                </span>
+              </MenuToggleItem>
+            </div>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

@@ -74,7 +74,24 @@ pub async fn save_settings(
     let unify_codex_changed =
         merged.unify_codex_session_history != existing.unify_codex_session_history;
     let unify_codex_enabled = merged.unify_codex_session_history;
+    let classic_tools_changed =
+        merged.codex_stack_classic_tools != existing.codex_stack_classic_tools;
     crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+
+    if classic_tools_changed {
+        if let Err(err) = state
+            .proxy_service
+            .refresh_codex_aggregation_if_enabled()
+            .await
+        {
+            if let Err(rollback_err) = crate::settings::update_settings(existing.clone()) {
+                log::error!("回滚 Codex 经典子 agent 工具设置失败: {rollback_err}");
+            }
+            return Err(format!(
+                "Codex 子 agent 工具设置未生效（聚合目录重建失败）: {err}"
+            ));
+        }
+    }
 
     // 统一会话开关变更时立即重写当前官方 Codex 供应商的 live 配置，
     // 不必等下一次切换才生效。

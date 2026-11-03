@@ -413,7 +413,7 @@ fn is_codex_local_compaction_request(body: &serde_json::Value) -> bool {
     })
 }
 
-/// 整理第三方原生 Responses 上游的 Codex 本地压缩工具字段。
+/// 整理第三方上游的 Codex 本地压缩工具字段。
 ///
 /// Codex 本地压缩会回放历史里的 `web_search_call`，但压缩回合本身通常带
 /// `tools: []`；部分第三方 Responses 上游会拒绝“历史引用了工具、请求却没有

@@ -2477,11 +2477,24 @@ fn codex_model_catalog_from_settings(
     // clone，不再读取 models_cache / 本地 Codex CLI 的官方动态模板。厂商
     // 官方 catalog（目前 DeepSeek）已经在上面的分支提前返回。
     let template = load_codex_third_party_template_for_catalog()?;
-    Ok(Some(codex_model_catalog_from_specs(
-        &specs,
-        &template,
-        default_context_window,
-    )))
+    let mut catalog = codex_model_catalog_from_specs(&specs, &template, default_context_window);
+    // Third-party parent models use classic tools for cross-provider tasks.
+    // Keep official descriptors verbatim, including their own agent version.
+    if profile == CodexCatalogToolProfile::RoutedAggregate
+        && crate::settings::codex_stack_classic_tools()
+    {
+        for (entry, spec) in catalog["models"]
+            .as_array_mut()
+            .expect("generated catalog contains a models array")
+            .iter_mut()
+            .zip(&specs)
+        {
+            if spec.official_catalog_entry.is_none() {
+                entry["multi_agent_version"] = json!("v1");
+            }
+        }
+    }
+    Ok(Some(catalog))
 }
 
 fn set_codex_model_catalog_json_field(
@@ -7260,7 +7273,9 @@ base_url = "https://production.api/v1"
     }
 
     #[test]
-    fn official_catalog_entry_is_verbatim_and_third_party_uses_shared_template() {
+    #[serial]
+    fn aggregate_catalog_uses_classic_subagents_and_preserves_official_metadata() {
+        let _home = CodexLiveTestHome::new();
         let official_entry = json!({
             "slug": "gpt-5.5",
             "display_name": "GPT-5.5",
@@ -7271,7 +7286,8 @@ base_url = "https://production.api/v1"
             },
             "comp_hash": "official-5.5-hash",
             "service_tiers": [{ "id": "priority" }],
-            "use_responses_lite": true
+            "use_responses_lite": true,
+            "multi_agent_version": "v2"
         });
         let settings = json!({
             "modelCatalog": {
@@ -7297,10 +7313,8 @@ base_url = "https://production.api/v1"
         .expect("catalog should not be empty");
         let models = catalog["models"].as_array().expect("models array");
 
-        assert_eq!(
-            models[0], official_entry,
-            "official descriptor must bypass every generated-field override"
-        );
+        assert_eq!(models[0], official_entry);
+        assert_eq!(models[1]["multi_agent_version"], "v1");
         let third_party_template =
             load_codex_third_party_template_static().expect("third-party template parses");
         assert_eq!(
@@ -7309,6 +7323,78 @@ base_url = "https://production.api/v1"
         );
         assert_eq!(models[1]["comp_hash"], "3000");
         assert_eq!(models[1]["use_responses_lite"], false);
+
+        for profile in [
+            CodexCatalogToolProfile::NativeResponses,
+            CodexCatalogToolProfile::ProxyChat,
+            CodexCatalogToolProfile::Anthropic,
+        ] {
+            let catalog = codex_model_catalog_from_settings(&settings, "", profile)
+                .unwrap()
+                .unwrap();
+            assert_eq!(catalog["models"][0], official_entry);
+            assert_eq!(
+                catalog["models"][1]["multi_agent_version"],
+                third_party_template["multi_agent_version"],
+                "non-aggregate providers retain their own tool version"
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn aggregate_catalog_regeneration_keeps_classic_subagents_for_added_models() {
+        let _home = CodexLiveTestHome::new();
+        let mut settings = json!({
+            "modelCatalog": { "models": [{
+                "model": "gpt-5.6-sol",
+                "officialCatalogEntry": {
+                    "slug": "gpt-5.6-sol",
+                    "multi_agent_version": "v2"
+                }
+            }] }
+        });
+        let mut config = "model = \"gpt-5.6-sol\"\n".to_string();
+        for (classic, added_model) in [
+            (true, "kimi-k3/dashscope-chat"),
+            (false, "qwen3.8-max-0902/dashscope"),
+            (true, "deepseek-v4.1-flash-1017/dashscope"),
+        ] {
+            let mut saved_settings = crate::settings::get_settings();
+            saved_settings.codex_stack_classic_tools = classic;
+            crate::settings::update_settings(saved_settings).unwrap();
+            crate::settings::reload_settings().unwrap();
+            assert_eq!(crate::settings::codex_stack_classic_tools(), classic);
+            settings["modelCatalog"]["models"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "model": added_model }));
+            config = prepare_codex_config_text_with_model_catalog(
+                &settings,
+                &config,
+                CodexCatalogToolProfile::RoutedAggregate,
+            )
+            .unwrap();
+            let parsed: toml::Value = toml::from_str(&config).unwrap();
+            assert_eq!(
+                parsed["model_catalog_json"].as_str(),
+                Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
+            );
+            let catalog: Value =
+                serde_json::from_slice(&fs::read(get_codex_model_catalog_path()).unwrap()).unwrap();
+            let models = catalog["models"].as_array().unwrap();
+            assert_eq!(
+                models.len(),
+                settings["modelCatalog"]["models"].as_array().unwrap().len()
+            );
+            let version = if classic { "v1" } else { "v2" };
+            assert_eq!(models[0]["multi_agent_version"], "v2");
+            assert!(models
+                .iter()
+                .skip(1)
+                .all(|model| model["multi_agent_version"] == version));
+            assert_eq!(models.last().unwrap()["slug"], added_model);
+        }
     }
 
     #[test]
