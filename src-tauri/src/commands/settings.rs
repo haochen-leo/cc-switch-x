@@ -4,9 +4,14 @@ use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
 
 const OFFICIAL_APP_IDENTIFIER: &str = "com.ccswitch.desktop";
+const CC_SWITCH_X_APP_IDENTIFIER: &str = "io.github.haochen-leo.ccswitchx";
 
-fn official_in_app_updates_enabled(app: &AppHandle) -> bool {
-    app.config().identifier == OFFICIAL_APP_IDENTIFIER
+fn in_app_updates_enabled(app: &AppHandle) -> bool {
+    // The updater endpoint and verification key come from each build's configuration.
+    matches!(
+        app.config().identifier.as_str(),
+        OFFICIAL_APP_IDENTIFIER | CC_SWITCH_X_APP_IDENTIFIER
+    )
 }
 
 /// 应用更新下载进度（通过 `update-download-progress` 事件发给前端）。
@@ -219,8 +224,8 @@ pub async fn restart_app(app: AppHandle) -> Result<bool, String> {
 /// 这里把退出清理、安装和重启串在同一个后端流程中，避免依赖旧前端继续执行。
 #[tauri::command]
 pub async fn install_update_and_restart(app: AppHandle) -> Result<bool, String> {
-    if !official_in_app_updates_enabled(&app) {
-        return Err("当前 CC Switch X 版本已禁用官方应用内升级，避免覆盖本地安装。".to_string());
+    if !in_app_updates_enabled(&app) {
+        return Err("当前应用未启用应用内更新。".to_string());
     }
 
     let updater = app
@@ -300,7 +305,7 @@ pub async fn install_update_and_restart(app: AppHandle) -> Result<bool, String> 
 /// 升级无法解决，而不是让其反复尝试。
 #[tauri::command]
 pub async fn check_app_update_available(app: AppHandle) -> Result<Option<String>, String> {
-    if !official_in_app_updates_enabled(&app) {
+    if !in_app_updates_enabled(&app) {
         return Ok(None);
     }
 

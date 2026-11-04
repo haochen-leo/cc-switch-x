@@ -53,14 +53,10 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
 /// 检查更新
 #[tauri::command]
 pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
-    if !crate::brand::IN_APP_UPDATES_ENABLED {
-        return Err("CC Switch X 暂未启用应用内更新。".to_string());
-    }
-
     handle
         .opener()
         .open_url(
-            "https://github.com/haochen-leo/cc-switch-x/releases/latest",
+            "https://github.com/haochen-leo/cc-switch-x/releases",
             None::<String>,
         )
         .map_err(|e| format!("打开更新页面失败: {e}"))?;

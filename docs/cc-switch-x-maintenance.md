@@ -32,7 +32,7 @@ is the official upstream line. Both preserve the local capabilities from
 | Managed Codex catalog          | `cc-switch-model-catalog.json` | `cc-switch-x-model-catalog.json`            |
 | Official Codex proxy route ID  | `cc-switch-official`           | `cc-switch-x-official`                      |
 | Claude Desktop managed profile | Official profile ID            | X-specific profile ID                       |
-| In-app updates                 | Official release channel       | Disabled until X has its own signed channel |
+| In-app updates                 | Official release channel       | X-signed GitHub Beta channel                |
 
 Separate data directories do not isolate every external state. Both
 applications may still modify live client configuration under `~/.claude`,
@@ -118,9 +118,14 @@ All packaging and publishing runs on GitHub Actions, not on the developer's
 machine. The authorized push machine synchronizes commits and pushes tags.
 With `X_RELEASE_PIPELINE_ENABLED=true`, `v*` tags trigger platform builds,
 SHA256 checksum generation, and Beta Release publication. Beta macOS packages
-use ad-hoc signing without signing/notarization credentials. Keep
-`X_MACOS_SIGNING_ENABLED` and `X_UPDATER_ENABLED` disabled until X credentials
-are configured.
+use ad-hoc signing without Apple signing/notarization credentials. With
+`X_UPDATER_ENABLED=true`, the pipeline signs updater packages with X's own
+Tauri key and publishes `latest.json` to the fixed `updater` prerelease;
+GitHub's `releases/latest` does not include Beta releases. Store the private
+key and password in GitHub Actions Secrets and keep a secure backup outside the
+repository: installed clients cannot verify updates signed by a replacement key.
+Users on beta.9 and earlier must manually install the first updater-enabled
+release. Windows portable builds update manually from the release page.
 
 Keep the application version as `0.1.0-beta.N` and update
 `bundle.windows.wix.version` to an MSI-compatible numeric version at the same

@@ -27,7 +27,7 @@ CC Switch X 是 CC Switch 的非官方独立分叉。目标是：
 | Codex 托管目录文件          | `cc-switch-model-catalog.json` | `cc-switch-x-model-catalog.json`  |
 | Codex 官方代理路由 ID       | `cc-switch-official`           | `cc-switch-x-official`            |
 | Claude Desktop 托管 Profile | 官方 Profile ID                | X 独立 Profile ID                 |
-| 应用内更新                  | 官方发布通道                   | 默认关闭，建立 X 发布签名后再启用 |
+| 应用内更新                  | 官方发布通道                   | X 专属签名的 GitHub Beta 通道     |
 
 数据目录隔离不代表所有外部状态都能并发写入。两个应用仍会按用户操作修改
 `~/.claude`、`~/.codex`、`~/.gemini` 等客户端实时配置。因此不建议同时开启两个
@@ -96,8 +96,12 @@ X 提交只推送到 X 仓库，不推送到官方 `origin`，经用户指定的
 打包与发布全部由 GitHub Actions 完成，本机仅开发和测试。授权推送机器负责
 同步提交及推送标签。设置 `X_RELEASE_PIPELINE_ENABLED=true` 后，`v*` 标签
 自动触发各系统构建、SHA256 校验和生成及 Beta Release 发布。
-Beta 默认使用 macOS ad-hoc 签名，不要求签名、公证凭据；
-`X_MACOS_SIGNING_ENABLED` 和 `X_UPDATER_ENABLED` 保持关闭，直到配置 X 自有凭据。
+Beta 默认使用 macOS ad-hoc 签名，不要求 Apple 签名、公证凭据。
+`X_UPDATER_ENABLED=true` 时，流水线用 X 专属 Tauri 密钥签名更新包，并将
+`latest.json` 上传到 `updater` 预发布通道；该固定地址支持 beta 版本，不能使用
+不包含预发布版本的 GitHub `releases/latest`。私钥及密码保存在 GitHub Actions
+Secrets 中，并须在仓库外安全备份，丢失后已安装客户端无法验证新密钥。
+beta.9 及以前版本需手动安装首次启用更新的版本。Windows 便携版通过发布页面手动更新。
 
 应用版本保留 `0.1.0-beta.N`，同时将 `bundle.windows.wix.version` 更新为
 MSI 支持的数字格式（例如 beta.7 对应 `0.1.0.7`），避免 MSI 解析 Beta 字符串失败。

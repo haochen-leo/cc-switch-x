@@ -1,5 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { supportsOfficialInAppUpdate } from "./appVariant";
+import { supportsInAppUpdate } from "./appVariant";
 
 export type UpdateChannel = "stable" | "beta";
 
@@ -28,7 +28,7 @@ export async function checkForUpdate(
 ): Promise<
   { status: "up-to-date" } | { status: "available"; info: UpdateInfo }
 > {
-  if (!(await supportsOfficialInAppUpdate())) {
+  if (!(await supportsInAppUpdate())) {
     return { status: "up-to-date" };
   }
 

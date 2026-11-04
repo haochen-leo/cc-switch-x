@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import type { UpdateInfo } from "../lib/updater";
 import { checkForUpdate } from "../lib/updater";
-import { supportsOfficialInAppUpdate } from "../lib/appVariant";
+import { supportsInAppUpdate } from "../lib/appVariant";
 import { extractErrorMessage } from "../utils/errorUtils";
 
 interface UpdateContextValue {
@@ -65,7 +65,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let active = true;
 
-    supportsOfficialInAppUpdate()
+    supportsInAppUpdate()
       .then((enabled) => {
         if (!active) return;
         setSupportsOfficialUpdates(enabled);
@@ -94,7 +94,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
     if (isCheckingRef.current) return false;
-    if (!(await supportsOfficialInAppUpdate())) {
+    if (!(await supportsInAppUpdate())) {
       setHasUpdate(false);
       setUpdateInfo(null);
       setError(null);
