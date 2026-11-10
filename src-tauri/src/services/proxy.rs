@@ -3820,7 +3820,8 @@ impl ProxyService {
         enabled: bool,
     ) -> Result<crate::services::codex_aggregation::CodexAggregationStatus, String> {
         use crate::services::codex_aggregation::{
-            build_codex_aggregate_provider, record_models_cache_hash, CodexAggregationStatus,
+            build_codex_aggregate_provider, codex_aggregation_source_providers,
+            record_models_cache_hash, refresh_official_catalog_cache, CodexAggregationStatus,
             CODEX_AGGREGATE_PREVIOUS_PROVIDER_SETTING, CODEX_AGGREGATE_PREVIOUS_TAKEOVER_SETTING,
             CODEX_AGGREGATE_PROVIDER_ID,
         };
@@ -3837,6 +3838,20 @@ impl ProxyService {
             .enabled;
 
         if enabled {
+            // 开启前尝试刷新官方目录；失败时继续读取本地缓存，由构建过程校验。
+            if codex_aggregation_source_providers(self.db.as_ref())?
+                .iter()
+                .any(|source| source.official && source.selected)
+            {
+                if let Err(error) = refresh_official_catalog_cache(
+                    self.db.as_ref(),
+                    &self.codex_oauth_manager,
+                )
+                .await
+                {
+                    log::warn!("开启 Codex 聚合前刷新官方目录失败，将尝试使用本地缓存: {error}");
+                }
+            }
             let build = build_codex_aggregate_provider(self.db.as_ref()).await?;
             let previous_provider =
                 if current_provider.as_deref() == Some(CODEX_AGGREGATE_PROVIDER_ID) {

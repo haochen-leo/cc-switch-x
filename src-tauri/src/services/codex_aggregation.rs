@@ -349,9 +349,7 @@ fn save_official_catalog_cache(
         .ok()
         .and_then(|raw| serde_json::from_str::<CodexOfficialModelsCache>(&raw).ok())
         .is_none_or(|existing| {
-            existing.client_version != client_version
-                || existing.account_identity != account_identity
-                || existing.models != catalog.models
+            existing.account_identity != account_identity || existing.models != catalog.models
         });
 
     let cache = CodexOfficialModelsCache {
@@ -402,6 +400,28 @@ async fn fetch_and_save_official_catalog(
     Ok((updated, model_count))
 }
 
+/// 只联网更新官方目录缓存，不重建或发布聚合目录。
+pub async fn refresh_official_catalog_cache(
+    db: &Database,
+    oauth_manager: &crate::proxy::providers::codex_oauth_auth::CodexOAuthManager,
+) -> Result<(bool, usize), String> {
+    match fetch_and_save_official_catalog(db, oauth_manager).await {
+        Ok((updated, model_count)) => {
+            record_official_catalog_refresh(
+                db,
+                if updated { "updated" } else { "unchanged" },
+                None,
+                model_count,
+            );
+            Ok((updated, model_count))
+        }
+        Err(error) => {
+            record_official_catalog_refresh(db, "failed", Some(error.clone()), 0);
+            Err(error)
+        }
+    }
+}
+
 /// 多模型聚合启动时刷新一次 OpenAI Official 目录。
 ///
 /// 只更新 CC Switch 自己的缓存，不写 Codex 私有的 `models_cache.json`；非聚合模式
@@ -417,21 +437,9 @@ pub async fn refresh_official_catalog_on_startup(
         return Ok(false);
     }
 
-    match fetch_and_save_official_catalog(db, oauth_manager).await {
-        Ok((updated, model_count)) => {
-            record_official_catalog_refresh(
-                db,
-                if updated { "updated" } else { "unchanged" },
-                None,
-                model_count,
-            );
-            Ok(updated)
-        }
-        Err(error) => {
-            record_official_catalog_refresh(db, "failed", Some(error.clone()), 0);
-            Err(error)
-        }
-    }
+    refresh_official_catalog_cache(db, oauth_manager)
+        .await
+        .map(|(updated, _)| updated)
 }
 
 /// 手动刷新 OpenAI Official 目录的结果（模型过滤选择器的刷新按钮）。
@@ -449,13 +457,7 @@ pub async fn refresh_official_catalog_manual(
     db: &Database,
     oauth_manager: &crate::proxy::providers::codex_oauth_auth::CodexOAuthManager,
 ) -> Result<CodexOfficialCatalogRefreshResult, String> {
-    let (updated, model_count) = match fetch_and_save_official_catalog(db, oauth_manager).await {
-        Ok(result) => result,
-        Err(error) => {
-            record_official_catalog_refresh(db, "failed", Some(error.clone()), 0);
-            return Err(error);
-        }
-    };
+    let (updated, model_count) = refresh_official_catalog_cache(db, oauth_manager).await?;
 
     let status = match publish_official_catalog_if_changed(proxy_service, db).await {
         Ok(status) => status,
@@ -1044,13 +1046,9 @@ fn recent_thread_versions(path: &std::path::Path) -> Vec<String> {
 }
 
 fn catalog_snapshot_hash(cache: &CodexOfficialModelsCache) -> String {
-    // fetched_at / etag 更新不等于模型目录变化。
-    let data = serde_json::to_vec(&(
-        &cache.account_identity,
-        &cache.client_version,
-        &cache.models,
-    ))
-    .expect("official catalog JSON is serializable");
+    // 客户端版本、fetched_at / etag 更新不等于模型目录变化。
+    let data = serde_json::to_vec(&(&cache.account_identity, &cache.models))
+        .expect("official catalog JSON is serializable");
     format!("{:x}", Sha256::digest(data))
 }
 
@@ -1120,21 +1118,19 @@ async fn load_official_catalog(db: &Database) -> Result<CodexOfficialModelsCache
         } else {
             read_native_official_catalog_credentials()?.account_identity
         };
-        read_official_catalog_cache(&identity, &resolve_official_catalog_version()?)
+        read_official_catalog_cache(&identity)
     }).await.map_err(|error| format!("读取官方目录任务失败: {error}"))?
 }
 
-fn read_official_catalog_cache(
-    identity: &str,
-    version: &str,
-) -> Result<CodexOfficialModelsCache, String> {
+fn read_official_catalog_cache(identity: &str) -> Result<CodexOfficialModelsCache, String> {
     let path = codex_official_models_cache_path();
     let raw =
         fs::read(&path).map_err(|error| format!("请刷新官方模型目录：读取缓存失败: {error}"))?;
     let cache: CodexOfficialModelsCache = serde_json::from_slice(&raw)
         .map_err(|error| format!("请刷新官方模型目录：解析缓存失败: {error}"))?;
-    if cache.account_identity != identity || cache.client_version != version {
-        return Err("官方模型缓存与当前账号或客户端版本不匹配，请刷新官方模型目录".to_string());
+    // 客户端升级不会使同账号的已有目录失效；版本只用于在线请求和记录。
+    if cache.account_identity != identity {
+        return Err("官方模型缓存与当前账号不匹配，请刷新官方模型目录".to_string());
     }
     Ok(cache)
 }
@@ -1473,28 +1469,54 @@ mod tests {
             TEST_CATALOG_VERSION
         );
         let identity = catalog_account_identity("test-workspace", "sub:test-user");
-        let cache = read_official_catalog_cache(&identity, TEST_CATALOG_VERSION).unwrap();
+        let cache = read_official_catalog_cache(&identity).unwrap();
         assert_eq!(
             visible_official_models(&cache.models)[0]["model"],
             "gpt-6.1-sol"
         );
         fs::remove_file(codex_official_models_cache_path()).unwrap();
         // 没有 X 成功快照时不能退回账号归属未知的原生模型列表。
-        assert!(read_official_catalog_cache(&identity, TEST_CATALOG_VERSION).is_err());
+        assert!(read_official_catalog_cache(&identity).is_err());
     }
 
     #[test]
     #[serial_test::serial]
-    fn official_catalog_offline_reuse_requires_same_account_and_version() {
+    fn official_catalog_offline_reuse_requires_same_account() {
         let _home = CatalogTestHome::new();
         seed_official_catalog(vec![json!({"slug": "gpt-6.1-sol"})]);
         let identity = catalog_account_identity("test-workspace", "sub:test-user");
-        assert!(read_official_catalog_cache(&identity, TEST_CATALOG_VERSION).is_ok());
-        assert!(read_official_catalog_cache(&identity, "0.152.1").is_err());
+        assert!(read_official_catalog_cache(&identity).is_ok());
         let other_user = catalog_account_identity("test-workspace", "sub:another-user");
-        assert!(read_official_catalog_cache(&other_user, TEST_CATALOG_VERSION).is_err());
+        assert!(read_official_catalog_cache(&other_user).is_err());
         let other_workspace = catalog_account_identity("another-workspace", "sub:test-user");
-        assert!(read_official_catalog_cache(&other_workspace, TEST_CATALOG_VERSION).is_err());
+        assert!(read_official_catalog_cache(&other_workspace).is_err());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn official_catalog_version_only_refresh_does_not_require_publication() {
+        let _home = CatalogTestHome::new();
+        let models = vec![json!({"slug": "gpt-6.1-sol"})];
+        seed_official_catalog(models.clone());
+        let identity = catalog_account_identity("test-workspace", "sub:test-user");
+        let before = read_official_catalog_cache(&identity).unwrap();
+        let db = Database::memory().unwrap();
+        record_models_cache_hash(&db, Some(&catalog_snapshot_hash(&before)));
+
+        assert!(!save_official_catalog_cache(
+            "1000.0.0".to_string(),
+            identity.clone(),
+            crate::services::codex_oauth_models::CodexOAuthModelCatalog {
+                models,
+                etag: Some("new-etag".to_string()),
+            },
+        )
+        .unwrap());
+
+        let after = read_official_catalog_cache(&identity).unwrap();
+        assert_eq!(after.client_version, "1000.0.0");
+        assert_eq!(after.etag.as_deref(), Some("new-etag"));
+        assert!(!catalog_needs_publication(&db, &after));
     }
 
     #[tokio::test]
@@ -1506,7 +1528,6 @@ mod tests {
         let db = Database::memory().unwrap();
         let cache = read_official_catalog_cache(
             &catalog_account_identity("test-workspace", "sub:test-user"),
-            TEST_CATALOG_VERSION,
         )
         .unwrap();
         let official = Provider::with_id(
@@ -1565,7 +1586,7 @@ mod tests {
             json!({"slug": "gpt-reserve", "visibility": "hide"}),
         ]);
         let identity = catalog_account_identity("test-workspace", "sub:test-user");
-        let before = read_official_catalog_cache(&identity, TEST_CATALOG_VERSION).unwrap();
+        let before = read_official_catalog_cache(&identity).unwrap();
         assert_eq!(visible_official_models(&before.models).len(), 2);
         assert!(save_official_catalog_cache(
             TEST_CATALOG_VERSION.to_string(),
@@ -1576,7 +1597,7 @@ mod tests {
             }
         )
         .unwrap());
-        let after = read_official_catalog_cache(&identity, TEST_CATALOG_VERSION).unwrap();
+        let after = read_official_catalog_cache(&identity).unwrap();
         assert_eq!(visible_official_models(&after.models).len(), 1);
         assert_ne!(
             catalog_snapshot_hash(&before),
@@ -1659,7 +1680,6 @@ mod tests {
         seed_official_catalog(vec![official_entry.clone(), json!({"slug": "kimi-k3"})]);
         let cache = read_official_catalog_cache(
             &catalog_account_identity("test-workspace", "sub:test-user"),
-            TEST_CATALOG_VERSION,
         )
         .expect("read official models");
         let models = visible_official_models(&cache.models);
@@ -1714,8 +1734,7 @@ mod tests {
         std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
         let _ = crate::settings::reload_settings();
 
-        let cache = read_official_catalog_cache("test-identity", "0.160.1")
-            .expect("read official snapshot");
+        let cache = read_official_catalog_cache("test-identity").expect("read official snapshot");
         let models = visible_official_models(&cache.models);
 
         match &original_home {
@@ -1812,7 +1831,7 @@ mod tests {
         std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
         let _ = crate::settings::reload_settings();
 
-        let result = read_official_catalog_cache("test-identity", "0.160.1");
+        let result = read_official_catalog_cache("test-identity");
 
         match &original_home {
             Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
@@ -1959,7 +1978,75 @@ mod tests {
             .is_none());
     }
 
-    /// 官方源读空（如 models_cache.json 被移走/写空）时必须拒绝重建，
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn aggregate_build_reuses_official_cache_after_client_upgrade() {
+        let _home = CatalogTestHome::new();
+        let official_models = vec![json!({"slug": "gpt-6.1-sol"})];
+        seed_official_catalog(official_models.clone());
+        let identity = catalog_account_identity("test-workspace", "sub:test-user");
+        save_official_catalog_cache(
+            "0.152.1".to_string(),
+            identity.clone(),
+            crate::services::codex_oauth_models::CodexOAuthModelCatalog {
+                models: official_models,
+                etag: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_official_catalog_version().unwrap(),
+            TEST_CATALOG_VERSION
+        );
+
+        let db = Database::memory().unwrap();
+        let official = Provider::with_id(
+            CODEX_OFFICIAL_PROVIDER_ID.to_string(),
+            "OpenAI Official".to_string(),
+            json!({"auth": {}, "config": ""}),
+            None,
+        );
+        let mut third_party = Provider::with_id(
+            "dashscope-chat".to_string(),
+            "dashscope-chat".to_string(),
+            json!({
+                "auth": {},
+                "config": "",
+                "modelCatalog": {"models": [{"model": "kimi-k3"}]}
+            }),
+            None,
+        );
+        db.save_provider(AppType::Codex.as_str(), &official).unwrap();
+        db.save_provider(AppType::Codex.as_str(), &third_party)
+            .unwrap();
+        let before = build_codex_aggregate_provider(&db).await.unwrap();
+        assert_eq!(before.model_count, 2);
+
+        third_party.settings_config["modelCatalog"]["models"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"model": "kimi-k3.1-pro"}));
+        db.save_provider(AppType::Codex.as_str(), &third_party)
+            .unwrap();
+        let after = build_codex_aggregate_provider(&db).await.unwrap();
+        assert_eq!(after.model_count, 3);
+        let routes = &after.provider.settings_config["codexAggregateRoutes"];
+        assert_eq!(
+            routes["gpt-6.1-sol"]["providerId"],
+            CODEX_OFFICIAL_PROVIDER_ID
+        );
+        assert_eq!(
+            routes["kimi-k3.1-pro/dashscope-chat"]["providerId"],
+            "dashscope-chat"
+        );
+        assert_eq!(
+            read_official_catalog_cache(&identity).unwrap().client_version,
+            "0.152.1"
+        );
+        assert_eq!(before.official_catalog_hash, after.official_catalog_hash);
+    }
+
+    /// 官方源读空（如官方目录缓存被移走/写空）时必须拒绝重建，
     /// 防止残缺目录顶掉现有官方路由（2026-09-03 事故防护）。
     #[tokio::test]
     #[serial_test::serial]
