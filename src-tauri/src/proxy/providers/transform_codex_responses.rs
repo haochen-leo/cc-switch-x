@@ -20,7 +20,8 @@ use super::{
     provider_needs_responses_tool_search_bridge, provider_needs_xai_responses_sanitize,
     transform_codex_anthropic, transform_codex_apply_patch, transform_codex_chat,
     transform_codex_responses_namespace::{self, NamespacedName},
-    transform_codex_responses_toolsearch, transform_codex_responses_xai_sanitize,
+    transform_codex_responses_think, transform_codex_responses_toolsearch,
+    transform_codex_responses_xai_sanitize,
 };
 use crate::{provider::Provider, proxy::error::ProxyError};
 
@@ -223,6 +224,7 @@ pub(crate) fn transform_response(body: &mut Value, context: &TransformContext) {
         transform_codex_responses_xai_sanitize::normalize_xai_function_call_integer_arguments(body);
     }
     transform_codex_apply_patch::sanitize_response_apply_patch_inputs(body);
+    transform_codex_responses_think::normalize_response(body);
 }
 
 pub(crate) fn transform_response_stream(
@@ -265,7 +267,10 @@ pub(crate) fn transform_response_stream(
     } else {
         stream
     };
-    Box::pin(transform_codex_apply_patch::create_apply_patch_input_sanitize_sse_stream(stream))
+    let stream =
+        Box::pin(transform_codex_apply_patch::create_apply_patch_input_sanitize_sse_stream(stream))
+            as ResponseByteStream;
+    Box::pin(transform_codex_responses_think::normalize_stream(stream))
 }
 
 /// Codex Desktop declares `automation_update` with a recursive

@@ -39,6 +39,7 @@ pub mod transform_codex_chat_moonshot_schema;
 pub mod transform_codex_compaction;
 pub mod transform_codex_responses;
 pub mod transform_codex_responses_namespace;
+pub(crate) mod transform_codex_responses_think;
 pub mod transform_codex_responses_toolsearch;
 pub mod transform_codex_responses_xai_sanitize;
 pub mod transform_gemini;
