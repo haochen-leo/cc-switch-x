@@ -35,6 +35,11 @@ pub(crate) enum ResponsesDialect {
     XaiStrict,
 }
 
+/// Leading bytes of reasoning ciphertext minted by OpenAI: a Fernet token
+/// (version byte 0x80 + zero high timestamp bytes). Empirical format, not a
+/// documented contract.
+const OPENAI_REASONING_CIPHERTEXT_PREFIX: &str = "gAAAAA";
+
 #[derive(Debug, Clone)]
 struct TransformPolicy {
     namespace_flatten: bool,
@@ -174,7 +179,16 @@ fn apply_request_transforms(
     }
 
     transform_codex_anthropic::sanitize_anthropic_reasoning_envelopes_for_native_responses(body);
+    // Must run before ID normalization: items that lose their ciphertext fall
+    // back to the plain-reasoning ID policy of the target dialect.
     if context.dialect == ResponsesDialect::OpenAiPrivateContract {
+        let changed = strip_non_openai_reasoning_ciphertext(body);
+        if changed > 0 {
+            log::debug!(
+                "[Codex] Stripped {changed} non-OpenAI reasoning ciphertext item(s) (provider={})",
+                context.provider_id
+            );
+        }
         transform_codex_chat::normalize_official_replayed_item_ids_for_responses_upstream(body);
     } else {
         transform_codex_chat::normalize_replayed_item_ids_for_responses_upstream(body);
@@ -271,6 +285,57 @@ pub(crate) fn transform_response_stream(
         Box::pin(transform_codex_apply_patch::create_apply_patch_input_sanitize_sse_stream(stream))
             as ResponseByteStream;
     Box::pin(transform_codex_responses_think::normalize_stream(stream))
+}
+
+/// Remove reasoning ciphertext not minted by OpenAI before a request reaches an
+/// OpenAI private-contract upstream.
+///
+/// Scenario: a Codex thread answered by a third-party native Responses model
+/// (e.g. Bailian Qwen4 summary + encrypted CoT) is continued on GPT. OpenAI
+/// verifies every replayed blob and rejects foreign ones with 400
+/// `invalid_encrypted_content`, so only the readable summary is kept; items
+/// with no summary are dropped entirely. OpenAI's own ciphertext stays
+/// byte-for-byte unchanged. Third-party targets are not touched: observed ones
+/// ignore foreign blobs. Only the outbound copy is modified; the client history
+/// file is untouched.
+fn strip_non_openai_reasoning_ciphertext(body: &mut Value) -> usize {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+
+    let mut changed = 0;
+    input.retain_mut(|item| {
+        let is_foreign = item.get("type").and_then(Value::as_str) == Some("reasoning")
+            && item
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .is_some_and(|value| {
+                    !value.is_empty() && !value.starts_with(OPENAI_REASONING_CIPHERTEXT_PREFIX)
+                });
+        if !is_foreign {
+            return true;
+        }
+
+        changed += 1;
+        let has_summary = item
+            .get("summary")
+            .and_then(Value::as_array)
+            .is_some_and(|parts| {
+                parts.iter().any(|part| {
+                    part.get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.is_empty())
+                })
+            });
+        if !has_summary {
+            return false;
+        }
+        if let Some(object) = item.as_object_mut() {
+            object.remove("encrypted_content");
+        }
+        true
+    });
+    changed
 }
 
 /// Codex Desktop declares `automation_update` with a recursive
@@ -651,5 +716,113 @@ mod tests {
             other.body["input"][0]["content"][0]["type"],
             "reasoning_text"
         );
+    }
+
+    /// History from a thread that switched between Bailian Qwen4 and GPT.
+    /// Prefixes match blobs captured from real upstream responses.
+    fn mixed_ciphertext_history(model: &str) -> Value {
+        json!({
+            "model": model,
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+                {
+                    "id": "rs_8b96ef11-a15b-44ee-a20e-5b5559a7662c",
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "qwen summary"}],
+                    "encrypted_content": "RFNDMQEAAAAHqwen-blob"
+                },
+                {
+                    "id": "rs_qwen_no_summary",
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": "RFNDMQEAAAAHqwen-blob-2"
+                },
+                {
+                    "id": "rs_0123456789abcdef0123456789abcdef",
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "gpt summary"}],
+                    "encrypted_content": "gAAAAABpopenai-blob"
+                },
+                {
+                    "id": "rs_unknown",
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": "opaque-unknown-family"
+                }
+            ]
+        })
+    }
+
+    fn reasoning_ciphertexts(body: &Value) -> Vec<Option<String>> {
+        body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["type"] == "reasoning")
+            .map(|item| item["encrypted_content"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn openai_target_keeps_only_openai_ciphertext() {
+        let official = provider(
+            crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+            "https://chatgpt.com/backend-api/codex",
+        );
+        let prepared = prepare_request(
+            mixed_ciphertext_history("gpt-6.1-sol"),
+            &official,
+            Some("gpt-6.1-sol"),
+        )
+        .unwrap();
+        let finalized = finalize_request(prepared.context, prepared.body).unwrap();
+        let input = finalized.body["input"].as_array().unwrap();
+
+        // Summary-less foreign items (Bailian and unknown) have nothing
+        // portable and are dropped.
+        assert_eq!(input.len(), 3);
+        assert_eq!(
+            reasoning_ciphertexts(&finalized.body),
+            vec![None, Some("gAAAAABpopenai-blob".to_string())]
+        );
+        // The stripped item keeps its summary and follows the official
+        // plain-reasoning policy (client-controlled identity removed).
+        assert_eq!(input[1]["summary"][0]["text"], "qwen summary");
+        assert!(input[1].get("id").is_none());
+        assert_eq!(input[2]["id"], "rs_0123456789abcdef0123456789abcdef");
+    }
+
+    #[test]
+    fn third_party_targets_keep_all_ciphertext() {
+        let targets = [
+            (
+                provider(
+                    "dashscope-native",
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                ),
+                "qwen4-max",
+            ),
+            (
+                provider("other-native", "https://responses.example/v1"),
+                "some-model",
+            ),
+        ];
+        for (target, model) in targets {
+            let prepared =
+                prepare_request(mixed_ciphertext_history(model), &target, Some(model)).unwrap();
+            let finalized = finalize_request(prepared.context, prepared.body).unwrap();
+
+            assert_eq!(
+                reasoning_ciphertexts(&finalized.body),
+                vec![
+                    Some("RFNDMQEAAAAHqwen-blob".to_string()),
+                    Some("RFNDMQEAAAAHqwen-blob-2".to_string()),
+                    Some("gAAAAABpopenai-blob".to_string()),
+                    Some("opaque-unknown-family".to_string()),
+                ],
+                "provider={}",
+                target.id
+            );
+        }
     }
 }
