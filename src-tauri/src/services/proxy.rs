@@ -2636,6 +2636,17 @@ impl ProxyService {
             }
         }
 
+        // 官方代理沿用内建 openai 身份，通过顶层地址改道；重复接管时也要识别它。
+        // custom 等显式供应商仍由各自的配置表决定地址。
+        if active_provider.unwrap_or("openai") == "openai"
+            && doc
+                .get("openai_base_url")
+                .and_then(|value| value.as_str())
+                .is_some_and(&predicate)
+        {
+            return true;
+        }
+
         doc.get("base_url")
             .and_then(|value| value.as_str())
             .is_some_and(predicate)
@@ -2738,14 +2749,16 @@ impl ProxyService {
         }
 
         if let Some(cfg_str) = config.get("config").and_then(|v| v.as_str()) {
-            let updated = Self::remove_local_toml_base_url(cfg_str);
+            // 官方 openai 改道先按地址识别并移除，再清通用本地地址；
+            // 顺序相反会先擦掉所有权信号，遗留官方接管的 realtime 设置。
+            let updated = crate::codex_config::remove_codex_official_proxy_route(cfg_str)
+                .map_err(|e| format!("清理 Codex 官方接管路由失败: {e}"))?;
+            let updated = Self::remove_local_toml_base_url(&updated);
             let updated =
                 crate::codex_config::remove_codex_experimental_bearer_token_if(&updated, |token| {
                     token == PROXY_TOKEN_PLACEHOLDER
                 })
                 .map_err(|e| format!("清理 Codex 接管占位符失败: {e}"))?;
-            let updated = crate::codex_config::remove_codex_official_proxy_route(&updated)
-                .map_err(|e| format!("清理 Codex 官方接管路由失败: {e}"))?;
             config["config"] = json!(updated);
         }
 
@@ -4017,12 +4030,8 @@ impl ProxyService {
         unify_session_history: bool,
     ) -> Result<String, String> {
         if provider.is_some_and(Provider::is_codex_aggregate) {
-            return crate::codex_config::apply_codex_aggregate_proxy_route(
-                toml_str,
-                proxy_url,
-                unify_session_history,
-            )
-            .map_err(|e| format!("生成 Codex 聚合接管配置失败: {e}"));
+            return crate::codex_config::apply_codex_aggregate_proxy_route(toml_str, proxy_url)
+                .map_err(|e| format!("生成 Codex 聚合接管配置失败: {e}"));
         }
 
         if provider.is_some_and(crate::proxy::providers::is_codex_official_provider) {
@@ -4087,20 +4096,23 @@ impl ProxyService {
                         .map(str::to_string)
                 });
         let unify_session_history = crate::settings::unify_codex_session_history();
-        let route_key = if unify_session_history {
-            crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID
-        } else {
-            crate::codex_config::CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID
-        };
         let projected = Self::apply_codex_proxy_toml_config_for_provider(
             &config_text,
             proxy_base_url,
             Some(provider),
             unify_session_history,
         )?;
-        // 归因：代理路由写在哪个 provider 键下完全由 unify 开关决定，而 Codex 线程按
-        // 创建时钉住的键名解析上游。键名漂移会让已存在的线程静默走错上游（曾表现为
-        // 400/404），所以把决定因素和漂移一起落日志。
+        // 日志取实际生成的路由：官方按统一开关选 openai/custom，聚合始终 custom。
+        // 缺省选择器对应内建 openai，不能再根据开关推算为已停写的旧 ID。
+        let route_key = projected
+            .parse::<toml_edit::DocumentMut>()
+            .ok()
+            .and_then(|doc| {
+                doc.get("model_provider")
+                    .and_then(|item| item.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "openai".to_string());
         match previous_route_key.as_deref() {
             Some(previous) if previous != route_key => log::warn!(
                 "[TAKEOVER] codex 接管键名漂移: model_provider {} -> {}, unify_session_history={}, provider={}, base_url={}；已创建的 Codex 线程仍按旧键名解析上游",
@@ -5988,6 +6000,107 @@ wire_api = "responses"
 
         crate::settings::update_settings(crate::settings::AppSettings::default())
             .expect("reset settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_official_restart_keeps_openai_and_migrates_retired_history_once() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let mut official = Provider::with_id(
+            "codex-official".to_string(),
+            "OpenAI Official".to_string(),
+            json!({ "auth": {}, "config": "model = \"gpt-5.4\"\n" }),
+            None,
+        );
+        official.category = Some("official".to_string());
+        db.save_provider("codex", &official).expect("save official");
+        db.set_current_provider("codex", &official.id)
+            .expect("current");
+        crate::settings::set_current_provider(&AppType::Codex, Some(&official.id))
+            .expect("local current");
+        let auth = json!({
+            "auth_mode": "chatgpt",
+            "tokens": { "id_token": "oauth-id", "access_token": "oauth-access" }
+        });
+        crate::codex_config::write_codex_live_atomic(&auth, Some("model = \"gpt-5.4\"\n"))
+            .expect("seed login");
+        let codex_dir = crate::codex_config::get_codex_config_dir();
+        let sessions = codex_dir.join("sessions");
+        std::fs::create_dir_all(&sessions).expect("sessions");
+        let rollout = sessions.join("retired.jsonl");
+        std::fs::write(&rollout, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"old\",\"model_provider\":\"cc-switch-x-official\"}}\n")
+            .expect("retired rollout");
+        let state_db = codex_dir.join(crate::codex_state_db::CODEX_STATE_DB_FILENAME);
+        rusqlite::Connection::open(&state_db).expect("state DB")
+            .execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, model_provider TEXT NOT NULL); INSERT INTO threads VALUES ('old', 'cc-switch-x-official'), ('native', 'openai');")
+            .expect("seed history");
+
+        // 真实退出恢复会撤掉代理改道，但保留启用状态；重启后再接管、再迁历史。
+        let service = ProxyService::new(db.clone());
+        service
+            .set_takeover_for_app("codex", true)
+            .await
+            .expect("take over");
+        assert_eq!(
+            crate::codex_history_migration::codex_live_history_bucket().as_deref(),
+            Some("openai")
+        );
+        service
+            .set_takeover_for_app("codex", true)
+            .await
+            .expect("repeat takeover without changing the official route");
+        service.stop_with_restore_keep_state().await.expect("exit");
+        assert!(!crate::codex_config::read_codex_config_text()
+            .expect("restored config")
+            .contains("openai_base_url"));
+        drop(service);
+
+        let restarted = ProxyService::new(db);
+        restarted
+            .set_takeover_for_app("codex", true)
+            .await
+            .expect("restore takeover");
+        let outcome = crate::codex_history_migration::maybe_migrate_codex_legacy_official_history_to_current_bucket()
+            .expect("migrate after restore");
+        assert_eq!(outcome.migrated_jsonl_files, 1);
+        assert_eq!(outcome.migrated_state_rows, 1);
+        assert_eq!(
+            crate::codex_history_migration::codex_live_history_bucket().as_deref(),
+            Some("openai")
+        );
+        let conn = rusqlite::Connection::open(&state_db).expect("read state DB");
+        let native_threads: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM threads WHERE model_provider = 'openai'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count history");
+        assert_eq!(native_threads, 2);
+        drop(conn);
+        let migrated = std::fs::read_to_string(&rollout).expect("migrated rollout");
+        assert!(migrated.contains("\"model_provider\":\"openai\""));
+        assert_eq!(
+            crate::config::read_json_file::<Value>(&crate::codex_config::get_codex_auth_path())
+                .expect("auth"),
+            auth
+        );
+        assert_eq!(
+            crate::codex_history_migration::maybe_migrate_codex_legacy_official_history_to_current_bucket()
+                .expect("startup retry").skipped_reason.as_deref(),
+            Some("already_migrated")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&rollout).expect("history unchanged"),
+            migrated
+        );
+        restarted.stop_with_restore().await.expect("stop");
     }
 
     #[tokio::test]
@@ -8029,12 +8142,9 @@ wire_api = "chat"
         )
         .expect("apply official proxy config");
         let parsed: toml::Value = toml::from_str(&output).expect("valid official route");
-        let route_id = crate::codex_config::CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID;
-        let route = &parsed["model_providers"][route_id];
-
-        assert_eq!(parsed["model_provider"].as_str(), Some(route_id));
-        assert_eq!(route["base_url"].as_str(), Some(proxy_url));
-        assert_eq!(route["requires_openai_auth"].as_bool(), Some(true));
+        assert!(parsed.get("model_provider").is_none());
+        assert!(parsed.get("model_providers").is_none());
+        assert_eq!(parsed["openai_base_url"].as_str(), Some(proxy_url));
         assert!(parsed.get("experimental_bearer_token").is_none());
     }
 
@@ -8082,36 +8192,38 @@ wire_api = "chat"
         });
         let proxy_url = "http://127.0.0.1:5000/v1";
 
-        let output = ProxyService::apply_codex_proxy_toml_config_for_provider(
-            "experimental_bearer_token = \"PROXY_MANAGED\"\n",
-            proxy_url,
-            Some(&provider),
-            true,
-        )
-        .expect("apply aggregate proxy config");
-        let parsed: toml::Value = toml::from_str(&output).expect("valid aggregate route");
-        let route =
-            &parsed["model_providers"][crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID];
+        for unified in [false, true] {
+            let output = ProxyService::apply_codex_proxy_toml_config_for_provider(
+                "experimental_bearer_token = \"PROXY_MANAGED\"\n",
+                proxy_url,
+                Some(&provider),
+                unified,
+            )
+            .expect("apply aggregate proxy config");
+            let parsed: toml::Value = toml::from_str(&output).expect("valid aggregate route");
+            let route =
+                &parsed["model_providers"][crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID];
 
-        assert_eq!(
-            parsed["model_provider"].as_str(),
-            Some(crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
-        );
-        assert_eq!(route["base_url"].as_str(), Some(proxy_url));
-        assert_eq!(
-            route["name"].as_str(),
-            Some(crate::codex_config::CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME)
-        );
-        assert_eq!(route["requires_openai_auth"].as_bool(), Some(true));
-        assert_eq!(
-            route["supports_standalone_web_search"].as_bool(),
-            Some(true)
-        );
-        assert_eq!(route["supports_websockets"].as_bool(), Some(false));
-        assert!(parsed.get("experimental_bearer_token").is_none());
-        assert!(crate::codex_config::codex_config_has_official_proxy_route(
-            &output
-        ));
+            assert_eq!(
+                parsed["model_provider"].as_str(),
+                Some(crate::codex_config::CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+            );
+            assert_eq!(route["base_url"].as_str(), Some(proxy_url));
+            assert_eq!(
+                route["name"].as_str(),
+                Some(crate::codex_config::CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME)
+            );
+            assert_eq!(route["requires_openai_auth"].as_bool(), Some(true));
+            assert_eq!(
+                route["supports_standalone_web_search"].as_bool(),
+                Some(true)
+            );
+            assert_eq!(route["supports_websockets"].as_bool(), Some(false));
+            assert!(parsed.get("experimental_bearer_token").is_none());
+            assert!(crate::codex_config::codex_config_has_official_proxy_route(
+                &output
+            ));
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod claude_mcp;
 mod claude_plugin;
 mod codex_config;
 mod codex_history_migration;
+mod codex_rollout_file;
 mod codex_state_db;
 mod commands;
 mod config;
@@ -36,6 +37,9 @@ mod services;
 mod session_manager;
 mod settings;
 mod store;
+
+#[cfg(test)]
+mod test_support;
 
 mod tray;
 mod usage_events;
@@ -812,68 +816,6 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to seed official providers: {e}"),
             }
 
-            {
-                let db_for_codex_history_migration = app_state.db.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    match crate::codex_history_migration::maybe_migrate_codex_third_party_history_provider_bucket(
-                        &db_for_codex_history_migration,
-                    ) {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex history provider bucket migration skipped: {reason}");
-                            } else {
-                                log::info!(
-                                    "✓ Codex history provider bucket migration completed: sources={}, jsonl_files={}, state_rows={}",
-                                    outcome.source_provider_ids.len(),
-                                    outcome.migrated_jsonl_files,
-                                    outcome.migrated_state_rows
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex history provider bucket migration failed: {e}");
-                        }
-                    }
-
-                    match crate::codex_history_migration::maybe_migrate_codex_provider_template_bucket(
-                        &db_for_codex_history_migration,
-                    ) {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex provider template bucket migration skipped: {reason}");
-                            } else if !outcome.migrated_provider_ids.is_empty() {
-                                log::info!(
-                                    "✓ Codex provider template bucket migration completed: providers={}",
-                                    outcome.migrated_provider_ids.len()
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex provider template bucket migration failed: {e}");
-                        }
-                    }
-
-                    // 统一会话开关的官方历史迁移：开关开启但上次未完成（如文件被占用
-                    // 中途失败）时在启动期重试；函数内部自门控，开关关闭时直接跳过。
-                    match crate::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex official history unify migration skipped: {reason}");
-                            } else {
-                                log::info!(
-                                    "✓ Codex official history unify migration completed: jsonl_files={}, state_rows={}",
-                                    outcome.migrated_jsonl_files,
-                                    outcome.migrated_state_rows
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex official history unify migration failed: {e}");
-                        }
-                    }
-                });
-            }
-
             // 老用户 / 已确认的路径由 `fresh_install_at_startup` 自行拦截，这里不做写入。
             // 字段只由前端在用户点击"我知道了"时 save_settings 回写，语义是"用户显式确认过"。
             if !first_run_already_confirmed && fresh_install_at_startup {
@@ -1301,6 +1243,90 @@ pub fn run() {
 
                 // 检查 settings 表中的代理状态，自动恢复代理服务
                 restore_proxy_state_on_startup(&state).await;
+
+                // Codex 历史会话迁移必须排在崩溃恢复与接管恢复之后：迁移按 live
+                // config.toml 选择旧 ID 的迁移目标。正常退出会还原 live，必须等
+                // 恢复后的官方/聚合配置落定，才能把旧桶迁入实际使用的 openai/custom。
+                {
+                    let db_for_codex_history_migration = state.db.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        match crate::codex_history_migration::maybe_migrate_codex_third_party_history_provider_bucket(
+                            &db_for_codex_history_migration,
+                        ) {
+                            Ok(outcome) => {
+                                if let Some(reason) = outcome.skipped_reason {
+                                    log::debug!("○ Codex history provider bucket migration skipped: {reason}");
+                                } else {
+                                    log::info!(
+                                        "✓ Codex history provider bucket migration completed: sources={}, jsonl_files={}, state_rows={}",
+                                        outcome.source_provider_ids.len(),
+                                        outcome.migrated_jsonl_files,
+                                        outcome.migrated_state_rows
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("✗ Codex history provider bucket migration failed: {e}");
+                            }
+                        }
+
+                        match crate::codex_history_migration::maybe_migrate_codex_provider_template_bucket(
+                            &db_for_codex_history_migration,
+                        ) {
+                            Ok(outcome) => {
+                                if let Some(reason) = outcome.skipped_reason {
+                                    log::debug!("○ Codex provider template bucket migration skipped: {reason}");
+                                } else if !outcome.migrated_provider_ids.is_empty() {
+                                    log::info!(
+                                        "✓ Codex provider template bucket migration completed: providers={}",
+                                        outcome.migrated_provider_ids.len()
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("✗ Codex provider template bucket migration failed: {e}");
+                            }
+                        }
+
+                        // 两个旧接管 ID 已停写，按恢复后的实际路由一次性归入
+                        // openai/custom。原生 openai 的统一迁移仍独立尊重用户勾选。
+                        match crate::codex_history_migration::maybe_migrate_codex_legacy_official_history_to_current_bucket() {
+                            Ok(outcome) => {
+                                if let Some(reason) = outcome.skipped_reason {
+                                    log::debug!("○ Codex legacy official history migration skipped: {reason}");
+                                } else {
+                                    log::info!(
+                                        "✓ Codex legacy official history migration completed: jsonl_files={}, state_rows={}",
+                                        outcome.migrated_jsonl_files,
+                                        outcome.migrated_state_rows
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("✗ Codex legacy official history migration failed: {e}");
+                            }
+                        }
+
+                        // 统一会话开关的官方历史迁移：开关开启但上次未完成（如文件被占用
+                        // 中途失败）时在启动期重试；函数内部自门控，开关关闭时直接跳过。
+                        match crate::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
+                            Ok(outcome) => {
+                                if let Some(reason) = outcome.skipped_reason {
+                                    log::debug!("○ Codex official history unify migration skipped: {reason}");
+                                } else {
+                                    log::info!(
+                                        "✓ Codex official history unify migration completed: jsonl_files={}, state_rows={}",
+                                        outcome.migrated_jsonl_files,
+                                        outcome.migrated_state_rows
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("✗ Codex official history unify migration failed: {e}");
+                            }
+                        }
+                    });
+                }
 
                 // 多模型聚合使用静态 model_catalog_json，Codex 自己的在线目录刷新
                 // 不会运行。代理恢复后用当前官方登录和实际 Codex 版本刷新一次

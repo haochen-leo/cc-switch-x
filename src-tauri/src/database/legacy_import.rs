@@ -90,6 +90,14 @@ impl Database {
 
         let destination_dir = crate::config::get_app_config_dir();
         let imported_settings_file = import_settings_file(source_dir, &destination_dir)?;
+        if imported_settings_file {
+            // 导入的设置文件必须立刻反映到内存缓存：本函数在启动早期执行，
+            // 此前缓存已按默认值初始化（如 unifyCodexSessionHistory=false），
+            // 不刷新的话，同一次启动内后续的代理接管会按默认关闭状态投影。
+            // 原故障中旧版因此写入 cc-switch-x-official 并丢掉 custom 定义，
+            // 导致历史会话报"模型提供商不可用"。
+            crate::settings::reload_settings()?;
+        }
         let imported_skill_files = copy_directory_without_symlinks(
             &source_dir.join("skills"),
             &destination_dir.join("skills"),
@@ -379,5 +387,55 @@ mod tests {
         )?;
         assert_eq!(retry, (1, 4, 3000));
         Ok(())
+    }
+
+    /// 首次启动导入旧版数据后，内存设置缓存必须立即反映导入值。
+    /// 回归场景：缓存仍是默认值（unifyCodexSessionHistory=false）时，
+    /// 同一次启动内旧版代理接管曾把 model_provider 写成 cc-switch-x-official
+    /// 并丢掉 [model_providers.custom]，历史会话报"模型提供商不可用"。
+    #[test]
+    #[serial_test::serial]
+    fn imported_settings_file_refreshes_settings_cache() -> Result<(), AppError> {
+        // 隔离 HOME，并让设置缓存先按默认值初始化（模拟启动早期的缓存状态）。
+        let test_home = tempdir().map_err(|e| AppError::Message(e.to_string()))?;
+        let original_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", test_home.path());
+        crate::settings::reload_settings()?;
+        assert!(!crate::settings::unify_codex_session_history());
+
+        let result = (|| {
+            let source_dir = tempdir().map_err(|e| AppError::Message(e.to_string()))?;
+            let source = Connection::open(source_dir.path().join("cc-switch.db"))?;
+            source.execute_batch(
+                "CREATE TABLE providers (
+                    id TEXT NOT NULL,
+                    app_type TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    settings_config TEXT NOT NULL,
+                    PRIMARY KEY (id, app_type)
+                );",
+            )?;
+            Database::set_user_version(&source, 17)?;
+            drop(source);
+            fs::write(
+                source_dir.path().join("settings.json"),
+                r#"{ "unifyCodexSessionHistory": true }"#,
+            )
+            .map_err(|e| AppError::Message(e.to_string()))?;
+
+            let destination = Database::memory()?;
+            let report = destination.import_from_official_data_dir(source_dir.path())?;
+            assert!(report.imported_settings_file);
+            // 导入后同一次启动内读取统一会话开关，必须已经是导入的 true。
+            assert!(crate::settings::unify_codex_session_history());
+            Ok(())
+        })();
+
+        match original_test_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let _ = crate::settings::reload_settings();
+        result
     }
 }

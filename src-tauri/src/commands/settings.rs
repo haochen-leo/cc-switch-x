@@ -14,6 +14,17 @@ fn in_app_updates_enabled(app: &AppHandle) -> bool {
     )
 }
 
+/// 开启统一会话历史后，后台把官方会话迁进共享组的那一轮跑完了（或失败）。
+const CODEX_UNIFY_MIGRATION_FINISHED_EVENT: &str = "codex-unify-migration-finished";
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexUnifyMigrationFinished {
+    migrated_state_rows: usize,
+    migrated_jsonl_files: usize,
+    error: Option<String>,
+}
+
 /// 应用更新下载进度（通过 `update-download-progress` 事件发给前端）。
 #[derive(Clone, serde::Serialize)]
 struct UpdateDownloadProgress {
@@ -71,6 +82,7 @@ pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
 /// 保存设置
 #[tauri::command]
 pub async fn save_settings(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::store::AppState>,
     settings: crate::settings::AppSettings,
 ) -> Result<bool, String> {
@@ -122,21 +134,40 @@ pub async fn save_settings(
             // 后台执行存量迁移（openai 桶 → custom 桶；仅当用户勾选了迁入既有
             // 会话，函数内部自门控）。大会话目录可能要读数秒，不能阻塞设置保存；
             // 失败时不写完成标记，下次启动自动重试。
-            tauri::async_runtime::spawn_blocking(|| {
-                match crate::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
+            // 迁完（或失败）发事件给前端提示：「开启统一」时前端只说了“后台迁入中”，
+            // 用户要等到这一刻再重启 Codex，旧会话才会解锁。
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let finished = match crate::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
                     Ok(outcome) => {
                         if let Some(reason) = outcome.skipped_reason {
                             log::debug!("○ Codex official history unify migration skipped: {reason}");
+                            None
                         } else {
                             log::info!(
                                 "✓ Codex official history unify migration completed: jsonl_files={}, state_rows={}",
                                 outcome.migrated_jsonl_files,
                                 outcome.migrated_state_rows
                             );
+                            Some(CodexUnifyMigrationFinished {
+                                migrated_state_rows: outcome.migrated_state_rows,
+                                migrated_jsonl_files: outcome.migrated_jsonl_files,
+                                error: None,
+                            })
                         }
                     }
                     Err(e) => {
                         log::warn!("✗ Codex official history unify migration failed: {e}");
+                        Some(CodexUnifyMigrationFinished {
+                            migrated_state_rows: 0,
+                            migrated_jsonl_files: 0,
+                            error: Some(e.to_string()),
+                        })
+                    }
+                };
+                if let Some(payload) = finished {
+                    if let Err(e) = app.emit(CODEX_UNIFY_MIGRATION_FINISHED_EVENT, payload) {
+                        log::warn!("发送 Codex 统一迁移完成事件失败: {e}");
                     }
                 }
             });
@@ -560,6 +591,15 @@ mod tests {
                     migrated_state_rows: 7,
                     codex_config_dir: None,
                 }),
+                codex_legacy_official_history_bucket_v1: Some(
+                    crate::settings::CodexLegacyOfficialHistoryBucketMigration {
+                        completed_at: "2026-06-13T00:00:00Z".to_string(),
+                        target_provider_id: "openai".to_string(),
+                        migrated_jsonl_files: 1,
+                        migrated_state_rows: 1,
+                        codex_config_dir: None,
+                    },
+                ),
             }),
             ..AppSettings::default()
         };
@@ -613,6 +653,7 @@ mod tests {
                     migrated_state_rows: 2,
                     codex_config_dir: None,
                 }),
+                codex_legacy_official_history_bucket_v1: None,
             }),
             ..AppSettings::default()
         };

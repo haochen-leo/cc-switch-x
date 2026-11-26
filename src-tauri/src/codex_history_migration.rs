@@ -5,14 +5,18 @@
 
 use crate::codex_config::{
     get_codex_config_dir, read_codex_config_text, CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+    CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID, LEGACY_CC_SWITCH_OFFICIAL_PROXY_PROVIDER_ID,
 };
-use crate::codex_state_db::codex_state_db_paths;
+use crate::codex_rollout_file;
+use crate::codex_state_db::{
+    codex_state_db_is_lockable, codex_state_db_paths, count_threads_with_model_provider,
+};
 use crate::config::{atomic_write, copy_file, get_app_config_dir};
 use crate::database::{is_official_seed_id, Database};
 use crate::error::AppError;
 use crate::settings::{
-    CodexOfficialHistoryUnifyMigration, CodexProviderTemplateMigration,
-    CodexThirdPartyHistoryProviderBucketMigration,
+    CodexLegacyOfficialHistoryBucketMigration, CodexOfficialHistoryUnifyMigration,
+    CodexProviderTemplateMigration, CodexThirdPartyHistoryProviderBucketMigration,
 };
 use chrono::{Local, Utc};
 use rusqlite::{backup::Backup, params_from_iter, Connection};
@@ -214,22 +218,46 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     // marker 绑定迁移时的 Codex 目录：切换 codex_config_dir 后旧 marker 不再
     // 挡住新目录的迁移（迁移幂等，重跑无害）。
     let codex_dir_key = canonical_dir_string(&codex_dir);
-    if crate::settings::is_codex_official_history_unify_migrated_for_dir(&codex_dir_key) {
-        return Ok(CodexHistoryProviderBucketMigrationOutcome {
-            skipped_reason: Some("already_migrated".to_string()),
-            ..Default::default()
-        });
-    }
+    let config_text = read_codex_config_text().unwrap_or_default();
     // live 必须已实际路由到共享 custom 桶才允许迁移：官方配置的注入可能被拒
     // （已有显式 model_provider / 形态冲突的 custom 表，见
-    // `inject_codex_unified_session_bucket`）。这些状态下新会话仍落 "openai"
-    // 桶，迁移只会把历史搬进当前 live 看不见的桶里。开关与迁移意愿保持
-    // 不动，待 live 真正统一后（下次切换或启动重试）再迁。
-    if !codex_config_text_routes_custom(&read_codex_config_text().unwrap_or_default()) {
+    // `inject_codex_unified_session_bucket`），live 也可能还没按开关重写。
+    // 这些状态下新会话仍落 "openai" 桶，迁移只会把历史搬进当前 live 看不见的
+    // 桶里。待 live 真正统一后（下次切换或启动重试）再迁。
+    if !codex_config_text_routes_custom(&config_text) {
         return Ok(CodexHistoryProviderBucketMigrationOutcome {
             skipped_reason: Some("live_not_unified".to_string()),
             ..Default::default()
         });
+    }
+    // 对齐上游：勾选后不只跑一次，开启时一次、之后每次启动一次。Codex 桌面版
+    // 26.1103（CLI 0.167）起线程记的 provider id 和当前不一致就只读，开关开着
+    // 期间又落进 openai 桶的会话（开关关过又开、绕过 CC Switch 用过 Codex）也得
+    // 跟着迁。为免每次启动全扫会话目录（几千个文件、还要解压 .zst），先查
+    // state DB：没有 openai 线程就跳过；读不到 state DB 时退回「每个 Codex 目录
+    // 只全扫一次」的 marker 兜底。
+    match count_threads_with_model_provider(
+        &codex_dir,
+        &config_text,
+        OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID,
+    ) {
+        Some(0) => {
+            return Ok(CodexHistoryProviderBucketMigrationOutcome {
+                skipped_reason: Some("nothing_to_migrate".to_string()),
+                ..Default::default()
+            });
+        }
+        Some(_) => {}
+        None if crate::settings::is_codex_official_history_unify_migrated_for_dir(
+            &codex_dir_key,
+        ) =>
+        {
+            return Ok(CodexHistoryProviderBucketMigrationOutcome {
+                skipped_reason: Some("already_migrated".to_string()),
+                ..Default::default()
+            });
+        }
+        None => {}
     }
 
     let source_provider_ids: BTreeSet<String> =
@@ -271,6 +299,79 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     Ok(outcome)
 }
 
+/// 一次 Codex 切换让新会话换了组（openai ↔ custom），而统一会话开关关着。
+/// Codex 桌面版 26.1103（CLI 0.167）起只允许续聊 provider id 与当前相同的线程，
+/// 原来那组的会话从此只读，前端据此提示开启统一会话历史。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexHistorySplitHint {
+    /// 切换前新会话记的 provider id
+    pub previous_bucket: String,
+    /// 切换后新会话记的 provider id
+    pub current_bucket: String,
+    /// state DB 里记在切换前那组的线程数（现在会被锁成只读）
+    pub locked_threads: usize,
+}
+
+/// live config.toml 下新会话会记的 provider id：顶层 `model_provider`，缺省是内建 "openai"。
+/// 配置读不到或解析失败时为 None。
+pub fn codex_live_history_bucket() -> Option<String> {
+    let text = read_codex_config_text().ok()?;
+    codex_config_text_history_bucket(&text)
+}
+
+fn codex_config_text_history_bucket(config_text: &str) -> Option<String> {
+    let doc = config_text.parse::<DocumentMut>().ok()?;
+    let id = doc
+        .get("model_provider")
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID);
+    Some(id.to_string())
+}
+
+/// 切换完成后判断要不要提示：开关关着、新会话从 openai 换到 custom（或反过来），并且
+/// 原来那组确实有线程。只看 CC Switch 自己会写的这两组。
+pub fn codex_history_split_hint(previous_bucket: Option<&str>) -> Option<CodexHistorySplitHint> {
+    if crate::settings::unify_codex_session_history() {
+        return None;
+    }
+    let config_text = read_codex_config_text().ok()?;
+    codex_history_split_hint_for(previous_bucket?, &config_text, |bucket| {
+        crate::codex_state_db::count_threads_with_model_provider(
+            &get_codex_config_dir(),
+            &config_text,
+            bucket,
+        )
+    })
+}
+
+fn codex_history_split_hint_for(
+    previous_bucket: &str,
+    config_text: &str,
+    count_threads: impl FnOnce(&str) -> Option<usize>,
+) -> Option<CodexHistorySplitHint> {
+    // 新配置只写 openai/custom，两个旧接管 ID 由一次性迁移处理。
+    let is_managed = |bucket: &str| {
+        bucket == OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID
+            || bucket == CC_SWITCH_CODEX_MODEL_PROVIDER_ID
+    };
+    let current_bucket = codex_config_text_history_bucket(config_text)?;
+    if previous_bucket == current_bucket
+        || !is_managed(previous_bucket)
+        || !is_managed(&current_bucket)
+    {
+        return None;
+    }
+    let locked_threads = count_threads(previous_bucket)?;
+    (locked_threads > 0).then(|| CodexHistorySplitHint {
+        previous_bucket: previous_bucket.to_string(),
+        current_bucket,
+        locked_threads,
+    })
+}
+
 /// live config.toml 是否路由到共享 custom 桶（会话分桶只看这个实态：
 /// base_url / 接管与否都不影响 session_meta 记录的 model_provider）。
 fn codex_config_text_routes_custom(config_text: &str) -> bool {
@@ -283,6 +384,119 @@ fn codex_config_text_routes_custom(config_text: &str) -> bool {
                 .map(|id| id.trim() == CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
         })
         .unwrap_or(false)
+}
+
+/// 已停写的两个接管 ID，历史中仍可能出现。
+const CODEX_LEGACY_OFFICIAL_ROUTE_IDS: &[&str] = &[
+    CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID,
+    LEGACY_CC_SWITCH_OFFICIAL_PROXY_PROVIDER_ID,
+];
+
+/// 停写旧 ID 后，每个 Codex 目录只迁一次，目标取接管恢复后的实际 openai/custom 桶。
+/// X 曾把官方和聚合复用在旧 ID 下，无法从 ID 还原历史模式，所以不一律认作官方。
+/// 原生 openai 历史不在本次来源里，是否迁入 custom 仍由用户勾选项控制。
+/// 配置或 profile 仍选旧 ID 时等待配置切换完成，避免迁走还在使用的历史。
+pub fn maybe_migrate_codex_legacy_official_history_to_current_bucket(
+) -> Result<CodexHistoryProviderBucketMigrationOutcome, AppError> {
+    let _op_guard = lock_codex_official_history_op();
+    let codex_dir = get_codex_config_dir();
+    let codex_dir_key = canonical_dir_string(&codex_dir);
+    let config_text = read_codex_config_text()?;
+    if CODEX_LEGACY_OFFICIAL_ROUTE_IDS
+        .iter()
+        .any(|id| codex_config_selects_provider(&config_text, id))
+    {
+        return Ok(CodexHistoryProviderBucketMigrationOutcome {
+            skipped_reason: Some("legacy_route_in_use".to_string()),
+            ..Default::default()
+        });
+    }
+    let target_provider_id = match codex_config_text_history_bucket(&config_text) {
+        Some(id)
+            if id == OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID
+                || id == CC_SWITCH_CODEX_MODEL_PROVIDER_ID =>
+        {
+            id
+        }
+        _ => {
+            return Ok(CodexHistoryProviderBucketMigrationOutcome {
+                skipped_reason: Some("live_not_managed".to_string()),
+                ..Default::default()
+            });
+        }
+    };
+    if crate::settings::is_codex_legacy_official_history_bucket_migrated_for_dir(&codex_dir_key) {
+        return Ok(CodexHistoryProviderBucketMigrationOutcome {
+            skipped_reason: Some("already_migrated".to_string()),
+            ..Default::default()
+        });
+    }
+    if codex_state_db_paths(&codex_dir, &config_text)
+        .iter()
+        .any(|path| path.exists() && !codex_state_db_is_lockable(path))
+    {
+        return Ok(CodexHistoryProviderBucketMigrationOutcome {
+            skipped_reason: Some("state_db_unlockable".to_string()),
+            ..Default::default()
+        });
+    }
+
+    let source_provider_ids: BTreeSet<String> = CODEX_LEGACY_OFFICIAL_ROUTE_IDS
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    let backup_root = migration_backup_root(MIGRATION_NAME);
+    let migrated_jsonl_files = migrate_codex_jsonl_files_to(
+        &codex_dir,
+        &source_provider_ids,
+        &target_provider_id,
+        &backup_root,
+    )?;
+    let migrated_state_rows = migrate_codex_state_dbs_to(
+        &codex_dir,
+        &source_provider_ids,
+        &target_provider_id,
+        &backup_root,
+    )?;
+
+    crate::settings::mark_codex_legacy_official_history_bucket_migrated(
+        CodexLegacyOfficialHistoryBucketMigration {
+            completed_at: Utc::now().to_rfc3339(),
+            target_provider_id,
+            migrated_jsonl_files,
+            migrated_state_rows,
+            codex_config_dir: Some(codex_dir_key),
+        },
+    )?;
+
+    Ok(CodexHistoryProviderBucketMigrationOutcome {
+        source_provider_ids: source_provider_ids.into_iter().collect(),
+        migrated_jsonl_files,
+        migrated_state_rows,
+        skipped_reason: None,
+    })
+}
+
+/// 配置文本是否在顶层或任一 profile 里选中了指定 provider（与上游同实现）。
+fn codex_config_selects_provider(config_text: &str, provider_id: &str) -> bool {
+    let Ok(doc) = config_text.parse::<DocumentMut>() else {
+        return false;
+    };
+    let selects = |item: Option<&toml_edit::Item>| {
+        item.and_then(|item| item.as_str())
+            .is_some_and(|id| id.trim() == provider_id)
+    };
+    selects(doc.get("model_provider"))
+        || doc
+            .get("profiles")
+            .and_then(|item| item.as_table_like())
+            .is_some_and(|profiles| {
+                profiles.iter().any(|(_, profile)| {
+                    profile
+                        .as_table_like()
+                        .is_some_and(|profile| selects(profile.get("model_provider")))
+                })
+            })
 }
 
 /// 目录的规范化字符串形式，用作 marker / 备份代际的目录身份。
@@ -482,7 +696,7 @@ fn backup_generation_matches_dir(generation: &Path, codex_dir_key: &str) -> bool
 }
 
 fn collect_official_session_ids_from_backup(path: &Path, session_ids: &mut HashSet<String>) {
-    let Ok(content) = fs::read_to_string(path) else {
+    let Ok(content) = codex_rollout_file::read_to_string(path) else {
         log::debug!("Failed to read unify backup file {}", path.display());
         return;
     };
@@ -962,6 +1176,20 @@ fn migrate_codex_jsonl_files(
     source_provider_ids: &BTreeSet<String>,
     backup_root: &Path,
 ) -> Result<usize, AppError> {
+    migrate_codex_jsonl_files_to(
+        codex_dir,
+        source_provider_ids,
+        CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+        backup_root,
+    )
+}
+
+fn migrate_codex_jsonl_files_to(
+    codex_dir: &Path,
+    source_provider_ids: &BTreeSet<String>,
+    target_provider_id: &str,
+    backup_root: &Path,
+) -> Result<usize, AppError> {
     let mut files = Vec::new();
     collect_jsonl_files(&codex_dir.join("sessions"), &mut files, 0, 8);
     collect_jsonl_files(&codex_dir.join("archived_sessions"), &mut files, 0, 4);
@@ -969,12 +1197,9 @@ fn migrate_codex_jsonl_files(
     let source_provider_ids: HashSet<String> = source_provider_ids.iter().cloned().collect();
     let mut migrated = 0;
     for file_path in files {
-        if rewrite_codex_session_file_for_provider_bucket(
-            &file_path,
-            codex_dir,
-            &source_provider_ids,
-            backup_root,
-        )? {
+        if rewrite_codex_session_file_lines(&file_path, codex_dir, backup_root, |line| {
+            rewrite_codex_session_meta_line(line, &source_provider_ids, target_provider_id)
+        })? {
             migrated += 1;
         }
     }
@@ -1001,12 +1226,13 @@ fn collect_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>, depth: u8, max_dept
         let path = entry.path();
         if path.is_dir() {
             collect_jsonl_files(&path, files, depth + 1, max_depth);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+        } else if codex_rollout_file::is_rollout_file(&path) {
             files.push(path);
         }
     }
 }
 
+#[cfg(test)]
 fn rewrite_codex_session_file_for_provider_bucket(
     path: &Path,
     codex_dir: &Path,
@@ -1014,7 +1240,11 @@ fn rewrite_codex_session_file_for_provider_bucket(
     backup_root: &Path,
 ) -> Result<bool, AppError> {
     rewrite_codex_session_file_lines(path, codex_dir, backup_root, |line| {
-        rewrite_codex_session_meta_line(line, source_provider_ids)
+        rewrite_codex_session_meta_line(
+            line,
+            source_provider_ids,
+            CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+        )
     })
 }
 
@@ -1027,7 +1257,8 @@ fn rewrite_codex_session_file_lines(
     let metadata_before = fs::metadata(path).map_err(|e| AppError::io(path, e))?;
     let modified_before = metadata_before.modified().ok();
     let len_before = metadata_before.len();
-    let content = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
+    // Codex 压缩过的 rollout（`.jsonl.zst`）解压后改写、再压回原形态
+    let content = codex_rollout_file::read_to_string(path).map_err(|e| AppError::io(path, e))?;
 
     let mut rewritten = String::with_capacity(content.len());
     let mut changed = false;
@@ -1052,7 +1283,7 @@ fn rewrite_codex_session_file_lines(
     ensure_codex_session_file_unchanged(path, modified_before, len_before)?;
     backup_codex_jsonl_file(path, codex_dir, backup_root)?;
     ensure_codex_session_file_unchanged(path, modified_before, len_before)?;
-    atomic_write(path, rewritten.as_bytes())?;
+    codex_rollout_file::write_rollout(path, rewritten.as_bytes())?;
     Ok(true)
 }
 
@@ -1074,6 +1305,7 @@ fn ensure_codex_session_file_unchanged(
 fn rewrite_codex_session_meta_line(
     line: &str,
     source_provider_ids: &HashSet<String>,
+    target_provider_id: &str,
 ) -> Option<String> {
     if !line.contains("\"session_meta\"") || !line.contains("\"model_provider\"") {
         return None;
@@ -1092,7 +1324,7 @@ fn rewrite_codex_session_meta_line(
 
     payload.insert(
         "model_provider".to_string(),
-        Value::String(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string()),
+        Value::String(target_provider_id.to_string()),
     );
     serde_json::to_string(&value).ok()
 }
@@ -1102,23 +1334,58 @@ fn migrate_codex_state_dbs(
     source_provider_ids: &BTreeSet<String>,
     backup_root: &Path,
 ) -> Result<usize, AppError> {
+    migrate_codex_state_dbs_to(
+        codex_dir,
+        source_provider_ids,
+        CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+        backup_root,
+    )
+}
+
+fn migrate_codex_state_dbs_to(
+    codex_dir: &Path,
+    source_provider_ids: &BTreeSet<String>,
+    target_provider_id: &str,
+    backup_root: &Path,
+) -> Result<usize, AppError> {
     let config_text = read_codex_config_text().unwrap_or_default();
     let mut migrated = 0;
     for db_path in codex_state_db_paths(codex_dir, &config_text) {
-        migrated += migrate_codex_state_db_provider_bucket(
+        if !codex_state_db_is_lockable(&db_path) {
+            continue;
+        }
+        migrated += migrate_codex_state_db_provider_bucket_to(
             &db_path,
             codex_dir,
             source_provider_ids,
+            target_provider_id,
             backup_root,
         )?;
     }
     Ok(migrated)
 }
 
+#[cfg(test)]
 fn migrate_codex_state_db_provider_bucket(
     db_path: &Path,
     codex_dir: &Path,
     source_provider_ids: &BTreeSet<String>,
+    backup_root: &Path,
+) -> Result<usize, AppError> {
+    migrate_codex_state_db_provider_bucket_to(
+        db_path,
+        codex_dir,
+        source_provider_ids,
+        CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+        backup_root,
+    )
+}
+
+fn migrate_codex_state_db_provider_bucket_to(
+    db_path: &Path,
+    codex_dir: &Path,
+    source_provider_ids: &BTreeSet<String>,
+    target_provider_id: &str,
     backup_root: &Path,
 ) -> Result<usize, AppError> {
     if !db_path.exists() || source_provider_ids.is_empty() {
@@ -1155,7 +1422,7 @@ fn migrate_codex_state_db_provider_bucket(
     let update_sql =
         format!("UPDATE threads SET model_provider = ? WHERE model_provider IN ({placeholders})");
     let mut values = Vec::with_capacity(source_provider_ids.len() + 1);
-    values.push(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string());
+    values.push(target_provider_id.to_string());
     values.extend(source_provider_ids.iter().cloned());
     let tx = conn
         .transaction()
@@ -1194,6 +1461,12 @@ fn backup_codex_state_db(
     let backup_path = backup_root
         .join("state")
         .join(relative_backup_path(db_path, codex_dir));
+    // keep-first：三方桶迁移与官方接管桶迁移共用 MIGRATION_NAME 根目录，批次名
+    // 只精确到秒，同一秒连续迁移时同一个 state.db 的备份路径相同。第一份备份
+    // 才是迁移前的原始快照（第二份已是半迁移内容），已存在就保留，不覆盖。
+    if backup_path.exists() {
+        return Ok(());
+    }
     if let Some(parent) = backup_path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
@@ -1281,6 +1554,7 @@ mod tests {
     use super::*;
     use crate::codex_state_db::CODEX_STATE_DB_FILENAME;
     use crate::provider::Provider;
+    use crate::test_support::TestHome;
     use serial_test::serial;
     use std::ffi::OsString;
     use tempfile::tempdir;
@@ -1343,6 +1617,355 @@ base_url = "https://aihubmix.example/v1"
         ));
         assert!(!codex_config_text_routes_custom(""));
         assert!(!codex_config_text_routes_custom("not toml ["));
+    }
+
+    fn session_meta_line(id: &str, provider: &str) -> String {
+        format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\",\"model_provider\":\"{provider}\"}}}}\n"
+        )
+    }
+
+    fn seed_threads(db_path: &Path, rows: &[(&str, &str)]) {
+        let conn = Connection::open(db_path).expect("open state db");
+        conn.execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, model_provider TEXT NOT NULL);",
+        )
+        .expect("create threads");
+        for (id, provider) in rows {
+            conn.execute(
+                "INSERT INTO threads (id, model_provider) VALUES (?1, ?2)",
+                [id, provider],
+            )
+            .expect("insert thread");
+        }
+    }
+
+    fn thread_provider(db_path: &Path, id: &str) -> String {
+        Connection::open(db_path)
+            .expect("open state db")
+            .query_row(
+                "SELECT model_provider FROM threads WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("thread provider")
+    }
+
+    // 同一批次目录里对同一个 state.db 的第二次备份不得覆盖第一份：
+    // 第一份才是任何迁移发生前的原始快照（批次名只精确到秒，共用
+    // MIGRATION_NAME 的三方桶迁移与官方接管桶迁移会同秒撞同一路径）。
+    #[test]
+    #[serial]
+    fn state_db_backup_keeps_first_snapshot_within_same_batch() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let home = TestHome::new();
+        let codex_dir = home.path().join(".codex");
+        fs::create_dir_all(&codex_dir).expect("create codex dir");
+        let state_db = codex_dir.join("state.v2.db");
+        seed_threads(&state_db, &[("s1", "ccswitch")]);
+
+        let backup_root = home.path().join("batch");
+        let conn = Connection::open(&state_db).expect("open source");
+        backup_codex_state_db(&state_db, &codex_dir, &backup_root, &conn).expect("first backup");
+
+        // 第一次备份完成后源库被改写（模拟前一个迁移已落地），再次备份同一路径。
+        conn.execute(
+            "UPDATE threads SET model_provider = 'custom' WHERE id = 's1'",
+            [],
+        )
+        .expect("mutate source");
+        backup_codex_state_db(&state_db, &codex_dir, &backup_root, &conn).expect("second backup");
+        drop(conn);
+
+        let backup_path = backup_root
+            .join("state")
+            .join(relative_backup_path(&state_db, &codex_dir));
+        assert_eq!(
+            thread_provider(&backup_path, "s1"),
+            "ccswitch",
+            "备份必须保留迁移前的第一份原始快照"
+        );
+    }
+
+    // 覆盖两个已停写 ID、压缩 rollout，以及完成后切换供应商不再重写历史。
+    #[test]
+    #[serial]
+    fn migrates_legacy_official_route_sessions_to_openai_bucket() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let home = TestHome::new();
+        let codex_dir = home.path().join(".codex");
+        let session_dir = codex_dir.join("sessions/2026/09/01");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        // 休眠 custom 表保持原样：迁移不碰 config.toml。
+        let config = "model = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n";
+        fs::write(codex_dir.join("config.toml"), config).expect("write config");
+
+        let plain = session_dir.join("rollout-legacy.jsonl");
+        fs::write(
+            &plain,
+            session_meta_line("s1", "cc-switch-x-official")
+                + "{\"type\":\"response_item\",\"payload\":{\"text\":\"cc-switch-x-official\"}}\n",
+        )
+        .expect("write plain session");
+        let compressed = session_dir.join("rollout-legacy-zst.jsonl.zst");
+        fs::write(
+            &compressed,
+            zstd::stream::encode_all(session_meta_line("s2", "cc-switch-official").as_bytes(), 3)
+                .expect("encode"),
+        )
+        .expect("write zst session");
+        let third_party = session_dir.join("rollout-custom.jsonl");
+        fs::write(&third_party, session_meta_line("s3", "custom")).expect("write custom session");
+
+        let state_db = codex_dir.join(CODEX_STATE_DB_FILENAME);
+        seed_threads(
+            &state_db,
+            &[
+                ("s1", "cc-switch-x-official"),
+                ("s2", "cc-switch-official"),
+                ("s3", "custom"),
+                ("s4", "openai"),
+            ],
+        );
+
+        let outcome = maybe_migrate_codex_legacy_official_history_to_current_bucket()
+            .expect("migrate legacy official bucket");
+        assert_eq!(outcome.skipped_reason, None);
+        assert_eq!(outcome.migrated_jsonl_files, 2);
+        assert_eq!(outcome.migrated_state_rows, 2);
+
+        let plain_text = fs::read_to_string(&plain).expect("read plain");
+        assert!(plain_text.contains("\"model_provider\":\"openai\""));
+        // 只改 session_meta，正文里出现的同名字符串不动。
+        assert!(plain_text.contains(
+            "{\"type\":\"response_item\",\"payload\":{\"text\":\"cc-switch-x-official\"}}"
+        ));
+        let raw = fs::read(&compressed).expect("read zst");
+        assert_eq!(&raw[..4], &[0x28, 0xB5, 0x2F, 0xFD], "still zstd");
+        let decoded = String::from_utf8(zstd::stream::decode_all(raw.as_slice()).expect("decode"))
+            .expect("utf8");
+        assert!(decoded.contains("\"model_provider\":\"openai\""));
+        assert_eq!(
+            fs::read_to_string(&third_party).expect("read custom"),
+            session_meta_line("s3", "custom")
+        );
+
+        assert_eq!(thread_provider(&state_db, "s1"), "openai");
+        assert_eq!(thread_provider(&state_db, "s2"), "openai");
+        assert_eq!(thread_provider(&state_db, "s3"), "custom");
+        assert_eq!(thread_provider(&state_db, "s4"), "openai");
+
+        assert_eq!(
+            fs::read_to_string(codex_dir.join("config.toml")).expect("read config"),
+            config
+        );
+        let backups = get_app_config_dir().join("backups").join(MIGRATION_NAME);
+        assert!(
+            backups.is_dir(),
+            "backup written under {}",
+            backups.display()
+        );
+
+        // 已停写的旧 ID 只迁一次；之后换成第三方/聚合不改已归桶的历史。
+        fs::write(
+            codex_dir.join("config.toml"),
+            "model_provider = \"custom\"\n",
+        )
+        .expect("switch bucket");
+        let rerun = maybe_migrate_codex_legacy_official_history_to_current_bucket().expect("rerun");
+        assert_eq!(rerun.skipped_reason.as_deref(), Some("already_migrated"));
+        assert_eq!(thread_provider(&state_db, "s1"), "openai");
+        assert_eq!(
+            fs::read_to_string(&plain).expect("read unchanged rollout"),
+            plain_text
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn legacy_route_history_follows_custom_without_migrating_native_openai_history() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        // 官方已统一但没勾迁入、以及统一关闭的聚合，都要把旧 ID 迁到实际 custom。
+        for unified in [false, true] {
+            let home = TestHome::new();
+            let codex_dir = home.path().join(".codex");
+            let sessions = codex_dir.join("sessions");
+            fs::create_dir_all(&sessions).expect("sessions");
+            let config = if unified {
+                crate::codex_config::apply_codex_official_proxy_route(
+                    "",
+                    "http://127.0.0.1:15722/v1",
+                    true,
+                )
+                .expect("unified official")
+            } else {
+                crate::codex_config::apply_codex_aggregate_proxy_route(
+                    "",
+                    "http://127.0.0.1:15722/v1",
+                )
+                .expect("aggregate")
+            };
+            fs::write(codex_dir.join("config.toml"), &config).expect("config");
+            let mut settings = crate::settings::get_settings();
+            settings.unify_codex_session_history = unified;
+            settings.unify_codex_migrate_existing = None;
+            crate::settings::update_settings(settings).expect("settings");
+
+            let native = session_meta_line("native", "openai");
+            fs::write(sessions.join("native.jsonl"), &native).expect("native session");
+            fs::write(
+                sessions.join("x.jsonl"),
+                session_meta_line("x", "cc-switch-x-official"),
+            )
+            .expect("X session");
+            fs::write(
+                sessions.join("upstream.jsonl"),
+                session_meta_line("upstream", "cc-switch-official"),
+            )
+            .expect("upstream session");
+            let state_db = codex_dir.join(CODEX_STATE_DB_FILENAME);
+            seed_threads(
+                &state_db,
+                &[
+                    ("x", "cc-switch-x-official"),
+                    ("upstream", "cc-switch-official"),
+                    ("native", "openai"),
+                ],
+            );
+
+            let outcome = maybe_migrate_codex_legacy_official_history_to_current_bucket()
+                .expect("migrate retired IDs");
+            assert_eq!(outcome.skipped_reason, None);
+            assert_eq!(outcome.migrated_jsonl_files, 2);
+            assert_eq!(outcome.migrated_state_rows, 2);
+            for id in ["x", "upstream"] {
+                assert_eq!(thread_provider(&state_db, id), "custom");
+                assert!(fs::read_to_string(sessions.join(format!("{id}.jsonl")))
+                    .expect("rollout")
+                    .contains("\"model_provider\":\"custom\""));
+            }
+            assert_eq!(thread_provider(&state_db, "native"), "openai");
+            assert_eq!(
+                fs::read_to_string(sessions.join("native.jsonl")).expect("native"),
+                native
+            );
+            assert_eq!(
+                fs::read_to_string(codex_dir.join("config.toml")).expect("config"),
+                config
+            );
+            assert_eq!(
+                maybe_migrate_codex_official_history_to_unified_bucket()
+                    .expect("respect migration opt-in")
+                    .migrated_state_rows,
+                0
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn skips_legacy_official_migration_while_a_profile_still_selects_it() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let home = TestHome::new();
+        let codex_dir = home.path().join(".codex");
+        fs::create_dir_all(&codex_dir).expect("create codex dir");
+        fs::write(
+            codex_dir.join("config.toml"),
+            "[profiles.legacy]\nmodel_provider = \"cc-switch-x-official\"\n\n[model_providers.cc-switch-x-official]\nname = \"OpenAI\"\nrequires_openai_auth = true\n",
+        )
+        .expect("write config");
+        let state_db = codex_dir.join(CODEX_STATE_DB_FILENAME);
+        seed_threads(&state_db, &[("s1", "cc-switch-x-official")]);
+
+        let outcome = maybe_migrate_codex_legacy_official_history_to_current_bucket()
+            .expect("check legacy official bucket");
+        assert_eq!(
+            outcome.skipped_reason.as_deref(),
+            Some("legacy_route_in_use")
+        );
+        assert_eq!(thread_provider(&state_db, "s1"), "cc-switch-x-official");
+        // 没写完成标记：用户把 profile 改掉后下次启动照常迁移。
+        assert!(
+            !crate::settings::is_codex_legacy_official_history_bucket_migrated_for_dir(
+                &canonical_dir_string(&codex_dir)
+            )
+        );
+    }
+
+    #[test]
+    fn detects_provider_selected_at_top_level_or_by_a_profile() {
+        let id = "cc-switch-x-official";
+        assert!(codex_config_selects_provider(
+            "model_provider = \"cc-switch-x-official\"\n",
+            id
+        ));
+        assert!(codex_config_selects_provider(
+            "[profiles.a]\nmodel = \"x\"\n\n[profiles.b]\nmodel_provider = \"cc-switch-x-official\"\n",
+            id
+        ));
+        assert!(!codex_config_selects_provider(
+            "model_provider = \"custom\"\n\n[model_providers.cc-switch-x-official]\nname = \"OpenAI\"\n",
+            id
+        ));
+        assert!(!codex_config_selects_provider("not = [valid", id));
+    }
+
+    #[test]
+    fn split_hint_only_when_switch_crosses_managed_buckets_with_old_threads() {
+        let custom = "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"OpenAI\"\nrequires_openai_auth = true\nwire_api = \"responses\"\n";
+        let official = "model = \"gpt-5.5\"\n";
+
+        let hint = codex_history_split_hint_for("openai", custom, |bucket| {
+            assert_eq!(bucket, "openai", "counts the bucket that just got locked");
+            Some(3)
+        });
+        assert_eq!(
+            hint,
+            Some(CodexHistorySplitHint {
+                previous_bucket: "openai".to_string(),
+                current_bucket: "custom".to_string(),
+                locked_threads: 3,
+            })
+        );
+        assert!(codex_history_split_hint_for("custom", official, |_| Some(2)).is_some());
+
+        // 旧 ID 已停写，由一次性迁移兼容；切换提示只认两个现行桶。
+        assert_eq!(
+            codex_history_split_hint_for("cc-switch-x-official", custom, |_| Some(4)),
+            None
+        );
+        assert!(codex_history_split_hint_for(
+            "custom",
+            "model_provider = \"cc-switch-x-official\"\n",
+            |_| Some(1)
+        )
+        .is_none());
+
+        // 没换组 / 换的不是 CC Switch 管的桶 / 旧组没线程 / 读不到 state DB：都不提示。
+        assert_eq!(
+            codex_history_split_hint_for("custom", custom, |_| Some(9)),
+            None
+        );
+        assert_eq!(
+            codex_history_split_hint_for("some-other-provider", official, |_| Some(9)),
+            None
+        );
+        assert_eq!(
+            codex_history_split_hint_for("openai", custom, |_| Some(0)),
+            None
+        );
+        assert_eq!(
+            codex_history_split_hint_for("openai", custom, |_| None),
+            None
+        );
     }
 
     fn migrate_provider_templates_for_test(

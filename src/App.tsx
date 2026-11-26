@@ -53,6 +53,11 @@ import {
   extractErrorMessage,
   translatePiProviderMutationError,
 } from "@/utils/errorUtils";
+import {
+  CODEX_UNIFY_MIGRATION_FINISHED_EVENT,
+  showCodexUnifyMigrationFinished,
+  type CodexUnifyMigrationFinished,
+} from "@/utils/codexHistorySplitHint";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { deepClone } from "@/utils/deepClone";
 import { cn } from "@/lib/utils";
@@ -458,6 +463,16 @@ function App() {
       console.error("[App] Failed to update tray menu", error);
     }
   });
+
+  // 开启统一会话历史后，后台迁入跑完（或失败）时提示用户：此刻重启 Codex 旧会话才解锁
+  useTauriEvent<CodexUnifyMigrationFinished>(
+    CODEX_UNIFY_MIGRATION_FINISHED_EVENT,
+    (payload) => {
+      if (payload) {
+        showCodexUnifyMigrationFinished(payload, t);
+      }
+    },
+  );
 
   // 应用项目后刷新相关缓存（providers 由既有 provider-switched 监听承接；
   // proxy 状态由后端直接改 DB，不走 mutation，必须显式刷新）

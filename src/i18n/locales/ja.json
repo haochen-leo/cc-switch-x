@@ -251,6 +251,13 @@
     "providerDeleted": "プロバイダーを削除しました",
     "switchSuccess": "切り替え成功！",
     "codexRestartRequired": "切り替えました。反映するにはクライアントを再起動してください",
+    "codexHistorySplit": {
+      "hint": "{{previous}}で作成した {{count}} 件のセッションは閲覧のみになりました",
+      "officialBucket": "公式サブスクリプション",
+      "thirdPartyBucket": "サードパーティプロバイダー",
+      "migrationFinished": "古いセッションを {{count}} 件移行しました。Codex を再起動すると続けられます。",
+      "migrationFailed": "古いセッションの移行に失敗しました：{{error}}。次回 CC Switch の起動時に自動で再試行します。"
+    },
     "grokBuildRestartRequired": "切り替えました。反映するには Grok Build を再起動してください",
     "claudeDesktopRestartRequired": "切り替えました。反映するには Claude Desktop を再起動してください",
     "claudeDesktopProxyRestartRequired": "切り替えました。CC Switch を起動したまま Claude Desktop を再起動してください",

@@ -19,6 +19,15 @@ export interface ProviderSwitchEvent {
 
 export interface SwitchResult {
   warnings: string[];
+  /** Codex 切换跨越 openai/custom 历史桶时的分桶提示（仅提示，不迁移） */
+  codexHistorySplit?: CodexHistorySplitHint | null;
+}
+
+/** 一次 Codex 切换让新会话换了组（openai ↔ custom），原来那组的会话会被锁住。 */
+export interface CodexHistorySplitHint {
+  previousBucket: string;
+  currentBucket: string;
+  lockedThreads: number;
 }
 
 export interface OpenTerminalOptions {

@@ -251,6 +251,13 @@
     "providerDeleted": "供应商删除成功",
     "switchSuccess": "切换成功！",
     "codexRestartRequired": "切换成功，请重启客户端以生效",
+    "codexHistorySplit": {
+      "hint": "之前在{{previous}}下的 {{count}} 个会话现在只能查看",
+      "officialBucket": "官方订阅",
+      "thirdPartyBucket": "第三方供应商",
+      "migrationFinished": "已迁入 {{count}} 个旧会话，重启 Codex 后即可继续",
+      "migrationFailed": "迁入旧会话失败：{{error}}。下次启动 CC Switch 会自动重试"
+    },
     "grokBuildRestartRequired": "切换成功，请重启 Grok Build 以生效",
     "claudeDesktopRestartRequired": "切换成功，重启 Claude Desktop 后生效",
     "claudeDesktopProxyRestartRequired": "切换成功，请保持 CC Switch 运行，并重启 Claude Desktop 后生效",

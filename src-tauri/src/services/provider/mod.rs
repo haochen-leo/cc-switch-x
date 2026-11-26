@@ -109,6 +109,9 @@ pub struct ProviderService;
 #[serde(rename_all = "camelCase")]
 pub struct SwitchResult {
     pub warnings: Vec<String>,
+    /// Codex 切换跨越 openai/custom 历史桶时的分桶提示（仅提示，不迁移）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_history_split: Option<crate::codex_history_migration::CodexHistorySplitHint>,
 }
 
 #[cfg(test)]

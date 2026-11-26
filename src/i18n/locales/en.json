@@ -251,6 +251,13 @@
     "providerDeleted": "Provider deleted successfully",
     "switchSuccess": "Switch successful!",
     "codexRestartRequired": "Switched successfully. Restart the client to apply changes.",
+    "codexHistorySplit": {
+      "hint": "{{count}} sessions from {{previous}} are now read-only",
+      "officialBucket": "the official subscription",
+      "thirdPartyBucket": "third-party providers",
+      "migrationFinished": "Migrated {{count}} old sessions. Restart Codex to continue them.",
+      "migrationFailed": "Failed to migrate old sessions: {{error}}. CC Switch will retry on next launch."
+    },
     "grokBuildRestartRequired": "Switched successfully. Restart Grok Build to apply changes.",
     "claudeDesktopRestartRequired": "Switched successfully. Restart Claude Desktop to apply changes.",
     "claudeDesktopProxyRestartRequired": "Switched successfully. Keep CC Switch running and restart Claude Desktop to apply changes.",

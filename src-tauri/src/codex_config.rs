@@ -24,10 +24,12 @@ pub const CC_SWITCH_CODEX_AGGREGATE_PROVIDER_NAME: &str = "Codex Multi Provider"
 /// Internal aggregate-catalog field carrying one complete official Codex model
 /// descriptor. It is unwrapped verbatim when writing the external catalog.
 pub(crate) const CODEX_OFFICIAL_CATALOG_ENTRY_FIELD: &str = "officialCatalogEntry";
-/// Legacy/default model-provider id used while the built-in `codex-official`
-/// provider is routed through CC Switch with unified history disabled. It is
-/// still recognized so older live configs can be detected and cleaned up.
+/// 旧版官方/聚合接管的 provider id。新配置只使用 openai/custom；
+/// 保留常量用于识别、清理旧配置和迁移历史，不再生成这个 id。
 pub const CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID: &str = "cc-switch-x-official";
+/// 改名前上游时代使用的官方接管路由 ID。X 不再写入，但老用户历史会话里
+/// 仍有记录，历史归桶迁移需要把它一并收敛。
+pub const LEGACY_CC_SWITCH_OFFICIAL_PROXY_PROVIDER_ID: &str = "cc-switch-official";
 pub const CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-x-model-catalog.json";
 const CODEX_PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
 const CODEX_REASONING_EFFORT_MAX: &str = "max";
@@ -3768,9 +3770,8 @@ fn remove_owned_codex_realtime_overrides(doc: &mut DocumentMut) {
 /// Project a Codex official account card through the local proxy while keeping
 /// authentication owned by Codex itself.
 ///
-/// The resulting custom provider explicitly opts into OpenAI authentication,
-/// so Codex forwards its existing ChatGPT login to the local `/responses`
-/// endpoint.  No API key or bearer placeholder is written to `auth.json`.
+/// 未统一时通过 openai_base_url 改道，保持内建 openai 会话桶；统一时
+/// 写 custom 官方镜像。两种路径都沿用 Codex 登录，不改 auth.json。
 pub fn apply_codex_official_proxy_route(
     config_text: &str,
     proxy_base_url: &str,
@@ -3790,12 +3791,12 @@ pub fn apply_codex_official_proxy_route(
 pub fn apply_codex_aggregate_proxy_route(
     config_text: &str,
     proxy_base_url: &str,
-    unify_session_history: bool,
 ) -> Result<String, AppError> {
+    // 聚合包含第三方协议转换，始终用 custom；保留独立 name，继续走本地压缩。
     apply_codex_native_auth_proxy_route(
         config_text,
         proxy_base_url,
-        unify_session_history,
+        true,
         codex_aggregate_provider_table(proxy_base_url),
     )
 }
@@ -3803,7 +3804,7 @@ pub fn apply_codex_aggregate_proxy_route(
 fn apply_codex_native_auth_proxy_route(
     config_text: &str,
     proxy_base_url: &str,
-    unify_session_history: bool,
+    use_custom_bucket: bool,
     mut provider_table: toml_edit::Table,
 ) -> Result<String, AppError> {
     let mut doc = config_text
@@ -3813,12 +3814,14 @@ fn apply_codex_native_auth_proxy_route(
     // A third-party takeover may have left the proxy placeholder in config.toml.
     // The official route must use Codex's native OpenAI login instead.
     doc.as_table_mut().remove("experimental_bearer_token");
-    let active_provider_id = if unify_session_history {
-        CC_SWITCH_CODEX_MODEL_PROVIDER_ID
+    if use_custom_bucket {
+        doc["model_provider"] = toml_edit::value(CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+        doc.as_table_mut().remove("openai_base_url");
     } else {
-        CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID
-    };
-    doc["model_provider"] = toml_edit::value(active_provider_id);
+        // 与上游官方接管一致：进出代理不改变 openai 历史身份。
+        doc.as_table_mut().remove("model_provider");
+        doc["openai_base_url"] = toml_edit::value(proxy_base_url.trim_end_matches('/'));
+    }
 
     let mut providers = match doc.as_table_mut().remove("model_providers") {
         Some(item) => item.into_table().map_err(|_| {
@@ -3845,13 +3848,33 @@ fn apply_codex_native_auth_proxy_route(
         toml_edit::value(CODEX_REALTIME_WEBRTC_CALL_BASE_URL);
     doc[CODEX_REALTIME_WS_BASE_URL_KEY] = toml_edit::value(CODEX_REALTIME_WS_BASE_URL);
 
-    if unify_session_history {
-        // The legacy ownership id is never active in unified-history mode and
-        // must not survive as a second official proxy definition.
-        providers.remove(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID);
+    for id in [
+        CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID,
+        LEGACY_CC_SWITCH_OFFICIAL_PROXY_PROVIDER_ID,
+    ] {
+        providers.remove(id);
     }
-    providers.insert(active_provider_id, toml_edit::Item::Table(provider_table));
-    doc["model_providers"] = toml_edit::Item::Table(providers);
+    if use_custom_bucket {
+        providers.insert(
+            CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+            toml_edit::Item::Table(provider_table),
+        );
+    } else if providers.contains_key(CC_SWITCH_CODEX_MODEL_PROVIDER_ID) {
+        // 官方未统一时保留休眠 custom 定义，让旧第三方历史仍能解析；
+        // 路由只由顶层 openai_base_url 决定，不沿用上次的第三方凭据。
+        let mut dormant = toml_edit::Table::new();
+        dormant["name"] = toml_edit::value(CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+        dormant["base_url"] = toml_edit::value(proxy_base_url.trim_end_matches('/'));
+        dormant["wire_api"] = toml_edit::value("responses");
+        dormant["experimental_bearer_token"] = toml_edit::value(CODEX_PROXY_AUTH_PLACEHOLDER);
+        providers.insert(
+            CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+            toml_edit::Item::Table(dormant),
+        );
+    }
+    if !providers.is_empty() {
+        doc["model_providers"] = toml_edit::Item::Table(providers);
+    }
     Ok(doc.to_string())
 }
 
@@ -3889,14 +3912,29 @@ fn table_matches_codex_native_auth_proxy_provider(table: &toml_edit::Table) -> b
 }
 
 /// Whether a live Codex config is a native-auth route projected by CC Switch.
-/// Recognizes official and aggregate routes under the legacy or unified ids.
+/// 识别 openai_base_url 官方改道、custom 官方/聚合路由以及两个旧 ID。
 pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
     let Ok(doc) = config_text.parse::<DocumentMut>() else {
         return false;
     };
     let active_provider_id = doc.get("model_provider").and_then(|item| item.as_str());
-    if active_provider_id == Some(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID) {
+    if matches!(
+        active_provider_id,
+        Some(
+            CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID
+                | LEGACY_CC_SWITCH_OFFICIAL_PROXY_PROVIDER_ID
+        )
+    ) {
         return true;
+    }
+    if matches!(
+        active_provider_id,
+        None | Some(CODEX_OPENAI_MODEL_PROVIDER_ID)
+    ) {
+        return doc
+            .get("openai_base_url")
+            .and_then(|item| item.as_str())
+            .is_some_and(is_local_codex_proxy_url);
     }
     if active_provider_id != Some(CC_SWITCH_CODEX_MODEL_PROVIDER_ID) {
         return false;
@@ -3908,21 +3946,35 @@ pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
         .is_some_and(table_matches_codex_native_auth_proxy_provider)
 }
 
-/// Remove only the legacy official takeover route owned by CC Switch. Unified
-/// `custom` routes keep their history identity; last-resort cleanup only strips
-/// their local proxy base URL before this function is called.
+/// 移除官方 openai 改道和两个旧接管 ID；custom 路由保留历史身份，
+/// 其本地地址由调用方的通用接管清理处理。
 pub fn remove_codex_official_proxy_route(config_text: &str) -> Result<String, AppError> {
     let mut doc = config_text
         .parse::<DocumentMut>()
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
-    if doc.get("model_provider").and_then(|item| item.as_str())
-        != Some(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
+    let active_provider_id = doc.get("model_provider").and_then(|item| item.as_str());
+    let legacy = matches!(
+        active_provider_id,
+        Some(
+            CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID
+                | LEGACY_CC_SWITCH_OFFICIAL_PROXY_PROVIDER_ID
+        )
+    );
+    if !legacy
+        && !matches!(
+            active_provider_id,
+            None | Some(CODEX_OPENAI_MODEL_PROVIDER_ID)
+        )
     {
+        return Ok(config_text.to_string());
+    }
+    if !legacy && !codex_config_has_official_proxy_route(config_text) {
         return Ok(config_text.to_string());
     }
 
     remove_owned_codex_realtime_overrides(&mut doc);
     doc.as_table_mut().remove("model_provider");
+    doc.as_table_mut().remove("openai_base_url");
     if let Some(item) = doc.as_table_mut().remove("model_providers") {
         let mut providers = item.into_table().map_err(|_| {
             AppError::Message(
@@ -3930,6 +3982,7 @@ pub fn remove_codex_official_proxy_route(config_text: &str) -> Result<String, Ap
             )
         })?;
         providers.remove(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID);
+        providers.remove(LEGACY_CC_SWITCH_OFFICIAL_PROXY_PROVIDER_ID);
         remove_codex_proxy_placeholders_from_providers(&mut providers);
         if !providers.is_empty() {
             doc["model_providers"] = toml_edit::Item::Table(providers);
@@ -4896,7 +4949,7 @@ enabled-reasoning-efforts = ["low", "medium", "high", "xhigh"]
     }
 
     #[test]
-    fn official_proxy_route_uses_legacy_provider_when_unified_history_is_disabled() {
+    fn official_proxy_route_keeps_openai_when_unified_history_is_disabled() {
         let input = r#"model = "gpt-5.4"
 experimental_bearer_token = "PROXY_MANAGED"
 
@@ -4907,19 +4960,16 @@ command = "example"
             .expect("apply official proxy route");
         let doc: toml::Value = toml::from_str(&output).expect("parse output");
 
-        assert_eq!(
-            doc.get("model_provider").and_then(toml::Value::as_str),
-            Some(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
-        );
+        assert!(doc.get("model_provider").is_none());
+        assert!(doc.get("model_providers").is_none());
         assert!(doc.get("experimental_bearer_token").is_none());
         assert!(
             doc.get("mcp_servers").is_some(),
             "unrelated config survives"
         );
 
-        let provider = &doc["model_providers"][CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID];
         assert_eq!(
-            provider.get("base_url").and_then(toml::Value::as_str),
+            doc.get("openai_base_url").and_then(toml::Value::as_str),
             Some("http://127.0.0.1:15721/v1")
         );
         assert_eq!(
@@ -4932,18 +4982,6 @@ command = "example"
                 .and_then(toml::Value::as_str),
             Some(CODEX_REALTIME_WS_BASE_URL)
         );
-        assert_eq!(
-            provider
-                .get("requires_openai_auth")
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            provider
-                .get("supports_websockets")
-                .and_then(toml::Value::as_bool),
-            Some(false)
-        );
         assert!(codex_config_has_official_proxy_route(&output));
     }
 
@@ -4951,6 +4989,7 @@ command = "example"
     fn official_proxy_route_uses_custom_when_unified_history_is_enabled() {
         let input = r#"model_provider = "openai"
 model = "gpt-5.4"
+openai_base_url = "http://127.0.0.1:15721/v1"
 
 [model_providers.cc-switch-x-official]
 name = "OpenAI"
@@ -4970,6 +5009,7 @@ supports_websockets = false
         let providers = doc["model_providers"]
             .as_table()
             .expect("provider definitions");
+        assert!(doc.get("openai_base_url").is_none());
         assert!(providers
             .get(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
             .is_none());
@@ -5019,12 +5059,9 @@ supports_websockets = false
 
     #[test]
     fn aggregate_proxy_route_keeps_models_on_proxy_and_realtime_on_official() {
-        let output = apply_codex_aggregate_proxy_route(
-            "model = \"gpt-5.4\"\n",
-            "http://127.0.0.1:15721/v1",
-            true,
-        )
-        .expect("apply aggregate proxy route");
+        let output =
+            apply_codex_aggregate_proxy_route("model = \"gpt-5.4\"\n", "http://127.0.0.1:15721/v1")
+                .expect("apply aggregate proxy route");
         let doc: toml::Value = toml::from_str(&output).expect("parse output");
 
         let provider = &doc["model_providers"][CC_SWITCH_CODEX_MODEL_PROVIDER_ID];
@@ -5079,15 +5116,62 @@ model_providers = { rightcode = { name = "RightCode", experimental_bearer_token 
             .is_none());
         assert!(projected_doc["model_providers"]
             .get(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
-            .is_some());
+            .is_none());
+        assert_eq!(
+            projected_doc["openai_base_url"].as_str(),
+            Some("http://127.0.0.1:15721/v1")
+        );
 
         let cleaned = remove_codex_official_proxy_route(&projected).expect("clean projected");
         let cleaned_doc: toml::Value = toml::from_str(&cleaned).expect("parse cleaned");
         assert!(cleaned_doc.get("model_provider").is_none());
+        assert!(cleaned_doc.get("openai_base_url").is_none());
         assert!(cleaned_doc["model_providers"].get("rightcode").is_some());
         assert!(cleaned_doc["model_providers"]
             .get(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
             .is_none());
+    }
+
+    #[test]
+    fn official_and_aggregate_routes_retire_both_old_ids_without_losing_custom_definition() {
+        let input = r#"model_provider = "cc-switch-x-official"
+[model_providers.cc-switch-x-official]
+name = "Codex Multi Provider"
+[model_providers.cc-switch-official]
+name = "OpenAI"
+[model_providers.custom]
+name = "Relay"
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "relay-key"
+"#;
+        let proxy = "http://127.0.0.1:15722/v1";
+        let direct_bucket =
+            apply_codex_official_proxy_route(input, proxy, false).expect("official");
+        let doc: toml::Value = toml::from_str(&direct_bucket).expect("parse official");
+        assert!(doc.get("model_provider").is_none());
+        let providers = doc["model_providers"].as_table().expect("providers");
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers["custom"]["base_url"].as_str(), Some(proxy));
+        assert_eq!(
+            providers["custom"]["experimental_bearer_token"].as_str(),
+            Some(CODEX_PROXY_AUTH_PLACEHOLDER)
+        );
+
+        for output in [
+            apply_codex_official_proxy_route(input, proxy, true).expect("unified official"),
+            apply_codex_aggregate_proxy_route(&direct_bucket, proxy).expect("aggregate"),
+        ] {
+            let doc: toml::Value = toml::from_str(&output).expect("parse custom");
+            assert_eq!(doc["model_provider"].as_str(), Some("custom"));
+            assert!(doc.get("openai_base_url").is_none());
+            assert_eq!(
+                doc["model_providers"].as_table().expect("providers").len(),
+                1
+            );
+            assert!(doc["model_providers"]["custom"]
+                .get("experimental_bearer_token")
+                .is_none());
+        }
     }
 
     #[test]
