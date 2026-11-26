@@ -48,6 +48,7 @@ const EXTRA_CHAT_PASSTHROUGH_FIELDS: &[&str] = &[
 const TOOL_SEARCH_PROXY_NAME: &str = "tool_search";
 const CUSTOM_TOOL_INPUT_FIELD: &str = "input";
 const CHAT_TOOL_NAME_MAX_LEN: usize = 64;
+const RESPONSES_ID_MAX_LEN: usize = 64;
 const CUSTOM_TOOL_INPUT_DESCRIPTION: &str = "Raw string input for the original custom tool. Preserve formatting exactly and follow the original tool definition embedded in the description.";
 const CUSTOM_TOOL_PRESERVED_METADATA_HEADING: &str = "Original tool definition:";
 
@@ -98,6 +99,19 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
         0
     };
     for (index, item) in input.iter_mut().enumerate() {
+        if let Some(call_id) = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .filter(|call_id| call_id.len() > RESPONSES_ID_MAX_LEN)
+        {
+            // 原生 Responses 同样限制 call_id 长度；调用和结果必须使用相同的
+            // 确定性映射，才能保留跨模型回放时的工具配对关系。
+            item["call_id"] = json!(format!(
+                "call_ccswitch_{}",
+                short_sha256_hex(call_id.as_bytes())
+            ));
+            changed += 1;
+        }
         let item_type = item.get("type").and_then(Value::as_str);
         if item_type == Some("reasoning")
             && item
@@ -148,10 +162,7 @@ fn normalize_replayed_item_ids_for_responses_upstream_with_policy(
         };
 
         let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
-        if !id.is_empty()
-            && id.starts_with(required_prefix)
-            && is_canonical_responses_item_id_charset(id)
-        {
+        if !id.is_empty() && id.starts_with(required_prefix) && is_canonical_responses_item_id(id) {
             continue;
         }
 
@@ -373,7 +384,7 @@ fn normalize_item_id_with_state(
     state: &mut ResponseOutputIdNormalizationState,
 ) -> Option<(String, String)> {
     let old_id = item.get("id").and_then(Value::as_str)?.to_string();
-    if old_id.starts_with(required_prefix) && is_canonical_responses_item_id_charset(&old_id) {
+    if old_id.starts_with(required_prefix) && is_canonical_responses_item_id(&old_id) {
         return None;
     }
     let new_id = state
@@ -392,12 +403,13 @@ fn normalized_responses_item_id(required_prefix: &str, old_id: &str) -> String {
     )
 }
 
-/// Responses item id charset whitelist: strict gateways accept only letters,
-/// digits, underscores, and dashes. Upstream tool_call ids and replayed
+/// Responses item IDs accept at most 64 ASCII letters, digits, underscores,
+/// and dashes. Upstream tool_call ids and replayed
 /// history ids have been observed carrying non-ASCII model output or
-/// whitespace, so a matching prefix alone must not count as canonical.
-fn is_canonical_responses_item_id_charset(id: &str) -> bool {
+/// long MCP tool names, so a matching prefix alone is insufficient.
+fn is_canonical_responses_item_id(id: &str) -> bool {
     !id.is_empty()
+        && id.len() <= RESPONSES_ID_MAX_LEN
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -2514,11 +2526,12 @@ pub(crate) fn response_tool_call_item_id_from_chat_name(
 /// Stamp a Responses item id from an upstream chat call_id at bridge entry.
 /// Upstream tool_call ids are not trustworthy: serving stacks have been
 /// observed leaking non-ASCII model output into the id slot. Keep the
-/// readable form when the charset is canonical; otherwise fall back to the
-/// hashed ccswitch form so dirty ids never enter Codex history.
+/// readable form when the complete item ID is canonical, including its
+/// prefix; otherwise use the existing hashed form before Codex records it.
 fn responses_item_id_from_call_id(prefix: &str, call_id: &str) -> String {
-    if is_canonical_responses_item_id_charset(call_id) {
-        format!("{prefix}{call_id}")
+    let item_id = format!("{prefix}{call_id}");
+    if !call_id.is_empty() && is_canonical_responses_item_id(&item_id) {
+        item_id
     } else {
         normalized_responses_item_id(prefix, call_id)
     }
@@ -7316,6 +7329,69 @@ mod tests {
             responses_item_id_from_call_id("fc_", dirty_call_id),
             format!("fc_ccswitch_{}", short_sha256_hex(dirty_call_id.as_bytes()))
         );
+    }
+
+    #[test]
+    fn entry_hashes_overlong_item_ids_including_the_type_prefix() {
+        // Real Sites call from the failed replay: 76-byte call_id, 79-byte item ID.
+        let sites_call_id =
+            "mcp__codex_apps__sites___create_source_reposit__2d2203d9d5813052_55_4706f448";
+        for prefix in ["fc_", "ctc_"] {
+            let at_limit = "a".repeat(RESPONSES_ID_MAX_LEN - prefix.len());
+            assert_eq!(
+                responses_item_id_from_call_id(prefix, &at_limit),
+                format!("{prefix}{at_limit}")
+            );
+            for call_id in [format!("{at_limit}a"), sites_call_id.to_string()] {
+                let id = responses_item_id_from_call_id(prefix, &call_id);
+                assert_eq!(id, normalized_responses_item_id(prefix, &call_id));
+                assert!(id.len() <= RESPONSES_ID_MAX_LEN);
+            }
+        }
+    }
+
+    #[test]
+    fn replay_normalizers_hash_overlong_sites_item_ids_preserving_tool_pairing() {
+        let call_id =
+            "mcp__codex_apps__sites___create_source_reposit__2d2203d9d5813052_55_4706f448";
+        let source_id = format!("fc_{call_id}");
+        let at_limit = format!("msg_{}", "a".repeat(60));
+        let original = json!({"input": [
+            {"type": "function_call", "id": source_id, "call_id": call_id,
+             "name": "create_source_repository_write_credential", "arguments": "{}"},
+            {"type": "function_call_output", "id": "fco_sites", "call_id": call_id,
+             "output": "completed"},
+            {"type": "message", "id": at_limit, "role": "user", "content": []}
+        ]});
+        for normalize in [
+            normalize_replayed_item_ids_for_responses_upstream,
+            normalize_official_replayed_item_ids_for_responses_upstream,
+        ] {
+            let mut body = original.clone();
+            assert_eq!(normalize(&mut body), 3);
+            let mut expected = original.clone();
+            expected["input"][0]["id"] = json!(normalized_responses_item_id("fc_", &source_id));
+            let normalized_call_id =
+                format!("call_ccswitch_{}", short_sha256_hex(call_id.as_bytes()));
+            expected["input"][0]["call_id"] = json!(normalized_call_id);
+            expected["input"][1]["call_id"] = json!(normalized_call_id);
+            assert_eq!(body, expected);
+            assert_eq!(normalize(&mut body), 0);
+        }
+    }
+
+    #[test]
+    fn response_output_normalizer_hashes_overlong_prefix_correct_item_ids() {
+        let source_id = format!("msg_{}", "a".repeat(61));
+        let mut body = json!({"output": [
+            {"type": "message", "id": source_id, "role": "assistant", "content": []}
+        ]});
+        assert_eq!(normalize_response_output_item_ids(&mut body), 1);
+        assert_eq!(
+            body["output"][0]["id"],
+            normalized_responses_item_id("msg_", &source_id)
+        );
+        assert_eq!(normalize_response_output_item_ids(&mut body), 0);
     }
 
     #[test]
