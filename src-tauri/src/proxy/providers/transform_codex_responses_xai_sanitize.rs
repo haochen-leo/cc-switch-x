@@ -624,6 +624,9 @@ fn normalize_xai_function_tool_parameter_schemas(body: &mut Value) -> bool {
 /// `forwarder` stays a thin `if provider_needs_responses_namespace_flatten`
 /// call so `git rebase upstream/main` conflicts here or at that single site,
 /// not across inlined sanitizers. Logging stays here for the same reason.
+// 生产请求路径在 transform_codex_responses.rs 中内联同一组步骤；
+// 该组合入口当前仅由测试调用，用于覆盖模型重映射与清理顺序。
+#[allow(dead_code)]
 pub(crate) fn apply_xai_native_responses_request_compat(
     body: &mut Value,
     provider_id: &str,

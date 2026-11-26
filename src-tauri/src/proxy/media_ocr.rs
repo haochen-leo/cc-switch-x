@@ -54,6 +54,9 @@ pub fn replace_images_with_ocr_results(body: &mut Value, results: &[Option<Strin
     replace_images_in_value(body, results, &mut index)
 }
 
+// OCR 调用需要同时携带数据库、供应商、模型、图片、超时和父请求/会话标识；
+// 保持现有调用签名，不为 lint 引入额外参数结构。
+#[allow(clippy::too_many_arguments)]
 pub async fn transcribe_images(
     db: &Database,
     provider_app_type: &str,

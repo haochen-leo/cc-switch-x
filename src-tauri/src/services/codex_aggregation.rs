@@ -1526,9 +1526,10 @@ mod tests {
         let models = vec![json!({"slug": "gpt-6.1-sol"})];
         seed_official_catalog(models.clone());
         let db = Database::memory().unwrap();
-        let cache = read_official_catalog_cache(
-            &catalog_account_identity("test-workspace", "sub:test-user"),
-        )
+        let cache = read_official_catalog_cache(&catalog_account_identity(
+            "test-workspace",
+            "sub:test-user",
+        ))
         .unwrap();
         let official = Provider::with_id(
             CODEX_OFFICIAL_PROVIDER_ID.to_string(),
@@ -1678,9 +1679,10 @@ mod tests {
         let _ = crate::settings::reload_settings();
 
         seed_official_catalog(vec![official_entry.clone(), json!({"slug": "kimi-k3"})]);
-        let cache = read_official_catalog_cache(
-            &catalog_account_identity("test-workspace", "sub:test-user"),
-        )
+        let cache = read_official_catalog_cache(&catalog_account_identity(
+            "test-workspace",
+            "sub:test-user",
+        ))
         .expect("read official models");
         let models = visible_official_models(&cache.models);
 
@@ -2016,7 +2018,8 @@ mod tests {
             }),
             None,
         );
-        db.save_provider(AppType::Codex.as_str(), &official).unwrap();
+        db.save_provider(AppType::Codex.as_str(), &official)
+            .unwrap();
         db.save_provider(AppType::Codex.as_str(), &third_party)
             .unwrap();
         let before = build_codex_aggregate_provider(&db).await.unwrap();
@@ -2040,7 +2043,9 @@ mod tests {
             "dashscope-chat"
         );
         assert_eq!(
-            read_official_catalog_cache(&identity).unwrap().client_version,
+            read_official_catalog_cache(&identity)
+                .unwrap()
+                .client_version,
             "0.152.1"
         );
         assert_eq!(before.official_catalog_hash, after.official_catalog_hash);

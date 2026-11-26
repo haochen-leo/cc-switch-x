@@ -3236,11 +3236,8 @@ impl ProxyService {
         } else {
             None
         };
-        if logical_target_changed {
-            match &app_type_enum {
-                AppType::Codex => self.capture_codex_official_config_from_live()?,
-                _ => {}
-            }
+        if logical_target_changed && matches!(app_type_enum, AppType::Codex) {
+            self.capture_codex_official_config_from_live()?;
         }
 
         let prepare_result: Result<(), String> = async {
@@ -3856,11 +3853,9 @@ impl ProxyService {
                 .iter()
                 .any(|source| source.official && source.selected)
             {
-                if let Err(error) = refresh_official_catalog_cache(
-                    self.db.as_ref(),
-                    &self.codex_oauth_manager,
-                )
-                .await
+                if let Err(error) =
+                    refresh_official_catalog_cache(self.db.as_ref(), &self.codex_oauth_manager)
+                        .await
                 {
                     log::warn!("开启 Codex 聚合前刷新官方目录失败，将尝试使用本地缓存: {error}");
                 }

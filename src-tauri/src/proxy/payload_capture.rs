@@ -284,9 +284,14 @@ fn summarize_nested_images(value: &mut Value) -> bool {
             }
             changed
         }
-        Value::Array(items) => items.iter_mut().fold(false, |changed, item| {
-            summarize_nested_images(item) || changed
-        }),
+        Value::Array(items) => {
+            // 必须摘要所有图片块；不能用 any 短路，否则后续图片不会被处理。
+            let mut changed = false;
+            for item in items.iter_mut() {
+                changed |= summarize_nested_images(item);
+            }
+            changed
+        }
         _ => false,
     }
 }
